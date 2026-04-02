@@ -27,21 +27,21 @@
         </div>
     </div>
 
-    <!-- 账号信息 -->
-    <div class="form-card">
-        <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
-        <div class="mb-3">
-            <label class="form-label">采集账号 <span class="text-danger">*</span></label>
-            <input type="text" class="form-control" name="collect_account" placeholder="请输入采集账号" value="" required>
-        </div>
-        <div class="mb-3">
-            <label class="form-label">Cookie <span class="text-danger">*</span></label>
-            <textarea class="form-control" name="cookie" rows="3" placeholder="请输入Cookie信息" required></textarea>
-            <div class="form-text">请粘贴完整的Cookie信息，用于身份验证</div>
-        </div>
-    </div>
-
     <form id="ucForm" enctype="multipart/form-data">
+
+        <!-- 账号信息 -->
+        <div class="form-card">
+            <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
+            <div class="mb-3">
+                <label class="form-label">采集账号</label>
+                <input type="text" class="form-control" name="collect_account" placeholder="请输入采集账号" value="" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Cookie</label>
+                <textarea class="form-control" name="cookie" rows="3" placeholder="请输入Cookie信息" required></textarea>
+                <div class="form-text">请粘贴完整的Cookie信息，用于身份验证</div>
+            </div>
+        </div>
 
         <!-- 身份信息 -->
         <div class="form-card">
@@ -252,12 +252,27 @@ function onIdentityChange() {
     const isAgent = document.getElementById('id_agent').checked;
     const select = document.getElementById('identitySelect');
     const principalWrap = document.getElementById('principalWrap');
+    const principal = document.querySelector('select[name="principal"]');
+    const proxyFileInfo = document.getElementById('proxyFileInfo');
 
     select.innerHTML = isAgent
         ? '<option value="北京和晞科技有限公司">北京和晞科技有限公司</option>'
         : '<option value="刘明">刘明</option>';
 
     principalWrap.style.display = isAgent ? 'block' : 'none';
+
+    if (!isAgent) {
+        if (principal) {
+            principal.classList.remove('is-invalid');
+            const feedback = principal.parentNode.querySelector('.invalid-feedback');
+            if (feedback) feedback.remove();
+        }
+        if (proxyFileInfo) {
+            if (proxyFileInfo.textContent === '委托代理文件不能为空') {
+                proxyFileInfo.textContent = '';
+            }
+        }
+    }
 }
 
 // 单文件上传预览
@@ -543,41 +558,62 @@ function printFormData() {
     alert('表单数据已打印到控制台 (F12 打开开发者工具查看)');
 }
 
+const cookieTextarea = document.querySelector('textarea[name="cookie"]');
+if (cookieTextarea) {
+    cookieTextarea.addEventListener('blur', () => {
+        cookieTextarea.value = cookieTextarea.value.trim();
+    });
+}
+
 // 修改表单提交事件
-document.getElementById('ucForm').addEventListener('submit', function(e) {
-    e.preventDefault(); // 阻止默认提交
+document.getElementById('ucForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
 
-    // 调用账号信息校验
     const accountValidation = validateAccountInfo();
-
-    // 如果有错误，显示提示并阻止提交
     if (!accountValidation.isValid) {
         alert('请填写以下必填项：\n' + accountValidation.errorMessage);
         return;
     }
 
-    printFormData(); // 打印表单数据
+    const formData = new FormData(this);
+    const cookieValue = formData.get('cookie');
+    if (typeof cookieValue === 'string') {
+        formData.set('cookie', cookieValue.trim());
+    }
 
-    // 这里可以添加实际的提交逻辑
-    // 例如：使用 fetch 提交表单数据到服务器
-    // const formData = new FormData(this);
-    // fetch('/api/submit', { method: 'POST', body: formData })
-    //     .then(response => response.json())
-    //     .then(data => console.log('提交成功:', data))
-    //     .catch(error => console.error('提交失败:', error));
+    try {
+        const response = await fetch('/api/uc/submit', {
+            method: 'POST',
+            body: formData
+        });
+        const result = await response.json();
 
-    // 如果不需要阻止提交，可以注释掉 e.preventDefault()，并调用 this.submit()
+        if (!response.ok || !result.success) {
+            throw new Error(result.error || '提交失败');
+        }
+
+        alert(`提交成功\n任务编号：${result.submission_id}\nExcel行数：${result.excel_rows}`);
+        console.log('提交成功:', result);
+    } catch (error) {
+        alert(error.message || '提交失败');
+        console.error('提交失败:', error);
+    }
 });
 
 // 校验账号信息
 function validateAccountInfo() {
     const collectAccount = document.querySelector('input[name="collect_account"]');
     const cookie = document.querySelector('textarea[name="cookie"]');
+    const principal = document.querySelector('select[name="principal"]');
+    const description = document.querySelector('textarea[name="description"]');
+    const proxyFile = document.getElementById('proxy_file_input');
+    const proofFile = document.getElementById('proof_file_input');
+    const excelFile = document.getElementById('excelFile');
+    const isAgent = document.getElementById('id_agent')?.checked;
     let isValid = true;
     let errorMessage = '';
 
-    // 清除之前的校验状态
-    [collectAccount, cookie].forEach(field => {
+    [collectAccount, cookie, principal, description].forEach(field => {
         if (field) {
             field.classList.remove('is-invalid');
             const feedback = field.parentNode.querySelector('.invalid-feedback');
@@ -585,7 +621,43 @@ function validateAccountInfo() {
         }
     });
 
-    // 校验采集账号
+    const proxyFileInfo = document.getElementById('proxyFileInfo');
+    const proofFileInfo = document.getElementById('proofFileInfo');
+    const excelError = document.getElementById('excelError');
+    if (excelError) {
+        excelError.textContent = '';
+    }
+
+    const identity = document.querySelector('input[name="identity"]:checked');
+    if (!identity) {
+        isValid = false;
+        errorMessage += '请选择您的身份\n';
+    }
+
+    const complaintCategory = document.querySelector('input[name="complaint_category"]:checked');
+    if (!complaintCategory) {
+        isValid = false;
+        errorMessage += '请选择投诉大类\n';
+    }
+
+    const complaintType = document.querySelector('input[name="complaint_type"]:checked');
+    if (!complaintType) {
+        isValid = false;
+        errorMessage += '请选择投诉类型\n';
+    }
+
+    const module = document.querySelector('input[name="module"]:checked');
+    if (!module) {
+        isValid = false;
+        errorMessage += '请选择功能模块\n';
+    }
+
+    const contentType = document.querySelector('input[name="content_type"]:checked');
+    if (!contentType) {
+        isValid = false;
+        errorMessage += '请选择内容类型\n';
+    }
+
     if (!collectAccount || !collectAccount.value.trim()) {
         isValid = false;
         errorMessage += '请填写采集账号\n';
@@ -600,7 +672,6 @@ function validateAccountInfo() {
         }
     }
 
-    // 校验Cookie
     if (!cookie || !cookie.value.trim()) {
         isValid = false;
         errorMessage += '请填写Cookie信息\n';
@@ -612,6 +683,58 @@ function validateAccountInfo() {
                 feedback.textContent = 'Cookie信息不能为空';
                 cookie.parentNode.appendChild(feedback);
             }
+        }
+    }
+
+    if (!description || !description.value.trim()) {
+        isValid = false;
+        errorMessage += '请填写投诉内容描述\n';
+        if (description) {
+            description.classList.add('is-invalid');
+            if (!description.nextElementSibling || !description.nextElementSibling.classList.contains('invalid-feedback')) {
+                const feedback = document.createElement('div');
+                feedback.className = 'invalid-feedback';
+                feedback.textContent = '投诉内容描述不能为空';
+                description.parentNode.appendChild(feedback);
+            }
+        }
+    }
+
+    if (isAgent && (!principal || !principal.value.trim())) {
+        isValid = false;
+        errorMessage += '请选择被代理人（权利人）信息\n';
+        if (principal) {
+            principal.classList.add('is-invalid');
+            if (!principal.nextElementSibling || !principal.nextElementSibling.classList.contains('invalid-feedback')) {
+                const feedback = document.createElement('div');
+                feedback.className = 'invalid-feedback';
+                feedback.textContent = '被代理人不能为空';
+                principal.parentNode.appendChild(feedback);
+            }
+        }
+    }
+
+    if (isAgent && (!proxyFile || !proxyFile.files || !proxyFile.files.length)) {
+        isValid = false;
+        errorMessage += '请上传委托代理文件\n';
+        if (proxyFileInfo) {
+            proxyFileInfo.textContent = '委托代理文件不能为空';
+        }
+    }
+
+    if (!proofFile || !proofFile.files || !proofFile.files.length) {
+        isValid = false;
+        errorMessage += '请上传证明材料\n';
+        if (proofFileInfo) {
+            proofFileInfo.textContent = '证明材料不能为空';
+        }
+    }
+
+    if (!excelFile || !excelFile.files || !excelFile.files.length) {
+        isValid = false;
+        errorMessage += '请上传Excel批量导入文件\n';
+        if (excelError) {
+            excelError.textContent = 'Excel批量导入不能为空';
         }
     }
 
