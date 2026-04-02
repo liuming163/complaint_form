@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>uc投诉表单</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+<header class="main-header shadow-sm">
+    <div class="logo-area"><i class="fas fa-search"></i> uc投诉</div>
+    <div>
+        <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i> 返回首页</a>
+    </div>
+</header>
+
+<div class="form-page-wrap">
+
+    <!-- 投诉模版 -->
+    <div class="form-card mb-4">
+        <div class="section-title"><i class="fas fa-clone"></i> 投诉模版</div>
+        <div class="d-flex gap-3">
+            <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('shenzhen')">深圳uc投诉模版</button>
+            <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('beijing')">北京uc投诉模版</button>
+            <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('penguin')">上海uc投诉模版</button>
+        </div>
+    </div>
+
+    <!-- 账号信息 -->
+    <div class="form-card">
+        <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
+        <div class="mb-3">
+            <label class="form-label">采集账号 <span class="text-danger">*</span></label>
+            <input type="text" class="form-control" name="collect_account" placeholder="请输入采集账号" value="" required>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Cookie <span class="text-danger">*</span></label>
+            <textarea class="form-control" name="cookie" rows="3" placeholder="请输入Cookie信息" required></textarea>
+            <div class="form-text">请粘贴完整的Cookie信息，用于身份验证</div>
+        </div>
+    </div>
+
+    <form id="ucForm" enctype="multipart/form-data">
+
+        <!-- 身份信息 -->
+        <div class="form-card">
+            <div class="section-title"><i class="fas fa-user"></i> 身份信息</div>
+            <div class="mb-3">
+                <label class="form-label">您的身份</label>
+                <div class="d-flex gap-4">
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="identity" id="id_rightsholder" value="权利人" onchange="onIdentityChange()">
+                        <label class="form-check-label" for="id_rightsholder">权利人</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="identity" id="id_agent" value="代理人" checked onchange="onIdentityChange()">
+                        <label class="form-check-label" for="id_agent">代理人</label>
+                    </div>
+                </div>
+            </div>
+            <div class="mb-3">
+                <select class="form-select" name="agent" id="identitySelect" required>
+                    <option value="北京和晞科技有限公司">北京和晞科技有限公司</option>
+                </select>
+            </div>
+            <div id="principalWrap">
+                <div class="mb-3">
+                    <label class="form-label">被代理人（权利人）信息</label>
+                    <select class="form-select" name="principal" required>
+                        <option value="">请选择被代理人</option>
+                        <option>北京uc</option>
+                        <option>深圳uc</option>
+                        <option>上海uc</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">委托代理文件</label>
+                    <div class="file-upload-box" id="proxyFileBox" onclick="document.getElementById('proxy_file_input').click()">
+                        <div class="file-upload-placeholder" id="proxyFilePlaceholder">
+                            <i class="fas fa-plus fa-lg"></i>
+                            <div class="mt-1" style="font-size:12px">点击上传</div>
+                        </div>
+                        <img id="proxyFilePreview" class="file-upload-preview" style="display:none">
+                        <div id="proxyFileNonImg" class="file-upload-nonimg" style="display:none"></div>
+                    </div>
+                    <input type="file" id="proxy_file_input" name="proxy_file" accept=".png,.jpg,.jpeg,.bmp,.pdf,.xlsx" style="display:none" onchange="handleFileUpload(this,'proxyFileBox','proxyFilePlaceholder','proxyFilePreview','proxyFileNonImg','proxyFileInfo')">
+                    <div class="file-info" id="proxyFileInfo"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 投诉类型 -->
+        <div class="form-card">
+            <div class="section-title"><i class="fas fa-tag"></i> 投诉类型</div>
+            <div class="mb-3">
+                <div class="d-flex gap-4">
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="complaint_category" id="cat_ip" value="知识产权" checked>
+                        <label class="form-check-label" for="cat_ip">知识产权</label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="radio" name="complaint_category" id="cat_personal" value="人身权">
+                        <label class="form-check-label" for="cat_personal">人身权</label>
+                    </div>
+                </div>
+            </div>
+            <div class="d-flex flex-wrap gap-3">
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="complaint_type" id="type_copyright" value="著作权（含视频、图文、图集等）" checked>
+                    <label class="form-check-label" for="type_copyright">著作权（含视频、图文、图集等）</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="complaint_type" id="type_trademark" value="商标">
+                    <label class="form-check-label" for="type_trademark">商标</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="complaint_type" id="type_patent" value="专利">
+                    <label class="form-check-label" for="type_patent">专利</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="complaint_type" id="type_other_ip" value="其他知识产权">
+                    <label class="form-check-label" for="type_other_ip">其他知识产权</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- 功能模块 -->
+        <div class="form-card">
+            <div class="section-title"><i class="fas fa-th-large"></i> 功能模块</div>
+            <div class="d-flex flex-wrap gap-4">
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="module" id="mod_pan" value="头条内容" checked>
+                    <label class="form-check-label" for="mod_pan">头条内容</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="module" id="mod_img" value="大鱼号账号">
+                    <label class="form-check-label" for="mod_img">大鱼号账号</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="module" id="mod_news" value="UC网盘">
+                    <label class="form-check-label" for="mod_news">UC网盘</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="module" id="mod_search" value="神马搜索">
+                    <label class="form-check-label" for="mod_search">神马搜索</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- 内容类型 -->
+        <div class="form-card">
+            <div class="section-title"><i class="fas fa-film"></i> 内容类型</div>
+            <div class="d-flex flex-wrap gap-4">
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_drama" value="影视剧集" checked>
+                    <label class="form-check-label" for="ct_drama">影视剧集</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_video" value="其他视频">
+                    <label class="form-check-label" for="ct_video">其他视频</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_novel" value="小说">
+                    <label class="form-check-label" for="ct_novel">小说</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_comic" value="漫画">
+                    <label class="form-check-label" for="ct_comic">漫画</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_image" value="图片">
+                    <label class="form-check-label" for="ct_image">图片</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_article" value="文章">
+                    <label class="form-check-label" for="ct_article">文章</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_software" value="软件/游戏">
+                    <label class="form-check-label" for="ct_software">软件/游戏</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_other" value="其他">
+                    <label class="form-check-label" for="ct_other">其他</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- 投诉内容 -->
+        <div class="form-card">
+            <div class="section-title"><i class="fas fa-file-import"></i> 投诉内容</div>
+            <div class="mb-3">
+                <label class="form-label">批量导入（Excel，最多200行）</label>
+                <div class="upload-drop-zone" id="excelDropZone" onclick="document.getElementById('excelFile').click()">
+                    <i class="fas fa-file-excel fa-2x mb-2" style="color:#bcaaa4"></i>
+                    <div>点击或拖拽上传 Excel 文件</div>
+                    <div style="font-size:11px;color:#bbb">支持 .xlsx .xls</div>
+                </div>
+                <input type="file" id="excelFile" name="excel_file" accept=".xlsx,.xls" style="display:none">
+                <div id="excelInfo" class="file-info"></div>
+                <div id="excelError" class="file-error"></div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">投诉内容描述</label>
+                <textarea class="form-control" name="description" rows="4" placeholder="请填写投诉内容描述..."></textarea>
+            </div>
+        </div>
+
+        <!-- 证明材料 -->
+        <div class="form-card">
+            <div class="section-title"><i class="fas fa-paperclip"></i> 证明材料</div>
+            <div class="mb-3">
+                <label class="form-label">证明材料</label>
+                <div class="file-upload-box" id="proofFileBox" onclick="document.getElementById('proof_file_input').click()">
+                    <div class="file-upload-placeholder" id="proofFilePlaceholder">
+                        <i class="fas fa-plus fa-lg"></i>
+                        <div class="mt-1" style="font-size:12px">点击上传</div>
+                    </div>
+                    <img id="proofFilePreview" class="file-upload-preview" style="display:none">
+                    <div id="proofFileNonImg" class="file-upload-nonimg" style="display:none"></div>
+                </div>
+                <input type="file" id="proof_file_input" name="proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf,.xlsx" style="display:none" onchange="handleFileUpload(this,'proofFileBox','proofFilePlaceholder','proofFilePreview','proofFileNonImg','proofFileInfo')">
+                <div class="file-info" id="proofFileInfo"></div>
+                <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf .xlsx</div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">其他证明</label>
+                <div class="d-flex flex-wrap gap-2" id="otherProofList"></div>
+                <div class="file-upload-box file-upload-box-sm mt-2" id="otherProofAddBtn" onclick="document.getElementById('other_proof_file_input').click()">
+                    <div class="file-upload-placeholder">
+                        <i class="fas fa-plus fa-lg"></i>
+                        <div class="mt-1" style="font-size:12px">点击上传</div>
+                    </div>
+                </div>
+                <input type="file" id="other_proof_file_input" name="other_proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf,.xlsx" multiple style="display:none" onchange="handleMultiFileUpload(this)">
+                <div class="file-info" id="otherProofInfo"></div>
+                <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf .xlsx</div>
+            </div>
+        </div>
+
+        <div class="text-center">
+            <button type="submit" class="btn btn-brown px-5">提交投诉</button>
+        </div>
+
+    </form>
+</div>
+
+<script>
+// 身份切换
+function onIdentityChange() {
+    const isAgent = document.getElementById('id_agent').checked;
+    const select = document.getElementById('identitySelect');
+    const principalWrap = document.getElementById('principalWrap');
+
+    select.innerHTML = isAgent
+        ? '<option value="北京和晞科技有限公司">北京和晞科技有限公司</option>'
+        : '<option value="刘明">刘明</option>';
+
+    principalWrap.style.display = isAgent ? 'block' : 'none';
+}
+
+// 单文件上传预览
+function handleFileUpload(input, boxId, placeholderId, previewId, nonImgId, infoId) {
+    const file = input.files[0];
+    if (!file) return;
+    const placeholder = document.getElementById(placeholderId);
+    const preview = document.getElementById(previewId);
+    const nonImg = document.getElementById(nonImgId);
+    const info = document.getElementById(infoId);
+    const imgExts = ['png','jpg','jpeg','bmp'];
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (imgExts.includes(ext)) {
+        const reader = new FileReader();
+        reader.onload = e => {
+            preview.src = e.target.result;
+            preview.style.display = 'block';
+            nonImg.style.display = 'none';
+            placeholder.style.display = 'none';
+        };
+        reader.readAsDataURL(file);
+    } else {
+        preview.style.display = 'none';
+        nonImg.style.display = 'flex';
+        nonImg.style.alignItems = 'center';
+        nonImg.style.justifyContent = 'center';
+        nonImg.textContent = file.name;
+        placeholder.style.display = 'none';
+    }
+    if (info) info.textContent = '';
+}
+
+// 多文件上传（其他证明）
+let otherProofFiles = [];
+
+function handleMultiFileUpload(input) {
+    const files = Array.from(input.files);
+    files.forEach(file => {
+        otherProofFiles.push(file);
+        addOtherProofItem(file, otherProofFiles.length - 1);
+    });
+    input.value = '';
+    syncOtherProofInput();
+}
+
+function addOtherProofItem(file, index) {
+    const list = document.getElementById('otherProofList');
+    const item = document.createElement('div');
+    item.className = 'file-upload-box file-upload-box-sm other-proof-item';
+    item.id = `otherItem_${index}`;
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'remove-btn';
+    removeBtn.innerHTML = '&times;';
+    removeBtn.onclick = e => { e.stopPropagation(); removeOtherProof(index); };
+    item.appendChild(removeBtn);
+    const imgExts = ['png','jpg','jpeg','bmp'];
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (imgExts.includes(ext)) {
+        const img = document.createElement('img');
+        img.className = 'file-upload-preview';
+        const reader = new FileReader();
+        reader.onload = e => { img.src = e.target.result; };
+        reader.readAsDataURL(file);
+        item.appendChild(img);
+        item.onclick = () => document.getElementById('other_proof_file_input').click();
+    } else {
+        const label = document.createElement('div');
+        label.className = 'file-upload-nonimg';
+        label.style.display = 'flex';
+        label.style.alignItems = 'center';
+        label.style.justifyContent = 'center';
+        label.textContent = file.name;
+        item.appendChild(label);
+    }
+    list.appendChild(item);
+}
+
+function removeOtherProof(index) {
+    otherProofFiles[index] = null;
+    const el = document.getElementById(`otherItem_${index}`);
+    if (el) el.remove();
+    syncOtherProofInput();
+}
+
+function syncOtherProofInput() {
+    const dt = new DataTransfer();
+    otherProofFiles.filter(Boolean).forEach(f => dt.items.add(f));
+    document.getElementById('other_proof_file_input').files = dt.files;
+    const names = otherProofFiles.filter(Boolean).map(f => f.name);
+    document.getElementById('otherProofInfo').textContent = names.length ? `已选择：${names.join('、')}` : '';
+}
+
+// 模版配置
+const TEMPLATES = {
+    shenzhen: {
+        principal: '深圳uc',
+        proxy_file: '深圳腾讯委托代理文件.png',
+        module: '头条内容',
+        other_proofs: ['和晞执照.jpg', '深圳腾讯执照.jpg', '深圳腾讯委托代理文件.png']
+    },
+    beijing: {
+        principal: '北京uc',
+        proxy_file: '北京腾讯委托代理文件.png',
+        module: '头条内容',
+        other_proofs: ['和晞执照.jpg', '北京腾讯执照.png', '北京腾讯委托代理文件.png']
+    },
+    penguin: {
+        principal: '上海uc',
+        proxy_file: '腾讯企鹅委托代理文件.png',
+        module: 'UC网盘',
+        other_proofs: ['和晞执照.jpg', '腾讯企鹅执照.png', '腾讯企鹅委托代理文件.png']
+    }
+};
+
+async function fetchFileAsBlob(filename) {
+    const res = await fetch(`/static/imgs/${encodeURIComponent(filename)}`);
+    if (!res.ok) throw new Error(`无法加载文件: ${filename}`);
+    const blob = await res.blob();
+    return new File([blob], filename, { type: blob.type });
+}
+
+async function applyTemplate(key) {
+    const tpl = TEMPLATES[key];
+    if (!tpl) return;
+
+    // 切换身份为代理人
+    document.getElementById('id_agent').checked = true;
+    onIdentityChange();
+
+    // 被代理人
+    const principalEl = document.querySelector('select[name="principal"]');
+    principalEl.value = tpl.principal;
+
+    // 功能模块
+    document.querySelectorAll('input[name="module"]').forEach(r => {
+        r.checked = r.value === tpl.module;
+    });
+
+    // 委托代理文件
+    try {
+        const proxyFile = await fetchFileAsBlob(tpl.proxy_file);
+        const proxyDt = new DataTransfer();
+        proxyDt.items.add(proxyFile);
+        document.getElementById('proxy_file_input').files = proxyDt.files;
+        handleFileUpload(document.getElementById('proxy_file_input'),'proxyFileBox','proxyFilePlaceholder','proxyFilePreview','proxyFileNonImg','proxyFileInfo');
+    } catch(e) {
+        document.getElementById('proxyFileInfo').textContent = `文件加载失败：${tpl.proxy_file}`;
+    }
+
+    // 其他证明（多文件）
+    otherProofFiles = [];
+    document.getElementById('otherProofList').innerHTML = '';
+    try {
+        for (let i = 0; i < tpl.other_proofs.length; i++) {
+            const f = await fetchFileAsBlob(tpl.other_proofs[i]);
+            otherProofFiles.push(f);
+            addOtherProofItem(f, i);
+        }
+        syncOtherProofInput();
+    } catch(e) {
+        document.getElementById('otherProofInfo').textContent = '部分文件加载失败';
+    }
+}
+
+// Excel 拖拽
+const zone = document.getElementById('excelDropZone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    const file = e.dataTransfer.files[0];
+    if (file) handleExcelFile(file);
+});
+
+document.getElementById('excelFile').addEventListener('change', e => {
+    if (e.target.files[0]) handleExcelFile(e.target.files[0]);
+});
+
+function handleExcelFile(file) {
+    const info = document.getElementById('excelInfo');
+    const err = document.getElementById('excelError');
+    info.textContent = '';
+    err.textContent = '';
+
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (!['xlsx', 'xls'].includes(ext)) {
+        err.textContent = '请上传 .xlsx 或 .xls 格式文件';
+        return;
+    }
+
+    // 用服务端校验行数，这里先显示文件名
+    const formData = new FormData();
+    formData.append('file', file);
+    fetch('/api/check_excel', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(res => {
+            if (res.success) {
+                info.textContent = `已选择：${file.name}（共 ${res.rows} 行）`;
+                // 把文件塞回 input
+                const dt = new DataTransfer();
+                dt.items.add(file);
+                document.getElementById('excelFile').files = dt.files;
+            } else {
+                err.textContent = res.error;
+                document.getElementById('excelFile').value = '';
+            }
+        })
+        .catch(() => { info.textContent = `已选择：${file.name}`; });
+}
+
+function printFormData() {
+    console.log('========== 表单提交数据 ==========');
+
+    // 获取所有表单字段
+    const form = document.getElementById('ucForm');
+    const formData = new FormData(form);
+
+    // 打印普通字段
+    console.log('--- 普通字段 ---');
+    for (let [key, value] of formData.entries()) {
+        // 跳过文件类型的字段，单独处理
+        if (!(value instanceof File)) {
+            console.log(`${key}: ${value}`);
+        }
+    }
+
+    // 打印账号信息
+    const collectAccount = document.querySelector('input[name="collect_account"]')?.value;
+    console.log('采集账号:', collectAccount || '未填写');
+
+    const cookie = document.querySelector('textarea[name="cookie"]')?.value;
+    console.log('Cookie:', cookie || '未填写');
+
+    // 打印身份信息
+    const identity = document.querySelector('input[name="identity"]:checked');
+    console.log('您的身份:', identity ? identity.value : '未选择');
+
+    const agent = document.getElementById('identitySelect').value;
+    console.log('代理人/权利人:', agent);
+
+    const principal = document.querySelector('select[name="principal"]')?.value;
+    console.log('被代理人（权利人）信息:', principal || '未选择');
+
+    // 打印投诉类型
+    const complaintCategory = document.querySelector('input[name="complaint_category"]:checked');
+    console.log('投诉大类:', complaintCategory ? complaintCategory.value : '未选择');
+
+    const complaintType = document.querySelector('input[name="complaint_type"]:checked');
+    console.log('投诉类型:', complaintType ? complaintType.value : '未选择');
+
+    // 打印功能模块
+    const module = document.querySelector('input[name="module"]:checked');
+    console.log('功能模块:', module ? module.value : '未选择');
+
+    // 打印内容类型
+    const contentType = document.querySelector('input[name="content_type"]:checked');
+    console.log('内容类型:', contentType ? contentType.value : '未选择');
+
+    // 打印投诉内容
+    const description = document.querySelector('textarea[name="description"]')?.value;
+    console.log('投诉内容描述:', description || '未填写');
+
+    // 打印文件信息
+    console.log('--- 文件信息 ---');
+    const proxyFile = document.getElementById('proxy_file_input').files[0];
+    console.log('委托代理文件:', proxyFile ? proxyFile.name : '未上传');
+    console.log('委托代理文件file:', proxyFile ? proxyFile : '未上传');
+
+    const proofFile = document.getElementById('proof_file_input').files[0];
+    console.log('证明材料:', proofFile ? proofFile.name : '未上传');
+
+    const otherProofs = otherProofFiles.filter(Boolean);
+    console.log('其他证明文件:', otherProofs.length > 0 ? otherProofs.map(f => f.name).join(', ') : '未上传');
+
+    const excelFile = document.getElementById('excelFile').files[0];
+    console.log('Excel批量导入:', excelFile ? excelFile.name : '未上传');
+      console.log('Excel批量导入file:', excelFile ? excelFile : '未上传');
+
+    console.log('==================================');
+
+    // 可选：在页面上也显示一个提示
+    alert('表单数据已打印到控制台 (F12 打开开发者工具查看)');
+}
+
+// 修改表单提交事件
+document.getElementById('ucForm').addEventListener('submit', function(e) {
+    e.preventDefault(); // 阻止默认提交
+
+    // 调用账号信息校验
+    const accountValidation = validateAccountInfo();
+
+    // 如果有错误，显示提示并阻止提交
+    if (!accountValidation.isValid) {
+        alert('请填写以下必填项：\n' + accountValidation.errorMessage);
+        return;
+    }
+
+    printFormData(); // 打印表单数据
+
+    // 这里可以添加实际的提交逻辑
+    // 例如：使用 fetch 提交表单数据到服务器
+    // const formData = new FormData(this);
+    // fetch('/api/submit', { method: 'POST', body: formData })
+    //     .then(response => response.json())
+    //     .then(data => console.log('提交成功:', data))
+    //     .catch(error => console.error('提交失败:', error));
+
+    // 如果不需要阻止提交，可以注释掉 e.preventDefault()，并调用 this.submit()
+});
+
+// 校验账号信息
+function validateAccountInfo() {
+    const collectAccount = document.querySelector('input[name="collect_account"]');
+    const cookie = document.querySelector('textarea[name="cookie"]');
+    let isValid = true;
+    let errorMessage = '';
+
+    // 清除之前的校验状态
+    [collectAccount, cookie].forEach(field => {
+        if (field) {
+            field.classList.remove('is-invalid');
+            const feedback = field.parentNode.querySelector('.invalid-feedback');
+            if (feedback) feedback.remove();
+        }
+    });
+
+    // 校验采集账号
+    if (!collectAccount || !collectAccount.value.trim()) {
+        isValid = false;
+        errorMessage += '请填写采集账号\n';
+        if (collectAccount) {
+            collectAccount.classList.add('is-invalid');
+            if (!collectAccount.nextElementSibling || !collectAccount.nextElementSibling.classList.contains('invalid-feedback')) {
+                const feedback = document.createElement('div');
+                feedback.className = 'invalid-feedback';
+                feedback.textContent = '采集账号不能为空';
+                collectAccount.parentNode.appendChild(feedback);
+            }
+        }
+    }
+
+    // 校验Cookie
+    if (!cookie || !cookie.value.trim()) {
+        isValid = false;
+        errorMessage += '请填写Cookie信息\n';
+        if (cookie) {
+            cookie.classList.add('is-invalid');
+            if (!cookie.nextElementSibling || !cookie.nextElementSibling.classList.contains('invalid-feedback')) {
+                const feedback = document.createElement('div');
+                feedback.className = 'invalid-feedback';
+                feedback.textContent = 'Cookie信息不能为空';
+                cookie.parentNode.appendChild(feedback);
+            }
+        }
+    }
+
+    return {
+        isValid: isValid,
+        errorMessage: errorMessage
+    };
+}
+</script>
+</body>
+</html>
