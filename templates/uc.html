@@ -211,7 +211,7 @@
         <div class="form-card">
             <div class="section-title"><i class="fas fa-paperclip"></i> 证明材料</div>
             <div class="mb-3">
-                <label class="form-label">证明材料</label>
+                <label class="form-label">证明文件</label>
                 <div class="file-upload-box" id="proofFileBox" onclick="document.getElementById('proof_file_input').click()">
                     <div class="file-upload-placeholder" id="proofFilePlaceholder">
                         <i class="fas fa-plus fa-lg"></i>
@@ -260,6 +260,9 @@ function onIdentityChange() {
         : '<option value="刘明">刘明</option>';
 
     principalWrap.style.display = isAgent ? 'block' : 'none';
+    if (principal) {
+        principal.required = isAgent;
+    }
 
     if (!isAgent) {
         if (principal) {
@@ -543,7 +546,7 @@ function printFormData() {
     console.log('委托代理文件file:', proxyFile ? proxyFile : '未上传');
 
     const proofFile = document.getElementById('proof_file_input').files[0];
-    console.log('证明材料:', proofFile ? proofFile.name : '未上传');
+    console.log('证明文件:', proofFile ? proofFile.name : '未上传');
 
     const otherProofs = otherProofFiles.filter(Boolean);
     console.log('其他证明文件:', otherProofs.length > 0 ? otherProofs.map(f => f.name).join(', ') : '未上传');
@@ -592,7 +595,7 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
             throw new Error(result.error || '提交失败');
         }
 
-        alert(`提交成功\n任务编号：${result.submission_id}\nExcel行数：${result.excel_rows}`);
+        alert(`提交成功\n任务编号：${result.task_id}\nExcel行数：${result.excel_rows}`);
         console.log('提交成功:', result);
     } catch (error) {
         alert(error.message || '提交失败');
@@ -609,7 +612,8 @@ function validateAccountInfo() {
     const proxyFile = document.getElementById('proxy_file_input');
     const proofFile = document.getElementById('proof_file_input');
     const excelFile = document.getElementById('excelFile');
-    const isAgent = document.getElementById('id_agent')?.checked;
+    const identity = document.querySelector('input[name="identity"]:checked')?.value;
+    const isAgent = identity === '代理人';
     let isValid = true;
     let errorMessage = '';
 
@@ -628,8 +632,8 @@ function validateAccountInfo() {
         excelError.textContent = '';
     }
 
-    const identity = document.querySelector('input[name="identity"]:checked');
-    if (!identity) {
+    const selectedIdentity = document.querySelector('input[name="identity"]:checked');
+    if (!selectedIdentity) {
         isValid = false;
         errorMessage += '请选择您的身份\n';
     }
@@ -724,9 +728,9 @@ function validateAccountInfo() {
 
     if (!proofFile || !proofFile.files || !proofFile.files.length) {
         isValid = false;
-        errorMessage += '请上传证明材料\n';
+        errorMessage += '请上传证明文件\n';
         if (proofFileInfo) {
-            proofFileInfo.textContent = '证明材料不能为空';
+            proofFileInfo.textContent = '证明文件不能为空';
         }
     }
 

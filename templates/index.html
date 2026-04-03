@@ -24,7 +24,100 @@
             <div class="name">UC投诉</div>
             <div class="desc">UC平台投诉表单</div>
         </a>
+        <div class="platform-card shadow-sm" style="cursor: pointer;" onclick="showTaskQueryModal()">
+            <div class="icon"><i class="fas fa-tasks"></i></div>
+            <div class="name">查询状态</div>
+            <div class="desc">查看投诉任务状态</div>
+        </div>
     </div>
 </div>
+
+<!-- 查询状态弹窗 -->
+<div class="modal fade" id="taskQueryModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">查询任务状态</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">请输入任务ID</label>
+                    <input type="text" class="form-control" id="taskIdInput" placeholder="如：uc_uc_20260402_153000_ab12cd34">
+                </div>
+                <div id="taskResult" class="alert d-none"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" onclick="queryTask()">查询</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+<script>
+let taskModal;
+
+function showTaskQueryModal() {
+    if (!taskModal) {
+        taskModal = new bootstrap.Modal(document.getElementById('taskQueryModal'));
+    }
+    document.getElementById('taskIdInput').value = '';
+    document.getElementById('taskResult').className = 'alert d-none';
+    taskModal.show();
+}
+
+function queryTask() {
+    const taskId = document.getElementById('taskIdInput').value.trim();
+    if (!taskId) {
+        alert('请输入任务ID');
+        return;
+    }
+
+    const resultDiv = document.getElementById('taskResult');
+    resultDiv.className = 'alert alert-info';
+    resultDiv.textContent = '查询中...';
+
+    fetch('/api/uc/task/' + taskId)
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                let statusText = '';
+                const status = data.status;
+                if (status === 'pending') statusText = '等待执行';
+                else if (status === 'running') statusText = '执行中';
+                else if (status === 'completed') statusText = '已完成';
+                else if (status === 'failed') statusText = '失败';
+
+                let html = `状态：${statusText}`;
+                if (data.complaint_number) {
+                    html += `<br>投诉单号：<strong>${data.complaint_number}</strong>`;
+                }
+                if (data.error) {
+                    html += `<br>错误：${data.error}`;
+                }
+                if (data.completed_at) {
+                    html += `<br>完成时间：${data.completed_at}`;
+                }
+
+                if (status === 'completed') {
+                    resultDiv.className = 'alert alert-success';
+                } else if (status === 'failed') {
+                    resultDiv.className = 'alert alert-danger';
+                } else {
+                    resultDiv.className = 'alert alert-warning';
+                }
+                resultDiv.innerHTML = html;
+            } else {
+                resultDiv.className = 'alert alert-danger';
+                resultDiv.textContent = data.error || '查询失败';
+            }
+        })
+        .catch(err => {
+            resultDiv.className = 'alert alert-danger';
+            resultDiv.textContent = '请求失败：' + err;
+        });
+}
+</script>
 </body>
 </html>
