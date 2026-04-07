@@ -3,6 +3,7 @@
 
 import json
 import os
+import queue
 import subprocess
 import threading
 from datetime import datetime
@@ -22,6 +23,9 @@ app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
 # 任务状态存储（生产环境建议用数据库）
 tasks = {}
+task_queue = queue.Queue()
+worker_thread = None
+worker_lock = threading.Lock()
 
 @app.after_request
 def no_cache(response):
@@ -75,6 +79,29 @@ def load_task_result(task_id):
 
     with open(result_path, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+
+def queue_worker():
+    while True:
+        task_args = task_queue.get()
+        try:
+            run_complaint_script(*task_args)
+        finally:
+            task_queue.task_done()
+
+
+def start_queue_worker():
+    global worker_thread
+
+    with worker_lock:
+        if worker_thread and worker_thread.is_alive():
+            return
+
+        worker_thread = threading.Thread(target=queue_worker, daemon=True, name='uc-complaint-worker')
+        worker_thread.start()
+
+
+start_queue_worker()
 
 
 @app.route('/')
@@ -201,16 +228,15 @@ def submit_uc_form():
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
-        # 创建任务并异步执行自动化脚本
+        # 创建任务并加入串行队列
         task_id = f"uc_{submission_id}"
         tasks[task_id] = {
             'status': 'pending',
             'submission_id': submission_id,
             'submitted_at': datetime.now().isoformat(),
+            'queued_at': datetime.now().isoformat(),
         }
 
-        # 启动后台线程执行自动化脚本
-        script_path = os.path.join(os.path.dirname(__file__), 'uc_complaint_from_backend.py')
         proof_file_path = os.path.join(submission_dir, saved_files['proof_file'])
         other_proof_paths = [os.path.join(submission_dir, f) for f in saved_files['other_proof_files']]
 
@@ -219,29 +245,25 @@ def submit_uc_form():
         complaint_type = payload['form']['complaint_type']
         copyright_type = complaint_type if complaint_category == '知识产权' else ''
 
-        thread = threading.Thread(
-            target=run_complaint_script,
-            args=(
-                task_id,
-                payload['form']['cookie'],
-                excel_path,
-                proof_file_path,
-                other_proof_paths,
-                payload['form']['description'],
-                payload['form']['identity'],
-                rights_holder,
-                complaint_category,
-                copyright_type,
-                payload['form']['module'],
-                payload['form']['content_type'],
-            )
-        )
-        thread.start()
+        task_queue.put((
+            task_id,
+            payload['form']['cookie'],
+            excel_path,
+            proof_file_path,
+            other_proof_paths,
+            payload['form']['description'],
+            payload['form']['identity'],
+            rights_holder,
+            complaint_category,
+            copyright_type,
+            payload['form']['module'],
+            payload['form']['content_type'],
+        ))
 
         return jsonify({
             'success': True,
             'task_id': task_id,
-            'message': '任务已创建，正在执行投诉',
+            'message': '任务已创建，正在排队执行投诉',
             'excel_rows': rows,
         })
     except Exception as e:
