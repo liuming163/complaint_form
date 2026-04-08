@@ -191,7 +191,7 @@
         <div class="form-card">
             <div class="section-title"><i class="fas fa-file-import"></i> 投诉内容</div>
             <div class="mb-3">
-                <label class="form-label">批量导入（Excel，最多200行）</label>
+                <label class="form-label">批量导入（Excel，系统将按2行/批自动提交）</label>
                 <div class="upload-drop-zone" id="excelDropZone" onclick="document.getElementById('excelFile').click()">
                     <i class="fas fa-file-excel fa-2x mb-2" style="color:#bcaaa4"></i>
                     <div>点击或拖拽上传 Excel 文件</div>
@@ -467,15 +467,14 @@ function handleExcelFile(file) {
         return;
     }
 
-    // 用服务端校验行数，这里先显示文件名
     const formData = new FormData();
     formData.append('file', file);
     fetch('/api/check_excel', { method: 'POST', body: formData })
         .then(r => r.json())
         .then(res => {
             if (res.success) {
-                info.textContent = `已选择：${file.name}（共 ${res.rows} 行）`;
-                // 把文件塞回 input
+                const batchCount = res.batch_count || 1;
+                info.textContent = `已选择：${file.name}（共 ${res.rows} 行，将分 ${batchCount} 批提交）`;
                 const dt = new DataTransfer();
                 dt.items.add(file);
                 document.getElementById('excelFile').files = dt.files;
@@ -595,7 +594,7 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
             throw new Error(result.error || '提交失败');
         }
 
-        alert(`提交成功\n任务编号：${result.task_id}\nExcel行数：${result.excel_rows}`);
+        alert(`提交成功\n任务编号：${result.task_id}\nExcel行数：${result.excel_rows}\n批次数：${result.batch_count}`);
         console.log('提交成功:', result);
     } catch (error) {
         alert(error.message || '提交失败');

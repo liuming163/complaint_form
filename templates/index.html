@@ -90,7 +90,9 @@ function queryTask() {
                 else if (status === 'failed') statusText = '失败';
 
                 let html = `状态：${statusText}`;
-                if (data.complaint_number) {
+                if (data.complaint_numbers && data.complaint_numbers.length > 0) {
+                    html += `<br>投诉单号：<strong>${data.complaint_numbers.join(', ')}</strong>`;
+                } else if (data.complaint_number) {
                     html += `<br>投诉单号：<strong>${data.complaint_number}</strong>`;
                 }
                 if (data.error) {

@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import math
 import os
 import queue
 import subprocess
@@ -65,11 +66,35 @@ def save_uploaded_file(file_storage, target_dir, prefix=None):
     return filename
 
 
+
+
 def create_submission_dir():
-    submission_id = f"uc_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
+    submission_id = datetime.now().strftime('%Y%m%d_%H%M%S_') + uuid4().hex[:8]
     submission_dir = os.path.join(app.config['UC_SUBMISSION_FOLDER'], submission_id)
     ensure_dir(submission_dir)
     return submission_id, submission_dir
+
+
+def split_excel_into_batches(df, batch_dir, batch_size=2):
+    ensure_dir(batch_dir)
+    batches = []
+
+    for index, start in enumerate(range(0, len(df), batch_size), start=1):
+        end = min(start + batch_size, len(df))
+        batch_df = df.iloc[start:end].copy()
+        batch_filename = f'part_{index:03d}.xlsx'
+        batch_path = os.path.join(batch_dir, batch_filename)
+        batch_df.to_excel(batch_path, index=False)
+        batches.append({
+            'batch_no': index,
+            'filename': batch_filename,
+            'path': batch_path,
+            'start_row': start + 1,
+            'end_row': end,
+            'rows': len(batch_df),
+        })
+
+    return batches
 
 
 def load_task_result(task_id):
@@ -134,10 +159,17 @@ def check_excel():
     try:
         df = pd.read_excel(save_path)
         rows = len(df)
-        if rows > 200:
-            os.remove(save_path)
-            return jsonify({'success': False, 'error': f'文件共 {rows} 行，超过200行限制，请拆分后上传'})
-        return jsonify({'success': True, 'rows': rows, 'filename': filename})
+        if rows <= 0:
+            return jsonify({'success': False, 'error': 'Excel 文件没有可提交的数据行'}), 400
+        batch_size = 2
+        batch_count = math.ceil(rows / batch_size)
+        return jsonify({
+            'success': True,
+            'rows': rows,
+            'filename': filename,
+            'batch_size': batch_size,
+            'batch_count': batch_count,
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': f'文件解析失败：{str(e)}'})
     finally:
@@ -188,8 +220,11 @@ def submit_uc_form():
         excel_path = os.path.join(submission_dir, excel_filename)
         df = pd.read_excel(excel_path)
         rows = len(df)
-        if rows > 200:
-            return jsonify({'success': False, 'error': f'文件共 {rows} 行，超过200行限制，请拆分后上传'}), 400
+        if rows <= 0:
+            return jsonify({'success': False, 'error': 'Excel 文件没有可提交的数据行'}), 400
+        batch_size = 2
+        batch_dir = os.path.join(submission_dir, 'batches')
+        batches = split_excel_into_batches(df, batch_dir, batch_size=batch_size)
 
         saved_files = {
             'excel_file': excel_filename,
@@ -197,6 +232,11 @@ def submit_uc_form():
             'proof_file': save_uploaded_file(request.files.get('proof_file'), submission_dir, 'proof'),
             'other_proof_files': []
         }
+
+        if not saved_files['proof_file']:
+            return jsonify({'success': False, 'error': '证明文件保存失败'}), 400
+        if identity == '代理人' and not saved_files['proxy_file']:
+            return jsonify({'success': False, 'error': '委托代理文件保存失败'}), 400
 
         for index, file_storage in enumerate(request.files.getlist('other_proof_file')):
             saved_name = save_uploaded_file(file_storage, submission_dir, f'other_{index + 1}')
@@ -219,6 +259,18 @@ def submit_uc_form():
                 'description': request.form.get('description', '').strip(),
             },
             'excel_rows': rows,
+            'batch_size': batch_size,
+            'batch_count': len(batches),
+            'batches': [
+                {
+                    'batch_no': batch['batch_no'],
+                    'filename': batch['filename'],
+                    'start_row': batch['start_row'],
+                    'end_row': batch['end_row'],
+                    'rows': batch['rows'],
+                }
+                for batch in batches
+            ],
             'files': saved_files,
         }
 
@@ -228,28 +280,45 @@ def submit_uc_form():
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
-        # 创建任务并加入串行队列
         task_id = f"uc_{submission_id}"
         tasks[task_id] = {
             'status': 'pending',
             'submission_id': submission_id,
             'submitted_at': datetime.now().isoformat(),
             'queued_at': datetime.now().isoformat(),
+            'excel_rows': rows,
+            'batch_count': len(batches),
+            'completed_batches': 0,
+            'current_batch': 0,
+            'complaint_numbers': [],
+            'batches': [
+                {
+                    'batch_no': batch['batch_no'],
+                    'rows': batch['rows'],
+                    'start_row': batch['start_row'],
+                    'end_row': batch['end_row'],
+                    'status': 'pending',
+                    'error': None,
+                }
+                for batch in batches
+            ],
         }
 
         proof_file_path = os.path.join(submission_dir, saved_files['proof_file'])
+        proxy_file_path = os.path.join(submission_dir, saved_files['proxy_file']) if saved_files['proxy_file'] else ''
         other_proof_paths = [os.path.join(submission_dir, f) for f in saved_files['other_proof_files']]
 
-        # 处理投诉类型
         complaint_category = payload['form']['complaint_category']
         complaint_type = payload['form']['complaint_type']
         copyright_type = complaint_type if complaint_category == '知识产权' else ''
+        batch_files = [batch['path'] for batch in batches]
 
         task_queue.put((
             task_id,
+            batch_files,
             payload['form']['cookie'],
-            excel_path,
             proof_file_path,
+            proxy_file_path,
             other_proof_paths,
             payload['form']['description'],
             payload['form']['identity'],
@@ -258,6 +327,7 @@ def submit_uc_form():
             copyright_type,
             payload['form']['module'],
             payload['form']['content_type'],
+            payload['batches'],
         ))
 
         return jsonify({
@@ -265,13 +335,15 @@ def submit_uc_form():
             'task_id': task_id,
             'message': '任务已创建，正在排队执行投诉',
             'excel_rows': rows,
+            'batch_count': len(batches),
         })
     except Exception as e:
         return jsonify({'success': False, 'error': f'提交失败：{str(e)}'}), 500
 
 
-def run_complaint_script(task_id, cookie, excel_file, proof_file, other_proof_files, description,
-                         identity, rights_holder, complaint_category, copyright_type, module, content_type):
+def run_complaint_script(task_id, excel_files, cookie, proof_file, proxy_file, other_proof_files, description,
+                         identity, rights_holder, complaint_category, copyright_type, module, content_type,
+                         batch_metadata):
     """在后台线程中执行UC投诉自动化脚本"""
     import sys
 
@@ -281,14 +353,16 @@ def run_complaint_script(task_id, cookie, excel_file, proof_file, other_proof_fi
         sys.executable,
         script_path,
         '--task-id', task_id,
-        '--cookie', cookie,
-        '--excel-file', excel_file,
+        '--excel-files', json.dumps(excel_files, ensure_ascii=False),
         '--proof-file', proof_file if proof_file else '',
+        '--proxy-file', proxy_file if proxy_file else '',
         '--description', description,
         '--identity', identity,
         '--rights-holder', rights_holder,
         '--module', module,
         '--content-type', content_type,
+        '--cookie', cookie,
+        '--batch-metadata', json.dumps(batch_metadata, ensure_ascii=False),
     ]
 
     if other_proof_files:
@@ -309,7 +383,7 @@ def run_complaint_script(task_id, cookie, excel_file, proof_file, other_proof_fi
             cmd,
             capture_output=True,
             text=True,
-            timeout=600  # 10分钟超时
+            timeout=max(600, len(excel_files) * 300)
         )
 
         print(f"[{task_id}] stdout: {result.stdout}")
@@ -335,7 +409,7 @@ def run_complaint_script(task_id, cookie, excel_file, proof_file, other_proof_fi
 
     except subprocess.TimeoutExpired:
         tasks[task_id]['status'] = 'failed'
-        tasks[task_id]['error'] = '执行超时（10分钟）'
+        tasks[task_id]['error'] = '执行超时'
     except Exception as e:
         tasks[task_id]['status'] = 'failed'
         tasks[task_id]['error'] = str(e)
@@ -356,6 +430,11 @@ def get_task_status(task_id):
         'task_id': task_id,
         'status': task.get('status'),
         'complaint_number': task.get('complaint_number'),
+        'complaint_numbers': task.get('complaint_numbers', []),
+        'batch_count': task.get('batch_count'),
+        'completed_batches': task.get('completed_batches'),
+        'current_batch': task.get('current_batch'),
+        'batches': task.get('batches', []),
         'error': task.get('error'),
         'submitted_at': task.get('submitted_at'),
         'started_at': task.get('started_at'),
