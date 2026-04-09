@@ -5,14 +5,17 @@ import json
 import math
 import os
 import queue
+import shutil
 import subprocess
 import threading
+import zipfile
+import io
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -339,6 +342,271 @@ def submit_uc_form():
         })
     except Exception as e:
         return jsonify({'success': False, 'error': f'提交失败：{str(e)}'}), 500
+
+
+# 自定义模板上传后的临时文件目录
+CUSTOM_TEMPLATE_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads', 'custom_templates')
+
+
+def extract_zip_with_correct_encoding(zip_file_storage, extract_dir):
+    """使用unzip命令解压ZIP文件以保留正确的中文文件名"""
+    import tempfile
+    import subprocess
+
+    # 先保存上传的ZIP到临时文件
+    with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp_zip:
+        zip_path = tmp_zip.name
+        zip_file_storage.save(zip_path)
+
+    # 使用unzip命令解压
+    try:
+        subprocess.run(['unzip', '-o', '-q', zip_path, '-d', extract_dir],
+                      check=True, capture_output=True)
+    finally:
+        os.unlink(zip_path)  # 删除临时ZIP文件
+
+
+@app.route('/api/download_custom_template', methods=['GET'])
+def download_custom_template():
+    """下载自定义模板Excel（3个Sheet）"""
+    try:
+        # Sheet1: 表单内容（除采集账号和Cookie外）
+        sheet1_data = {
+            '字段': [
+                '您的身份', '代理人/权利人', '被代理人（权利人）信息', '投诉大类',
+                '投诉类型', '功能模块', '内容类型', '投诉内容描述'
+            ],
+            '值': [
+                '', '', '', '',
+                '', '', '', ''
+            ],
+            '可选值': [
+                '权利人、代理人', '北京和晞科技有限公司、刘明',
+                '北京uc、深圳uc、上海uc', '知识产权、人身权',
+                '著作权（含视频、图文、图集等）、商标、专利、其他知识产权',
+                '头条内容、大鱼号账号、UC网盘、神马搜索',
+                '影视剧集、其他视频、小说、漫画、图片、文章、软件/游戏、其他',
+                ''
+            ]
+        }
+        df_sheet1 = pd.DataFrame(sheet1_data)
+
+        # Sheet2: 批量导入的Excel表格
+        sheet2_headers = ['侵权链接', '对应原创链接/对应访问码', '作品名称']
+        sheet2_data = [
+            ['', '', ''],
+            ['', '', ''],
+            ['', '', ''],
+        ]
+        df_sheet2 = pd.DataFrame(sheet2_data, columns=sheet2_headers)
+
+        # Sheet3: 填写要求说明
+        sheet3_lines = [
+            ['Sheet1 表单填写说明'],
+            [''],
+            ['字段名', '填写说明'],
+            ['您的身份', '必填，选择「权利人」或「代理人」'],
+            ['代理人/权利人', '必填，选择代理人或权利人名称'],
+            ['被代理人（权利人）信息', '代理人身份时必填，选择被代理人'],
+            ['投诉大类', '必填，选择「知识产权」或「人身权」'],
+            ['投诉类型', '必填，根据投诉大类选择具体类型'],
+            ['功能模块', '必填，选择功能模块'],
+            ['内容类型', '必填，选择内容类型'],
+            ['投诉内容描述', '必填，客观公正描述侵权所在，最多1000字'],
+            [''],
+            ['Sheet2 批量导入Excel填写说明'],
+            [''],
+            ['字段名', '填写说明'],
+            ['侵权链接', '必填，填写需要投诉的侵权内容链接'],
+            ['对应原创链接/对应访问码', '必填，填写原创内容链接或访问码'],
+            ['作品名称', '必填，填写原创作品名称'],
+            [''],
+            ['Sheet3 证明文件说明'],
+            [''],
+            ['文件名关键词', '说明'],
+            ['证明文件', '必填，支持jpg/png/jpeg/bmp/pdf格式'],
+            ['委托代理', '代理人身份时必填，支持jpg/png/jpeg/bmp/pdf格式'],
+            ['其他证明', '可选，支持jpg/png/jpeg/bmp/pdf格式'],
+            [''],
+            ['注意事项'],
+            [''],
+            ['1. 上传自定义模板时，需要将Excel和所有证明文件打包成ZIP文件'],
+            ['2. 证明文件名必须包含「证明文件」关键字'],
+            ['3. 委托代理文件名必须包含「委托代理」关键字（代理人身份时必须）'],
+            ['4. 其他证明文件名必须包含「其他证明」关键字'],
+            ['5. 文件格式支持：jpg、png、jpeg、bmp、pdf'],
+        ]
+        df_sheet3 = pd.DataFrame(sheet3_lines)
+
+        # 创建Excel文件
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_sheet1.to_excel(writer, sheet_name='表单内容', index=False)
+            df_sheet2.to_excel(writer, sheet_name='批量导入Excel', index=False)
+            df_sheet3.to_excel(writer, sheet_name='填写说明', index=False, header=False)
+
+        output.seek(0)
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            attachment_filename='custom_template.xlsx'
+        )
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'生成模板失败：{str(e)}'}), 500
+
+
+@app.route('/api/upload_custom_template', methods=['POST'])
+def upload_custom_template():
+    """上传自定义模板ZIP，解压并回填表单数据"""
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'error': '未上传文件'}), 400
+
+    zip_file = request.files['file']
+    if not zip_file.filename:
+        return jsonify({'success': False, 'error': '文件为空'}), 400
+
+    if not zip_file.filename.lower().endswith('.zip'):
+        return jsonify({'success': False, 'error': '请上传ZIP格式文件'}), 400
+
+    try:
+        # 创建临时目录
+        ensure_dir(CUSTOM_TEMPLATE_FOLDER)
+        template_id = datetime.now().strftime('%Y%m%d_%H%M%S_') + uuid4().hex[:8]
+        template_dir = os.path.join(CUSTOM_TEMPLATE_FOLDER, template_id)
+        ensure_dir(template_dir)
+
+        # 使用unzip命令解压ZIP以保留正确的中文文件名
+        extract_zip_with_correct_encoding(zip_file, template_dir)
+
+        # 列出解压后的所有文件（使用正确的中文文件名）
+        zip_contents = {}
+        for root, dirs, files in os.walk(template_dir):
+            for name in files:
+                if name == '.DS_Store' or name.startswith('._'):
+                    continue
+                file_path = os.path.join(root, name)
+                rel_path = os.path.relpath(file_path, template_dir)
+                zip_contents[rel_path] = file_path
+
+        # 查找Excel文件
+        excel_file_name = None
+        for name in zip_contents.keys():
+            if name.endswith('.xlsx') or name.endswith('.xls'):
+                excel_file_name = name
+                break
+
+        if not excel_file_name:
+            # 清理临时目录
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': 'ZIP中未找到Excel模板文件'}), 400
+
+        # 读取Excel
+        try:
+            xls = pd.ExcelFile(zip_contents[excel_file_name])
+            sheet1_data = pd.read_excel(xls, sheet_name='表单内容')
+            sheet2_data = pd.read_excel(xls, sheet_name='批量导入Excel')
+        except Exception as e:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'Excel解析失败：{str(e)}'}), 400
+
+        # 解析Sheet1表单数据
+        form_data = {}
+        try:
+            for _, row in sheet1_data.iterrows():
+                field = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ''
+                value = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ''
+                if field and field != 'nan':
+                    form_data[field] = value
+        except Exception as e:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'Sheet1解析失败：{str(e)}'}), 400
+
+        # 解析Sheet2批量导入数据
+        excel_rows = []
+        try:
+            for _, row in sheet2_data.iterrows():
+                if pd.notna(row.iloc[0]) and str(row.iloc[0]).strip():
+                    excel_rows.append({
+                        '侵权链接': str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else '',
+                        '对应原创链接/对应访问码': str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else '',
+                        '作品名称': str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
+                    })
+        except Exception as e:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'Sheet2解析失败：{str(e)}'}), 400
+
+        # 查找证明文件
+        proof_file_name = None
+        proxy_file_name = None
+        other_proof_names = []
+
+        identity = form_data.get('您的身份', '')
+
+        for name in zip_contents.keys():
+            if name == excel_file_name:
+                continue
+            name_lower = name.lower()
+
+            if not (name_lower.endswith(('.jpg', '.jpeg', '.png', '.bmp', '.pdf'))):
+                continue
+
+            # 匹配证明文件（包含"证明文件"但不包含"其他证明"/"其它证明"和"委托代理"）
+            if '证明文件' in name and '其他证明' not in name and '其它证明' not in name and '委托代理' not in name:
+                if proof_file_name is None:
+                    proof_file_name = name
+            # 匹配委托代理文件
+            elif '委托代理' in name:
+                if proxy_file_name is None:
+                    proxy_file_name = name
+            # 匹配其他证明（包含"其他证明"或"其它证明"）
+            elif '其他证明' in name or '其它证明' in name:
+                other_proof_names.append(name)
+
+        # 验证委托人必须文件
+        if identity == '代理人' and not proxy_file_name:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': '代理人身份必须上传委托代理文件'}), 400
+
+        # 按文件名排序其他证明
+        other_proof_names.sort()
+
+        # 准备返回数据（使用template_id作为访问路径）
+        result = {
+            'success': True,
+            'template_id': template_id,
+            'form_data': form_data,
+            'excel_rows': excel_rows,
+            'files': {
+                'proof_file': proof_file_name,
+                'proxy_file': proxy_file_name,
+                'other_proof_files': other_proof_names
+            }
+        }
+
+        return jsonify(result)
+
+    except zipfile.BadZipFile:
+        return jsonify({'success': False, 'error': 'ZIP文件格式无效'}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'处理失败：{str(e)}'}), 500
+
+
+@app.route('/api/custom_template_file/<template_id>/<path:filename>', methods=['GET'])
+def serve_custom_template_file(template_id, filename):
+    """服务自定义模板的临时文件"""
+    # 安全检查：防止路径遍历
+    template_dir = os.path.join(CUSTOM_TEMPLATE_FOLDER, template_id)
+    file_path = os.path.normpath(os.path.join(template_dir, filename))
+
+    # 确保文件仍在template_dir内
+    if not file_path.startswith(os.path.abspath(template_dir) + os.sep):
+        return jsonify({'success': False, 'error': '无效的文件路径'}), 400
+
+    if not os.path.exists(file_path):
+        return jsonify({'success': False, 'error': '文件不存在'}), 404
+
+    return send_file(file_path)
 
 
 def run_complaint_script(task_id, excel_files, cookie, proof_file, proxy_file, other_proof_files, description,

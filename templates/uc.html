@@ -6,6 +6,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.bootcdn.net/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <header class="main-header shadow-sm">
@@ -24,6 +25,15 @@
             <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('shenzhen')">深圳uc投诉模版</button>
             <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('beijing')">北京uc投诉模版</button>
             <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('penguin')">上海uc投诉模版</button>
+        </div>
+        <div class="d-flex gap-3 mt-3">
+            <button type="button" class="btn btn-outline-primary" onclick="downloadCustomTemplate()">
+                <i class="fas fa-download"></i> 下载自定义模版
+            </button>
+            <input type="file" id="customTemplateZip" accept=".zip" style="display:none" onchange="handleCustomTemplateUpload(this)">
+            <button type="button" class="btn btn-outline-success" onclick="document.getElementById('customTemplateZip').click()">
+                <i class="fas fa-upload"></i> 上传自定义模版
+            </button>
         </div>
     </div>
 
@@ -577,6 +587,33 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
         return;
     }
 
+    // 如果有自定义模板的Excel数据，先创建Excel文件
+    if (window.customTemplateExcelRows && window.customTemplateExcelRows.length > 0) {
+        const excelData = window.customTemplateExcelRows.map(row => [
+            row['侵权链接'],
+            row['对应原创链接/对应访问码'],
+            row['作品名称']
+        ]);
+
+        // 添加表头
+        excelData.unshift(['侵权链接', '对应原创链接/对应访问码', '作品名称']);
+
+        // 创建工作簿和工作表
+        const ws = XLSX.utils.aoa_to_sheet(excelData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '批量导入');
+
+        // 转换为ArrayBuffer
+        const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+        // 创建File对象并设置到excelFile输入框
+        const excelFile = new File([blob], 'custom_template_batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const dt = new DataTransfer();
+        dt.items.add(excelFile);
+        document.getElementById('excelFile').files = dt.files;
+    }
+
     const formData = new FormData(this);
     const cookieValue = formData.get('cookie');
     if (typeof cookieValue === 'string') {
@@ -596,6 +633,9 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
 
         alert(`提交成功\n任务编号：${result.task_id}\nExcel行数：${result.excel_rows}\n批次数：${result.batch_count}`);
         console.log('提交成功:', result);
+
+        // 清空自定义模板数据
+        window.customTemplateExcelRows = null;
     } catch (error) {
         alert(error.message || '提交失败');
         console.error('提交失败:', error);
@@ -733,7 +773,7 @@ function validateAccountInfo() {
         }
     }
 
-    if (!excelFile || !excelFile.files || !excelFile.files.length) {
+    if (!excelFile || (!excelFile.files || !excelFile.files.length) && (!window.customTemplateExcelRows || window.customTemplateExcelRows.length === 0)) {
         isValid = false;
         errorMessage += '请上传Excel批量导入文件\n';
         if (excelError) {
@@ -745,6 +785,178 @@ function validateAccountInfo() {
         isValid: isValid,
         errorMessage: errorMessage
     };
+}
+
+// 下载自定义模版
+function downloadCustomTemplate() {
+    window.location.href = '/api/download_custom_template';
+}
+
+// 处理自定义模版上传
+let currentTemplateId = null;
+
+function handleCustomTemplateUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    fetch('/api/upload_custom_template', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            currentTemplateId = res.template_id;
+            applyCustomTemplateData(res);
+            alert('自定义模版加载成功');
+        } else {
+            alert('加载失败：' + res.error);
+            input.value = '';
+        }
+    })
+    .catch(err => {
+        alert('上传失败：' + err.message);
+        input.value = '';
+    });
+}
+
+// 从自定义模板目录获取文件
+function fetchTemplateFileAsBlob(templateId, filename) {
+    return fetch(`/api/custom_template_file/${templateId}/${encodeURIComponent(filename)}`)
+        .then(res => {
+            if (!res.ok) throw new Error('文件加载失败');
+            return res.blob();
+        })
+        .then(blob => {
+            // 从文件名获取类型
+            const ext = filename.split('.').pop().toLowerCase();
+            let mimeType = 'application/octet-stream';
+            if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
+            else if (ext === 'png') mimeType = 'image/png';
+            else if (ext === 'pdf') mimeType = 'application/pdf';
+            else if (ext === 'bmp') mimeType = 'image/bmp';
+            return new File([blob], filename, { type: mimeType });
+        });
+}
+
+// 应用自定义模版数据到表单
+function applyCustomTemplateData(data) {
+    const formData = data.form_data;
+    const files = data.files;
+    const excelRows = data.excel_rows;
+    const templateId = data.template_id || currentTemplateId;
+
+    // 1. 填充身份信息
+    if (formData['您的身份']) {
+        const identityRadios = document.querySelectorAll('input[name="identity"]');
+        identityRadios.forEach(r => {
+            r.checked = r.value === formData['您的身份'];
+        });
+        onIdentityChange();
+    }
+
+    // 2. 填充代理人/权利人
+    if (formData['代理人/权利人']) {
+        document.getElementById('identitySelect').value = formData['代理人/权利人'];
+    }
+
+    // 3. 填充被代理人
+    if (formData['被代理人（权利人）信息']) {
+        const principalSelect = document.querySelector('select[name="principal"]');
+        if (principalSelect) {
+            principalSelect.value = formData['被代理人（权利人）信息'];
+        }
+    }
+
+    // 4. 填充投诉类型
+    if (formData['投诉大类']) {
+        const categoryRadios = document.querySelectorAll('input[name="complaint_category"]');
+        categoryRadios.forEach(r => {
+            r.checked = r.value === formData['投诉大类'];
+        });
+    }
+
+    if (formData['投诉类型']) {
+        const typeRadios = document.querySelectorAll('input[name="complaint_type"]');
+        typeRadios.forEach(r => {
+            r.checked = r.value === formData['投诉类型'];
+        });
+    }
+
+    // 5. 填充功能模块
+    if (formData['功能模块']) {
+        const moduleRadios = document.querySelectorAll('input[name="module"]');
+        moduleRadios.forEach(r => {
+            r.checked = r.value === formData['功能模块'];
+        });
+    }
+
+    // 6. 填充内容类型
+    if (formData['内容类型']) {
+        const contentTypeRadios = document.querySelectorAll('input[name="content_type"]');
+        contentTypeRadios.forEach(r => {
+            r.checked = r.value === formData['内容类型'];
+        });
+    }
+
+    // 7. 填充投诉内容描述
+    if (formData['投诉内容描述']) {
+        const descTextarea = document.querySelector('textarea[name="description"]');
+        if (descTextarea) {
+            descTextarea.value = formData['投诉内容描述'];
+        }
+    }
+
+    // 8. 处理证明材料文件
+    if (files.proxy_file && templateId) {
+        fetchTemplateFileAsBlob(templateId, files.proxy_file).then(blob => {
+            const dt = new DataTransfer();
+            dt.items.add(blob);
+            document.getElementById('proxy_file_input').files = dt.files;
+            handleFileUpload(document.getElementById('proxy_file_input'), 'proxyFileBox', 'proxyFilePlaceholder', 'proxyFilePreview', 'proxyFileNonImg', 'proxyFileInfo');
+        }).catch(() => {
+            document.getElementById('proxyFileInfo').textContent = '文件加载失败：' + files.proxy_file;
+        });
+    }
+
+    if (files.proof_file && templateId) {
+        fetchTemplateFileAsBlob(templateId, files.proof_file).then(blob => {
+            const dt = new DataTransfer();
+            dt.items.add(blob);
+            document.getElementById('proof_file_input').files = dt.files;
+            handleFileUpload(document.getElementById('proof_file_input'), 'proofFileBox', 'proofFilePlaceholder', 'proofFilePreview', 'proofFileNonImg', 'proofFileInfo');
+        }).catch(() => {
+            document.getElementById('proofFileInfo').textContent = '文件加载失败：' + files.proof_file;
+        });
+    }
+
+    // 9. 处理其他证明文件
+    otherProofFiles = [];
+    document.getElementById('otherProofList').innerHTML = '';
+
+    if (files.other_proof_files && files.other_proof_files.length > 0 && templateId) {
+        Promise.all(files.other_proof_files.map((filename, index) => {
+            return fetchTemplateFileAsBlob(templateId, filename).then(blob => {
+                otherProofFiles.push(blob);
+                addOtherProofItem(blob, otherProofFiles.length - 1);
+            }).catch(() => {
+                console.error('文件加载失败：' + filename);
+            });
+        })).then(() => {
+            syncOtherProofInput();
+        });
+    }
+
+    // 10. 处理批量导入Excel - 保存excel数据用于后续提交
+    if (excelRows && excelRows.length > 0) {
+        // 将excel数据存储在表单上用于后续提交
+        window.customTemplateExcelRows = excelRows;
+        const excelInfo = document.getElementById('excelInfo');
+        excelInfo.textContent = `已选择：自定义模板投诉内容（共 ${excelRows.length} 行）`;
+    }
 }
 </script>
 </body>
