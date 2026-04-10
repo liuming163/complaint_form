@@ -348,6 +348,22 @@ def submit_uc_form():
 CUSTOM_TEMPLATE_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads', 'custom_templates')
 
 
+def cleanup_old_template_files(max_age_hours=24):
+    """清理超过指定时间的临时模板目录"""
+    import time
+    if not os.path.exists(CUSTOM_TEMPLATE_FOLDER):
+        return
+    now = time.time()
+    for item in os.listdir(CUSTOM_TEMPLATE_FOLDER):
+        item_path = os.path.join(CUSTOM_TEMPLATE_FOLDER, item)
+        if os.path.isdir(item_path):
+            # 检查目录修改时间
+            mtime = os.path.getmtime(item_path)
+            age_hours = (now - mtime) / 3600
+            if age_hours > max_age_hours:
+                shutil.rmtree(item_path, ignore_errors=True)
+
+
 def extract_zip_with_correct_encoding(zip_file_storage, extract_dir):
     """使用unzip命令解压ZIP文件以保留正确的中文文件名"""
     import tempfile
@@ -459,6 +475,9 @@ def download_custom_template():
 @app.route('/api/upload_custom_template', methods=['POST'])
 def upload_custom_template():
     """上传自定义模板ZIP，解压并回填表单数据"""
+    # 先清理超过24小时的旧临时文件
+    cleanup_old_template_files(max_age_hours=24)
+
     if 'file' not in request.files:
         return jsonify({'success': False, 'error': '未上传文件'}), 400
 
@@ -708,6 +727,131 @@ def get_task_status(task_id):
         'started_at': task.get('started_at'),
         'completed_at': task.get('completed_at'),
     })
+
+
+@app.route('/api/uc/status_list', methods=['GET'])
+def get_uc_status_list():
+    """获取UC投诉状态列表"""
+    submissions = []
+    uc_submissions_path = app.config['UC_SUBMISSION_FOLDER']
+
+    if not os.path.exists(uc_submissions_path):
+        return jsonify({'success': True, 'data': []})
+
+    for item in sorted(os.listdir(uc_submissions_path), reverse=True):
+        item_path = os.path.join(uc_submissions_path, item)
+        if not os.path.isdir(item_path):
+            continue
+
+        submission_file = os.path.join(item_path, 'submission.json')
+        if not os.path.exists(submission_file):
+            continue
+
+        try:
+            with open(submission_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            # 获取任务状态
+            task_id = f"uc_{data.get('submission_id', item)}"
+            task_info = tasks.get(task_id)
+            if not task_info:
+                task_info = load_task_result(task_id)
+
+            status = '未知'
+            if task_info:
+                status = task_info.get('status', '未知')
+                if status == 'running':
+                    status = '执行中'
+                elif status == 'completed':
+                    status = '已完成'
+                elif status == 'failed':
+                    status = '失败'
+                elif status == 'pending':
+                    status = '等待中'
+                elif status == 'partial_failed':
+                    status = '部分失败'
+
+            # 获取投诉单号
+            complaint_numbers = []
+            if task_info and task_info.get('complaint_numbers'):
+                complaint_numbers = task_info.get('complaint_numbers', [])
+            elif task_info and task_info.get('complaint_number'):
+                complaint_numbers = [task_info.get('complaint_number')]
+
+            submissions.append({
+                'submission_id': data.get('submission_id', item),
+                'submitted_at': data.get('submitted_at', ''),
+                'collect_account': data.get('form', {}).get('collect_account', ''),
+                'excel_rows': data.get('excel_rows', 0),
+                'batch_count': data.get('batch_count', 0),
+                'status': status,
+                'complaint_numbers': complaint_numbers,
+            })
+        except Exception as e:
+            continue
+
+    return jsonify({'success': True, 'data': submissions})
+
+
+@app.route('/api/uc/verify_cookie', methods=['POST'])
+def verify_cookie():
+    """验证Cookie是否有效"""
+    data = request.get_json()
+    cookie = data.get('cookie', '').strip()
+
+    if not cookie:
+        return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
+
+    from playwright.sync_api import sync_playwright
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--lang=zh-CN,en-US",
+                ],
+            )
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1920, "height": 1080},
+            )
+
+            # 设置Cookie
+            if cookie.startswith('[') or cookie.startswith('{'):
+                cookies = json.loads(cookie) if isinstance(cookie, str) else cookie
+                context.add_cookies(cookies)
+            else:
+                for pair in cookie.split(';'):
+                    pair = pair.strip()
+                    if '=' in pair:
+                        key, value = pair.split('=', 1)
+                        context.add_cookies([{
+                            "name": key,
+                            "value": value,
+                            "domain": ".uc.cn",
+                            "path": "/"
+                        }])
+
+            # 访问UC投诉平台检查登录状态
+            page = context.new_page()
+            page.goto("https://ipp.uc.cn/#/home", wait_until="load", timeout=15000)
+            page.wait_for_timeout(2000)
+
+            # 检查是否出现登录对话框
+            login_dialog = page.locator("text=UC账号登录").first
+            if login_dialog.count() > 0 and login_dialog.is_visible():
+                browser.close()
+                return jsonify({'success': False, 'error': 'Cookie已过期，请重新登录'}), 401
+
+            browser.close()
+            return jsonify({'success': True, 'message': 'Cookie有效'})
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'验证失败：{str(e)}'}), 500
 
 
 if __name__ == '__main__':

@@ -13,42 +13,66 @@
 </header>
 
 <div class="home-wrap">
-    <div class="d-flex gap-5">
-        <a href="/kuake" class="platform-card shadow-sm">
-            <div class="icon"><i class="fas fa-search"></i></div>
-            <div class="name">夸克投诉</div>
-            <div class="desc">夸克平台投诉表单</div>
-        </a>
-        <a href="/uc" class="platform-card shadow-sm">
-            <div class="icon"><i class="fas fa-globe"></i></div>
-            <div class="name">UC投诉</div>
-            <div class="desc">UC平台投诉表单</div>
-        </a>
-        <div class="platform-card shadow-sm" style="cursor: pointer;" onclick="showTaskQueryModal()">
-            <div class="icon"><i class="fas fa-tasks"></i></div>
-            <div class="name">查询状态</div>
-            <div class="desc">查看投诉任务状态</div>
+    <div class="row g-4 main-content">
+        <!-- 左侧：投诉平台 -->
+        <div class="col-md-5 left-panel">
+            <div class="section-title mb-3"><i class="fas fa-file-alt"></i> 投诉平台</div>
+            <div class="d-flex flex-column gap-3">
+                <a href="/kuake" class="platform-card shadow-sm">
+                    <div class="icon"><i class="fas fa-search"></i></div>
+                    <div class="name">夸克投诉</div>
+                    <div class="desc">夸克平台投诉表单</div>
+                </a>
+                <a href="/uc" class="platform-card shadow-sm">
+                    <div class="icon"><i class="fas fa-globe"></i></div>
+                    <div class="name">UC投诉</div>
+                    <div class="desc">UC平台投诉表单</div>
+                </a>
+            </div>
         </div>
-    </div>
-</div>
 
-<!-- 查询状态弹窗 -->
-<div class="modal fade" id="taskQueryModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">查询任务状态</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label">请输入任务ID</label>
-                    <input type="text" class="form-control" id="taskIdInput" placeholder="如：uc_uc_20260402_153000_ab12cd34">
+        <!-- 分隔线 -->
+        <div class="col-md-1 d-none d-md-flex divider-wrapper">
+            <div class="divider"></div>
+        </div>
+
+        <!-- 右侧：状态展示 -->
+        <div class="col-md-6 right-panel">
+            <div class="section-title mb-3"><i class="fas fa-list-alt"></i> 状态查询</div>
+            <div class="d-flex flex-column gap-3">
+
+                <!-- 夸克状态查询 -->
+                <div class="status-card shadow-sm">
+                    <div class="status-card-header">
+                        <div class="icon"><i class="fas fa-search"></i></div>
+                        <div class="name">夸克状态查询</div>
+                    </div>
+                    <div class="status-card-body">
+                        <div class="status-empty">
+                            <i class="fas fa-inbox fa-2x mb-2"></i>
+                            <div>暂无数据</div>
+                        </div>
+                    </div>
                 </div>
-                <div id="taskResult" class="alert d-none"></div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-primary" onclick="queryTask()">查询</button>
+
+                <!-- UC状态查询 -->
+                <div class="status-card shadow-sm">
+                    <div class="status-card-header">
+                        <div class="icon"><i class="fas fa-globe"></i></div>
+                        <div class="name">UC状态查询</div>
+                        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="refreshUcStatus()">
+                            <i class="fas fa-sync-alt"></i> 刷新
+                        </button>
+                    </div>
+                    <div class="status-card-body">
+                        <div id="ucStatusTable" class="status-table-wrap">
+                            <div class="status-loading">
+                                <i class="fas fa-spinner fa-spin"></i> 加载中...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -56,70 +80,241 @@
 
 <script src="https://cdn.bootcdn.net/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
 <script>
-let taskModal;
+function refreshUcStatus() {
+    const container = document.getElementById('ucStatusTable');
+    container.innerHTML = '<div class="status-loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>';
 
-function showTaskQueryModal() {
-    if (!taskModal) {
-        taskModal = new bootstrap.Modal(document.getElementById('taskQueryModal'));
-    }
-    document.getElementById('taskIdInput').value = '';
-    document.getElementById('taskResult').className = 'alert d-none';
-    taskModal.show();
-}
-
-function queryTask() {
-    const taskId = document.getElementById('taskIdInput').value.trim();
-    if (!taskId) {
-        alert('请输入任务ID');
-        return;
-    }
-
-    const resultDiv = document.getElementById('taskResult');
-    resultDiv.className = 'alert alert-info';
-    resultDiv.textContent = '查询中...';
-
-    fetch('/api/uc/task/' + taskId)
+    fetch('/api/uc/status_list')
         .then(res => res.json())
         .then(data => {
-            if (data.success) {
-                let statusText = '';
-                const status = data.status;
-                if (status === 'pending') statusText = '等待执行';
-                else if (status === 'running') statusText = '执行中';
-                else if (status === 'completed') statusText = '已完成';
-                else if (status === 'failed') statusText = '失败';
+            if (data.success && data.data.length > 0) {
+                let html = `
+                    <table class="status-table">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>采集账号</th>
+                                <th>投诉单号</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                data.data.forEach(item => {
+                    // 格式化时间
+                    let timeStr = '-';
+                    if (item.submitted_at) {
+                        const d = new Date(item.submitted_at);
+                        timeStr = d.toLocaleString('zh-CN', {
+                            month: '2-digit', day: '2-digit',
+                            hour: '2-digit', minute: '2-digit'
+                        });
+                    }
 
-                let html = `状态：${statusText}`;
-                if (data.complaint_numbers && data.complaint_numbers.length > 0) {
-                    html += `<br>投诉单号：<strong>${data.complaint_numbers.join(', ')}</strong>`;
-                } else if (data.complaint_number) {
-                    html += `<br>投诉单号：<strong>${data.complaint_number}</strong>`;
-                }
-                if (data.error) {
-                    html += `<br>错误：${data.error}`;
-                }
-                if (data.completed_at) {
-                    html += `<br>完成时间：${data.completed_at}`;
-                }
+                    // 采集账号
+                    let accountStr = item.collect_account || '-';
 
-                if (status === 'completed') {
-                    resultDiv.className = 'alert alert-success';
-                } else if (status === 'failed') {
-                    resultDiv.className = 'alert alert-danger';
-                } else {
-                    resultDiv.className = 'alert alert-warning';
-                }
-                resultDiv.innerHTML = html;
+                    // 投诉单号
+                    let complaintStr = '-';
+                    if (item.complaint_numbers && item.complaint_numbers.length > 0) {
+                        complaintStr = item.complaint_numbers.slice(0, 3).join('<br>');
+                        if (item.complaint_numbers.length > 3) {
+                            complaintStr += '...';
+                        }
+                    } else if (item.batch_count) {
+                        complaintStr = `${item.batch_count}批(${item.excel_rows}条)`;
+                    }
+
+                    // 状态样式
+                    let statusClass = 'status-default';
+                    if (item.status === '已完成') statusClass = 'status-success';
+                    else if (item.status === '执行中') statusClass = 'status-running';
+                    else if (item.status === '失败') statusClass = 'status-failed';
+
+                    html += `
+                        <tr>
+                            <td>${timeStr}</td>
+                            <td>${accountStr}</td>
+                            <td>${complaintStr}</td>
+                            <td><span class="status-badge ${statusClass}">${item.status}</span></td>
+                        </tr>
+                    `;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
             } else {
-                resultDiv.className = 'alert alert-danger';
-                resultDiv.textContent = data.error || '查询失败';
+                container.innerHTML = `
+                    <div class="status-empty">
+                        <i class="fas fa-inbox fa-2x mb-2"></i>
+                        <div>暂无数据</div>
+                    </div>
+                `;
             }
         })
         .catch(err => {
-            resultDiv.className = 'alert alert-danger';
-            resultDiv.textContent = '请求失败：' + err;
+            container.innerHTML = `
+                <div class="status-error">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    加载失败: ${err}
+                </div>
+            `;
         });
 }
+
+// 页面加载时自动刷新UC状态
+document.addEventListener('DOMContentLoaded', refreshUcStatus);
 </script>
+
+<style>
+.status-card {
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.status-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 15px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #eee;
+}
+
+.status-card-header .icon {
+    color: #666;
+}
+
+.status-card-header .name {
+    font-weight: 600;
+    color: #333;
+}
+
+.status-card-body {
+    padding: 15px;
+    min-height: 150px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.status-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 120px;
+    color: #999;
+}
+
+.status-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 120px;
+    color: #666;
+}
+
+.status-error {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 120px;
+    color: #dc3545;
+}
+
+.status-table-wrap {
+    width: 100%;
+}
+
+.status-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.status-table th,
+.status-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+    white-space: nowrap;
+}
+
+.status-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    color: #666;
+    position: sticky;
+    top: 0;
+}
+
+.status-table td {
+    color: #333;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.status-default {
+    background: #e9ecef;
+    color: #666;
+}
+
+.status-success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.status-running {
+    background: #cce5ff;
+    color: #004085;
+}
+
+.status-failed {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+/* 新增布局样式 */
+.main-content {
+    width: 100%;
+    padding: 0 10%;
+    box-sizing: border-box;
+}
+
+.left-panel {
+    flex: 0 0 auto;
+}
+
+.right-panel {
+    flex: 1 1 auto;
+}
+
+.divider-wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: stretch;
+    padding: 0;
+}
+
+.divider {
+    width: 2px;
+    background: linear-gradient(to bottom, transparent, #ddd, transparent);
+    margin: 40px 0 20px 0;
+}
+
+@media (max-width: 768px) {
+    .divider-wrapper {
+        display: none;
+    }
+}
+</style>
 </body>
 </html>
