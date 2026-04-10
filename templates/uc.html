@@ -6,7 +6,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <script src="https://cdn.bootcdn.net/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="{{ url_for('static', filename='js/xlsx.full.min.js') }}"></script>
 </head>
 <body>
 <header class="main-header shadow-sm">
@@ -94,7 +94,7 @@
                         <img id="proxyFilePreview" class="file-upload-preview" style="display:none">
                         <div id="proxyFileNonImg" class="file-upload-nonimg" style="display:none"></div>
                     </div>
-                    <input type="file" id="proxy_file_input" name="proxy_file" accept=".png,.jpg,.jpeg,.bmp,.pdf,.xlsx" style="display:none" onchange="handleFileUpload(this,'proxyFileBox','proxyFilePlaceholder','proxyFilePreview','proxyFileNonImg','proxyFileInfo')">
+                    <input type="file" id="proxy_file_input" name="proxy_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" style="display:none" onchange="handleFileUpload(this,'proxyFileBox','proxyFilePlaceholder','proxyFilePreview','proxyFileNonImg','proxyFileInfo')">
                     <div class="file-info" id="proxyFileInfo"></div>
                 </div>
             </div>
@@ -230,9 +230,9 @@
                     <img id="proofFilePreview" class="file-upload-preview" style="display:none">
                     <div id="proofFileNonImg" class="file-upload-nonimg" style="display:none"></div>
                 </div>
-                <input type="file" id="proof_file_input" name="proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf,.xlsx" style="display:none" onchange="handleFileUpload(this,'proofFileBox','proofFilePlaceholder','proofFilePreview','proofFileNonImg','proofFileInfo')">
+                <input type="file" id="proof_file_input" name="proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" style="display:none" onchange="handleFileUpload(this,'proofFileBox','proofFilePlaceholder','proofFilePreview','proofFileNonImg','proofFileInfo')">
                 <div class="file-info" id="proofFileInfo"></div>
-                <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf .xlsx</div>
+                <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf</div>
             </div>
             <div class="mb-3">
                 <label class="form-label">其他证明</label>
@@ -243,14 +243,14 @@
                         <div class="mt-1" style="font-size:12px">点击上传</div>
                     </div>
                 </div>
-                <input type="file" id="other_proof_file_input" name="other_proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf,.xlsx" multiple style="display:none" onchange="handleMultiFileUpload(this)">
+                <input type="file" id="other_proof_file_input" name="other_proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" multiple style="display:none" onchange="handleMultiFileUpload(this)">
                 <div class="file-info" id="otherProofInfo"></div>
-                <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf .xlsx</div>
+                <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf</div>
             </div>
         </div>
 
         <div class="text-center">
-            <button type="submit" class="btn btn-brown px-5">提交投诉</button>
+            <button type="submit" id="submitBtn" class="btn btn-brown px-5">提交投诉</button>
         </div>
 
     </form>
@@ -620,7 +620,35 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
         formData.set('cookie', cookieValue.trim());
     }
 
+    // 验证Cookie是否有效
+    const cookieVerifyBtn = document.getElementById('submitBtn');
+    const originalBtnText = cookieVerifyBtn ? cookieVerifyBtn.textContent : '提交投诉';
+    if (cookieVerifyBtn) {
+        cookieVerifyBtn.disabled = true;
+        cookieVerifyBtn.textContent = '验证Cookie...';
+    }
+
     try {
+        const verifyResp = await fetch('/api/uc/verify_cookie', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cookie: cookieValue})
+        });
+        const verifyResult = await verifyResp.json();
+
+        if (!verifyResult.success) {
+            alert('Cookie验证失败：' + verifyResult.error + '\n请重新填写Cookie后再次提交');
+            if (cookieVerifyBtn) {
+                cookieVerifyBtn.disabled = false;
+                cookieVerifyBtn.textContent = originalBtnText;
+            }
+            return;
+        }
+
+        if (cookieVerifyBtn) {
+            cookieVerifyBtn.textContent = '提交中...';
+        }
+
         const response = await fetch('/api/uc/submit', {
             method: 'POST',
             body: formData
@@ -639,6 +667,11 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
     } catch (error) {
         alert(error.message || '提交失败');
         console.error('提交失败:', error);
+    } finally {
+        if (cookieVerifyBtn) {
+            cookieVerifyBtn.disabled = false;
+            cookieVerifyBtn.textContent = originalBtnText;
+        }
     }
 });
 
