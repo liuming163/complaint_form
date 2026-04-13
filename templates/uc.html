@@ -22,11 +22,6 @@
     <div class="form-card mb-4">
         <div class="section-title"><i class="fas fa-clone"></i> 投诉模版</div>
         <div class="d-flex gap-3">
-            <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('shenzhen')">深圳uc投诉模版</button>
-            <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('beijing')">北京uc投诉模版</button>
-            <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('penguin')">上海uc投诉模版</button>
-        </div>
-        <div class="d-flex gap-3 mt-3">
             <button type="button" class="btn btn-outline-primary" onclick="downloadCustomTemplate()">
                 <i class="fas fa-download"></i> 下载自定义模版
             </button>
@@ -376,78 +371,6 @@ function syncOtherProofInput() {
     document.getElementById('other_proof_file_input').files = dt.files;
     const names = otherProofFiles.filter(Boolean).map(f => f.name);
     document.getElementById('otherProofInfo').textContent = names.length ? `已选择：${names.join('、')}` : '';
-}
-
-// 模版配置
-const TEMPLATES = {
-    shenzhen: {
-        principal: '深圳uc',
-        proxy_file: '深圳腾讯委托代理文件.png',
-        module: '头条内容',
-        other_proofs: ['和晞执照.jpg', '深圳腾讯执照.jpg', '深圳腾讯委托代理文件.png']
-    },
-    beijing: {
-        principal: '北京uc',
-        proxy_file: '北京腾讯委托代理文件.png',
-        module: '头条内容',
-        other_proofs: ['和晞执照.jpg', '北京腾讯执照.png', '北京腾讯委托代理文件.png']
-    },
-    penguin: {
-        principal: '上海uc',
-        proxy_file: '腾讯企鹅委托代理文件.png',
-        module: 'UC网盘',
-        other_proofs: ['和晞执照.jpg', '腾讯企鹅执照.png', '腾讯企鹅委托代理文件.png']
-    }
-};
-
-async function fetchFileAsBlob(filename) {
-    const res = await fetch(`/static/imgs/${encodeURIComponent(filename)}`);
-    if (!res.ok) throw new Error(`无法加载文件: ${filename}`);
-    const blob = await res.blob();
-    return new File([blob], filename, { type: blob.type });
-}
-
-async function applyTemplate(key) {
-    const tpl = TEMPLATES[key];
-    if (!tpl) return;
-
-    // 切换身份为代理人
-    document.getElementById('id_agent').checked = true;
-    onIdentityChange();
-
-    // 被代理人
-    const principalEl = document.querySelector('select[name="principal"]');
-    principalEl.value = tpl.principal;
-
-    // 功能模块
-    document.querySelectorAll('input[name="module"]').forEach(r => {
-        r.checked = r.value === tpl.module;
-    });
-
-    // 委托代理文件
-    try {
-        const proxyFile = await fetchFileAsBlob(tpl.proxy_file);
-        const proxyDt = new DataTransfer();
-        proxyDt.items.add(proxyFile);
-        document.getElementById('proxy_file_input').files = proxyDt.files;
-        handleFileUpload(document.getElementById('proxy_file_input'),'proxyFileBox','proxyFilePlaceholder','proxyFilePreview','proxyFileNonImg','proxyFileInfo');
-    } catch(e) {
-        document.getElementById('proxyFileInfo').textContent = `文件加载失败：${tpl.proxy_file}`;
-    }
-
-    // 其他证明（多文件）
-    otherProofFiles = [];
-    document.getElementById('otherProofList').innerHTML = '';
-    try {
-        for (let i = 0; i < tpl.other_proofs.length; i++) {
-            const f = await fetchFileAsBlob(tpl.other_proofs[i]);
-            otherProofFiles.push(f);
-            addOtherProofItem(f, i);
-        }
-        syncOtherProofInput();
-    } catch(e) {
-        document.getElementById('otherProofInfo').textContent = '部分文件加载失败';
-    }
 }
 
 // Excel 拖拽
