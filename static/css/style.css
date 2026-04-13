@@ -134,25 +134,6 @@ body { background-color: #f8f9fa; font-size: 14px; }
     height: 100px;
     flex-shrink: 0;
 }
-.other-proof-item .remove-btn {
-    position: absolute;
-    top: -6px;
-    right: -6px;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: #d32f2f;
-    color: white;
-    border: none;
-    font-size: 11px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    z-index: 1;
-    line-height: 1;
-    padding: 0;
-}
 
 /* Excel 上传区 */
 .upload-drop-zone {
@@ -187,3 +168,13 @@ body { background-color: #f8f9fa; font-size: 14px; }
     font-size: 13px;
 }
 .back-btn:hover { color: #f3e5d8; }
+
+/* 锁定区域样式 */
+.locked-section {
+    pointer-events: none;
+    opacity: 0.7;
+}
+
+.locked-upload {
+    pointer-events: none !important;
+}

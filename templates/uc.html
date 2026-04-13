@@ -53,26 +53,26 @@
             <div class="section-title"><i class="fas fa-user"></i> 身份信息</div>
             <div class="mb-3">
                 <label class="form-label">您的身份</label>
-                <div class="d-flex gap-4">
+                <div class="d-flex gap-4" id="identityRadios">
                     <div class="form-check">
-                        <input class="form-check-input" type="radio" name="identity" id="id_rightsholder" value="权利人" onchange="onIdentityChange()">
+                        <input class="form-check-input" type="radio" name="identity" id="id_rightsholder" value="权利人" disabled onchange="onIdentityChange()">
                         <label class="form-check-label" for="id_rightsholder">权利人</label>
                     </div>
                     <div class="form-check">
-                        <input class="form-check-input" type="radio" name="identity" id="id_agent" value="代理人" checked onchange="onIdentityChange()">
+                        <input class="form-check-input" type="radio" name="identity" id="id_agent" value="代理人" checked disabled onchange="onIdentityChange()">
                         <label class="form-check-label" for="id_agent">代理人</label>
                     </div>
                 </div>
             </div>
             <div class="mb-3">
-                <select class="form-select" name="agent" id="identitySelect" required>
+                <select class="form-select" name="agent" id="identitySelect" required disabled>
                     <option value="北京和晞科技有限公司">北京和晞科技有限公司</option>
                 </select>
             </div>
-            <div id="principalWrap">
+            <div id="principalWrap" class="locked-section">
                 <div class="mb-3">
                     <label class="form-label">被代理人（权利人）信息</label>
-                    <select class="form-select" name="principal" required>
+                    <select class="form-select" name="principal" required disabled>
                         <option value="">请选择被代理人</option>
                         <option>北京uc</option>
                         <option>深圳uc</option>
@@ -81,7 +81,7 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">委托代理文件</label>
-                    <div class="file-upload-box" id="proxyFileBox" onclick="document.getElementById('proxy_file_input').click()">
+                    <div class="file-upload-box locked-upload" id="proxyFileBox">
                         <div class="file-upload-placeholder" id="proxyFilePlaceholder">
                             <i class="fas fa-plus fa-lg"></i>
                             <div class="mt-1" style="font-size:12px">点击上传</div>
@@ -89,135 +89,135 @@
                         <img id="proxyFilePreview" class="file-upload-preview" style="display:none">
                         <div id="proxyFileNonImg" class="file-upload-nonimg" style="display:none"></div>
                     </div>
-                    <input type="file" id="proxy_file_input" name="proxy_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" style="display:none" onchange="handleFileUpload(this,'proxyFileBox','proxyFilePlaceholder','proxyFilePreview','proxyFileNonImg','proxyFileInfo')">
+                    <input type="file" id="proxy_file_input" name="proxy_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" style="display:none" disabled>
                     <div class="file-info" id="proxyFileInfo"></div>
                 </div>
             </div>
         </div>
 
         <!-- 投诉类型 -->
-        <div class="form-card">
+        <div class="form-card locked-section">
             <div class="section-title"><i class="fas fa-tag"></i> 投诉类型</div>
             <div class="mb-3">
                 <div class="d-flex gap-4">
                     <div class="form-check">
-                        <input class="form-check-input" type="radio" name="complaint_category" id="cat_ip" value="知识产权" checked>
+                        <input class="form-check-input" type="radio" name="complaint_category" id="cat_ip" value="知识产权" checked disabled>
                         <label class="form-check-label" for="cat_ip">知识产权</label>
                     </div>
                     <div class="form-check">
-                        <input class="form-check-input" type="radio" name="complaint_category" id="cat_personal" value="人身权">
+                        <input class="form-check-input" type="radio" name="complaint_category" id="cat_personal" value="人身权" disabled>
                         <label class="form-check-label" for="cat_personal">人身权</label>
                     </div>
                 </div>
             </div>
             <div class="d-flex flex-wrap gap-3">
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="complaint_type" id="type_copyright" value="著作权（含视频、图文、图集等）" checked>
+                    <input class="form-check-input" type="radio" name="complaint_type" id="type_copyright" value="著作权（含视频、图文、图集等）" checked disabled>
                     <label class="form-check-label" for="type_copyright">著作权（含视频、图文、图集等）</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="complaint_type" id="type_trademark" value="商标">
+                    <input class="form-check-input" type="radio" name="complaint_type" id="type_trademark" value="商标" disabled>
                     <label class="form-check-label" for="type_trademark">商标</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="complaint_type" id="type_patent" value="专利">
+                    <input class="form-check-input" type="radio" name="complaint_type" id="type_patent" value="专利" disabled>
                     <label class="form-check-label" for="type_patent">专利</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="complaint_type" id="type_other_ip" value="其他知识产权">
+                    <input class="form-check-input" type="radio" name="complaint_type" id="type_other_ip" value="其他知识产权" disabled>
                     <label class="form-check-label" for="type_other_ip">其他知识产权</label>
                 </div>
             </div>
         </div>
 
         <!-- 功能模块 -->
-        <div class="form-card">
+        <div class="form-card locked-section">
             <div class="section-title"><i class="fas fa-th-large"></i> 功能模块</div>
             <div class="d-flex flex-wrap gap-4">
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="module" id="mod_pan" value="头条内容" checked>
+                    <input class="form-check-input" type="radio" name="module" id="mod_pan" value="头条内容" checked disabled>
                     <label class="form-check-label" for="mod_pan">头条内容</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="module" id="mod_img" value="大鱼号账号">
+                    <input class="form-check-input" type="radio" name="module" id="mod_img" value="大鱼号账号" disabled>
                     <label class="form-check-label" for="mod_img">大鱼号账号</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="module" id="mod_news" value="UC网盘">
+                    <input class="form-check-input" type="radio" name="module" id="mod_news" value="UC网盘" disabled>
                     <label class="form-check-label" for="mod_news">UC网盘</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="module" id="mod_search" value="神马搜索">
+                    <input class="form-check-input" type="radio" name="module" id="mod_search" value="神马搜索" disabled>
                     <label class="form-check-label" for="mod_search">神马搜索</label>
                 </div>
             </div>
         </div>
 
         <!-- 内容类型 -->
-        <div class="form-card">
+        <div class="form-card locked-section">
             <div class="section-title"><i class="fas fa-film"></i> 内容类型</div>
             <div class="d-flex flex-wrap gap-4">
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="content_type" id="ct_drama" value="影视剧集" checked>
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_drama" value="影视剧集" checked disabled>
                     <label class="form-check-label" for="ct_drama">影视剧集</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="content_type" id="ct_video" value="其他视频">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_video" value="其他视频" disabled>
                     <label class="form-check-label" for="ct_video">其他视频</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="content_type" id="ct_novel" value="小说">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_novel" value="小说" disabled>
                     <label class="form-check-label" for="ct_novel">小说</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="content_type" id="ct_comic" value="漫画">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_comic" value="漫画" disabled>
                     <label class="form-check-label" for="ct_comic">漫画</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="content_type" id="ct_image" value="图片">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_image" value="图片" disabled>
                     <label class="form-check-label" for="ct_image">图片</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="content_type" id="ct_article" value="文章">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_article" value="文章" disabled>
                     <label class="form-check-label" for="ct_article">文章</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="content_type" id="ct_software" value="软件/游戏">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_software" value="软件/游戏" disabled>
                     <label class="form-check-label" for="ct_software">软件/游戏</label>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="radio" name="content_type" id="ct_other" value="其他">
+                    <input class="form-check-input" type="radio" name="content_type" id="ct_other" value="其他" disabled>
                     <label class="form-check-label" for="ct_other">其他</label>
                 </div>
             </div>
         </div>
 
         <!-- 投诉内容 -->
-        <div class="form-card">
+        <div class="form-card locked-section">
             <div class="section-title"><i class="fas fa-file-import"></i> 投诉内容</div>
             <div class="mb-3">
                 <label class="form-label">批量导入（Excel，系统将按2行/批自动提交）</label>
-                <div class="upload-drop-zone" id="excelDropZone" onclick="document.getElementById('excelFile').click()">
+                <div class="upload-drop-zone locked-upload" id="excelDropZone">
                     <i class="fas fa-file-excel fa-2x mb-2" style="color:#bcaaa4"></i>
                     <div>点击或拖拽上传 Excel 文件</div>
                     <div style="font-size:11px;color:#bbb">支持 .xlsx .xls</div>
                 </div>
-                <input type="file" id="excelFile" name="excel_file" accept=".xlsx,.xls" style="display:none">
+                <input type="file" id="excelFile" name="excel_file" accept=".xlsx,.xls" style="display:none" disabled>
                 <div id="excelInfo" class="file-info"></div>
                 <div id="excelError" class="file-error"></div>
             </div>
             <div class="mb-3">
                 <label class="form-label">投诉内容描述</label>
-                <textarea class="form-control" name="description" rows="4" placeholder="请填写投诉内容描述..."></textarea>
+                <textarea class="form-control" name="description" rows="4" placeholder="请填写投诉内容描述..." disabled></textarea>
             </div>
         </div>
 
         <!-- 证明材料 -->
-        <div class="form-card">
+        <div class="form-card locked-section">
             <div class="section-title"><i class="fas fa-paperclip"></i> 证明材料</div>
             <div class="mb-3">
                 <label class="form-label">证明文件</label>
-                <div class="file-upload-box" id="proofFileBox" onclick="document.getElementById('proof_file_input').click()">
+                <div class="file-upload-box locked-upload" id="proofFileBox">
                     <div class="file-upload-placeholder" id="proofFilePlaceholder">
                         <i class="fas fa-plus fa-lg"></i>
                         <div class="mt-1" style="font-size:12px">点击上传</div>
@@ -225,20 +225,20 @@
                     <img id="proofFilePreview" class="file-upload-preview" style="display:none">
                     <div id="proofFileNonImg" class="file-upload-nonimg" style="display:none"></div>
                 </div>
-                <input type="file" id="proof_file_input" name="proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" style="display:none" onchange="handleFileUpload(this,'proofFileBox','proofFilePlaceholder','proofFilePreview','proofFileNonImg','proofFileInfo')">
+                <input type="file" id="proof_file_input" name="proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" style="display:none" disabled>
                 <div class="file-info" id="proofFileInfo"></div>
                 <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf</div>
             </div>
             <div class="mb-3">
                 <label class="form-label">其他证明</label>
                 <div class="d-flex flex-wrap gap-2" id="otherProofList"></div>
-                <div class="file-upload-box file-upload-box-sm mt-2" id="otherProofAddBtn" onclick="document.getElementById('other_proof_file_input').click()">
+                <div class="file-upload-box file-upload-box-sm mt-2 locked-upload" id="otherProofAddBtn">
                     <div class="file-upload-placeholder">
                         <i class="fas fa-plus fa-lg"></i>
                         <div class="mt-1" style="font-size:12px">点击上传</div>
                     </div>
                 </div>
-                <input type="file" id="other_proof_file_input" name="other_proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" multiple style="display:none" onchange="handleMultiFileUpload(this)">
+                <input type="file" id="other_proof_file_input" name="other_proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" multiple style="display:none" disabled>
                 <div class="file-info" id="otherProofInfo"></div>
                 <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf</div>
             </div>
@@ -281,6 +281,54 @@ function onIdentityChange() {
             }
         }
     }
+}
+
+// 启用所有锁定字段（模板应用前）
+function enableLockedFields() {
+    // 启用所有disabled的表单元素
+    document.querySelectorAll('input, select, textarea').forEach(el => {
+        el.disabled = false;
+        el.style.pointerEvents = 'auto';
+        el.style.opacity = '1';
+    });
+    // 移除上传区域的锁定样式
+    document.querySelectorAll('.locked-upload').forEach(el => {
+        el.classList.remove('locked-upload');
+        el.style.cursor = 'pointer';
+        el.style.opacity = '1';
+    });
+    // 移除区域锁定样式
+    document.querySelectorAll('.locked-section').forEach(el => {
+        el.classList.remove('locked-section');
+    });
+}
+
+// 锁定除账号信息外的所有字段（模板应用后）
+function lockAllFieldsExceptAccount() {
+    // 锁定身份信息区域
+    document.querySelectorAll('input[name="identity"]').forEach(el => el.disabled = true);
+    document.getElementById('identitySelect').disabled = true;
+    document.getElementById('principalWrap').classList.add('locked-section');
+    document.getElementById('principalWrap').querySelectorAll('select').forEach(el => el.disabled = true);
+
+    // 锁定上传框 - 使用CSS方式锁定，不使用disabled以便表单提交
+    document.querySelectorAll('.file-upload-box, .upload-drop-zone').forEach(el => {
+        el.classList.add('locked-upload');
+        el.style.cursor = 'not-allowed';
+        el.style.opacity = '0.6';
+    });
+
+    // 锁定投诉类型、功能模块、内容类型区域
+    document.querySelectorAll('input[name="complaint_category"], input[name="complaint_type"]').forEach(el => el.disabled = true);
+    document.querySelectorAll('input[name="module"]').forEach(el => el.disabled = true);
+    document.querySelectorAll('input[name="content_type"]').forEach(el => el.disabled = true);
+    document.querySelectorAll('textarea[name="description"]').forEach(el => el.disabled = true);
+
+    // 文件上传input保持启用状态以便提交，但通过CSS pointer-events防止点击
+    document.querySelectorAll('#excelFile, #proof_file_input, #other_proof_file_input, #proxy_file_input').forEach(el => {
+        el.style.pointerEvents = 'none';
+        el.style.opacity = '0.5';
+    });
 }
 
 // 单文件上传预览
@@ -331,11 +379,6 @@ function addOtherProofItem(file, index) {
     const item = document.createElement('div');
     item.className = 'file-upload-box file-upload-box-sm other-proof-item';
     item.id = `otherItem_${index}`;
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'remove-btn';
-    removeBtn.innerHTML = '&times;';
-    removeBtn.onclick = e => { e.stopPropagation(); removeOtherProof(index); };
-    item.appendChild(removeBtn);
     const imgExts = ['png','jpg','jpeg','bmp'];
     const ext = file.name.split('.').pop().toLowerCase();
     if (imgExts.includes(ext)) {
@@ -345,7 +388,6 @@ function addOtherProofItem(file, index) {
         reader.onload = e => { img.src = e.target.result; };
         reader.readAsDataURL(file);
         item.appendChild(img);
-        item.onclick = () => document.getElementById('other_proof_file_input').click();
     } else {
         const label = document.createElement('div');
         label.className = 'file-upload-nonimg';
@@ -356,13 +398,6 @@ function addOtherProofItem(file, index) {
         item.appendChild(label);
     }
     list.appendChild(item);
-}
-
-function removeOtherProof(index) {
-    otherProofFiles[index] = null;
-    const el = document.getElementById(`otherItem_${index}`);
-    if (el) el.remove();
-    syncOtherProofInput();
 }
 
 function syncOtherProofInput() {
@@ -766,7 +801,11 @@ function handleCustomTemplateUpload(input) {
     .then(res => {
         if (res.success) {
             currentTemplateId = res.template_id;
+            // 应用模板前先启用所有锁定字段
+            enableLockedFields();
             applyCustomTemplateData(res);
+            // 应用模板后锁定所有非账号信息字段
+            lockAllFieldsExceptAccount();
             alert('自定义模版加载成功');
         } else {
             alert('加载失败：' + res.error);
