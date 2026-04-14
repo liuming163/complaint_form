@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+<!--    这是自定义投诉上传后，自动对表单禁止点击的代码-->
     <meta charset="UTF-8">
     <title>uc投诉表单</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="{{ url_for('static', filename='js/xlsx.full.min.js') }}"></script>
 </head>
 <body>
 <header class="main-header shadow-sm">
@@ -21,13 +23,31 @@
     <div class="form-card mb-4">
         <div class="section-title"><i class="fas fa-clone"></i> 投诉模版</div>
         <div class="d-flex gap-3">
-            <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('shenzhen')">深圳uc投诉模版</button>
-            <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('beijing')">北京uc投诉模版</button>
-            <button type="button" class="btn btn-outline-secondary" onclick="applyTemplate('penguin')">上海uc投诉模版</button>
+            <button type="button" class="btn btn-outline-primary" onclick="downloadCustomTemplate()">
+                <i class="fas fa-download"></i> 下载自定义模版
+            </button>
+            <input type="file" id="customTemplateZip" accept=".zip" style="display:none" onchange="handleCustomTemplateUpload(this)">
+            <button type="button" class="btn btn-outline-success" onclick="document.getElementById('customTemplateZip').click()">
+                <i class="fas fa-upload"></i> 上传自定义模版
+            </button>
         </div>
     </div>
 
     <form id="ucForm" enctype="multipart/form-data">
+
+        <!-- 账号信息 -->
+        <div class="form-card">
+            <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
+            <div class="mb-3">
+                <label class="form-label">采集账号</label>
+                <input type="text" class="form-control" name="collect_account" placeholder="请输入采集账号" value="" required>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Cookie</label>
+                <textarea class="form-control" name="cookie" rows="3" placeholder="请输入Cookie信息" required></textarea>
+                <div class="form-text">请粘贴完整的Cookie信息，用于身份验证</div>
+            </div>
+        </div>
 
         <!-- 身份信息 -->
         <div class="form-card">
@@ -70,7 +90,7 @@
                         <img id="proxyFilePreview" class="file-upload-preview" style="display:none">
                         <div id="proxyFileNonImg" class="file-upload-nonimg" style="display:none"></div>
                     </div>
-                    <input type="file" id="proxy_file_input" name="proxy_file" accept=".png,.jpg,.jpeg,.bmp,.pdf,.xlsx" style="display:none" onchange="handleFileUpload(this,'proxyFileBox','proxyFilePlaceholder','proxyFilePreview','proxyFileNonImg','proxyFileInfo')">
+                    <input type="file" id="proxy_file_input" name="proxy_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" style="display:none" onchange="handleFileUpload(this,'proxyFileBox','proxyFilePlaceholder','proxyFilePreview','proxyFileNonImg','proxyFileInfo')">
                     <div class="file-info" id="proxyFileInfo"></div>
                 </div>
             </div>
@@ -177,7 +197,7 @@
         <div class="form-card">
             <div class="section-title"><i class="fas fa-file-import"></i> 投诉内容</div>
             <div class="mb-3">
-                <label class="form-label">批量导入（Excel，最多200行）</label>
+                <label class="form-label">批量导入（Excel，系统将按2行/批自动提交）</label>
                 <div class="upload-drop-zone" id="excelDropZone" onclick="document.getElementById('excelFile').click()">
                     <i class="fas fa-file-excel fa-2x mb-2" style="color:#bcaaa4"></i>
                     <div>点击或拖拽上传 Excel 文件</div>
@@ -197,7 +217,7 @@
         <div class="form-card">
             <div class="section-title"><i class="fas fa-paperclip"></i> 证明材料</div>
             <div class="mb-3">
-                <label class="form-label">证明材料</label>
+                <label class="form-label">证明文件</label>
                 <div class="file-upload-box" id="proofFileBox" onclick="document.getElementById('proof_file_input').click()">
                     <div class="file-upload-placeholder" id="proofFilePlaceholder">
                         <i class="fas fa-plus fa-lg"></i>
@@ -206,9 +226,9 @@
                     <img id="proofFilePreview" class="file-upload-preview" style="display:none">
                     <div id="proofFileNonImg" class="file-upload-nonimg" style="display:none"></div>
                 </div>
-                <input type="file" id="proof_file_input" name="proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf,.xlsx" style="display:none" onchange="handleFileUpload(this,'proofFileBox','proofFilePlaceholder','proofFilePreview','proofFileNonImg','proofFileInfo')">
+                <input type="file" id="proof_file_input" name="proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" style="display:none" onchange="handleFileUpload(this,'proofFileBox','proofFilePlaceholder','proofFilePreview','proofFileNonImg','proofFileInfo')">
                 <div class="file-info" id="proofFileInfo"></div>
-                <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf .xlsx</div>
+                <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf</div>
             </div>
             <div class="mb-3">
                 <label class="form-label">其他证明</label>
@@ -219,14 +239,14 @@
                         <div class="mt-1" style="font-size:12px">点击上传</div>
                     </div>
                 </div>
-                <input type="file" id="other_proof_file_input" name="other_proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf,.xlsx" multiple style="display:none" onchange="handleMultiFileUpload(this)">
+                <input type="file" id="other_proof_file_input" name="other_proof_file" accept=".png,.jpg,.jpeg,.bmp,.pdf" multiple style="display:none" onchange="handleMultiFileUpload(this)">
                 <div class="file-info" id="otherProofInfo"></div>
-                <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf .xlsx</div>
+                <div class="form-text">支持 .png .jpg .jpeg .bmp .pdf</div>
             </div>
         </div>
 
         <div class="text-center">
-            <button type="submit" class="btn btn-brown px-5">提交投诉</button>
+            <button type="submit" id="submitBtn" class="btn btn-brown px-5">提交投诉</button>
         </div>
 
     </form>
@@ -238,12 +258,30 @@ function onIdentityChange() {
     const isAgent = document.getElementById('id_agent').checked;
     const select = document.getElementById('identitySelect');
     const principalWrap = document.getElementById('principalWrap');
+    const principal = document.querySelector('select[name="principal"]');
+    const proxyFileInfo = document.getElementById('proxyFileInfo');
 
     select.innerHTML = isAgent
         ? '<option value="北京和晞科技有限公司">北京和晞科技有限公司</option>'
         : '<option value="刘明">刘明</option>';
 
     principalWrap.style.display = isAgent ? 'block' : 'none';
+    if (principal) {
+        principal.required = isAgent;
+    }
+
+    if (!isAgent) {
+        if (principal) {
+            principal.classList.remove('is-invalid');
+            const feedback = principal.parentNode.querySelector('.invalid-feedback');
+            if (feedback) feedback.remove();
+        }
+        if (proxyFileInfo) {
+            if (proxyFileInfo.textContent === '委托代理文件不能为空') {
+                proxyFileInfo.textContent = '';
+            }
+        }
+    }
 }
 
 // 单文件上传预览
@@ -336,78 +374,6 @@ function syncOtherProofInput() {
     document.getElementById('otherProofInfo').textContent = names.length ? `已选择：${names.join('、')}` : '';
 }
 
-// 模版配置
-const TEMPLATES = {
-    shenzhen: {
-        principal: '深圳uc',
-        proxy_file: '深圳腾讯委托代理文件.png',
-        module: '头条内容',
-        other_proofs: ['和晞执照.jpg', '深圳腾讯执照.jpg', '深圳腾讯委托代理文件.png']
-    },
-    beijing: {
-        principal: '北京uc',
-        proxy_file: '北京腾讯委托代理文件.png',
-        module: '头条内容',
-        other_proofs: ['和晞执照.jpg', '北京腾讯执照.png', '北京腾讯委托代理文件.png']
-    },
-    penguin: {
-        principal: '上海uc',
-        proxy_file: '腾讯企鹅委托代理文件.png',
-        module: 'UC网盘',
-        other_proofs: ['和晞执照.jpg', '腾讯企鹅执照.png', '腾讯企鹅委托代理文件.png']
-    }
-};
-
-async function fetchFileAsBlob(filename) {
-    const res = await fetch(`/static/imgs/${encodeURIComponent(filename)}`);
-    if (!res.ok) throw new Error(`无法加载文件: ${filename}`);
-    const blob = await res.blob();
-    return new File([blob], filename, { type: blob.type });
-}
-
-async function applyTemplate(key) {
-    const tpl = TEMPLATES[key];
-    if (!tpl) return;
-
-    // 切换身份为代理人
-    document.getElementById('id_agent').checked = true;
-    onIdentityChange();
-
-    // 被代理人
-    const principalEl = document.querySelector('select[name="principal"]');
-    principalEl.value = tpl.principal;
-
-    // 功能模块
-    document.querySelectorAll('input[name="module"]').forEach(r => {
-        r.checked = r.value === tpl.module;
-    });
-
-    // 委托代理文件
-    try {
-        const proxyFile = await fetchFileAsBlob(tpl.proxy_file);
-        const proxyDt = new DataTransfer();
-        proxyDt.items.add(proxyFile);
-        document.getElementById('proxy_file_input').files = proxyDt.files;
-        handleFileUpload(document.getElementById('proxy_file_input'),'proxyFileBox','proxyFilePlaceholder','proxyFilePreview','proxyFileNonImg','proxyFileInfo');
-    } catch(e) {
-        document.getElementById('proxyFileInfo').textContent = `文件加载失败：${tpl.proxy_file}`;
-    }
-
-    // 其他证明（多文件）
-    otherProofFiles = [];
-    document.getElementById('otherProofList').innerHTML = '';
-    try {
-        for (let i = 0; i < tpl.other_proofs.length; i++) {
-            const f = await fetchFileAsBlob(tpl.other_proofs[i]);
-            otherProofFiles.push(f);
-            addOtherProofItem(f, i);
-        }
-        syncOtherProofInput();
-    } catch(e) {
-        document.getElementById('otherProofInfo').textContent = '部分文件加载失败';
-    }
-}
-
 // Excel 拖拽
 const zone = document.getElementById('excelDropZone');
 zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
@@ -435,15 +401,14 @@ function handleExcelFile(file) {
         return;
     }
 
-    // 用服务端校验行数，这里先显示文件名
     const formData = new FormData();
     formData.append('file', file);
     fetch('/api/check_excel', { method: 'POST', body: formData })
         .then(r => r.json())
         .then(res => {
             if (res.success) {
-                info.textContent = `已选择：${file.name}（共 ${res.rows} 行）`;
-                // 把文件塞回 input
+                const batchCount = res.batch_count || 1;
+                info.textContent = `已选择：${file.name}（共 ${res.rows} 行，将分 ${batchCount} 批提交）`;
                 const dt = new DataTransfer();
                 dt.items.add(file);
                 document.getElementById('excelFile').files = dt.files;
@@ -470,6 +435,13 @@ function printFormData() {
             console.log(`${key}: ${value}`);
         }
     }
+
+    // 打印账号信息
+    const collectAccount = document.querySelector('input[name="collect_account"]')?.value;
+    console.log('采集账号:', collectAccount || '未填写');
+
+    const cookie = document.querySelector('textarea[name="cookie"]')?.value;
+    console.log('Cookie:', cookie || '未填写');
 
     // 打印身份信息
     const identity = document.querySelector('input[name="identity"]:checked');
@@ -507,7 +479,7 @@ function printFormData() {
     console.log('委托代理文件file:', proxyFile ? proxyFile : '未上传');
 
     const proofFile = document.getElementById('proof_file_input').files[0];
-    console.log('证明材料:', proofFile ? proofFile.name : '未上传');
+    console.log('证明文件:', proofFile ? proofFile.name : '未上传');
 
     const otherProofs = otherProofFiles.filter(Boolean);
     console.log('其他证明文件:', otherProofs.length > 0 ? otherProofs.map(f => f.name).join(', ') : '未上传');
@@ -522,22 +494,468 @@ function printFormData() {
     alert('表单数据已打印到控制台 (F12 打开开发者工具查看)');
 }
 
+const cookieTextarea = document.querySelector('textarea[name="cookie"]');
+if (cookieTextarea) {
+    cookieTextarea.addEventListener('blur', () => {
+        cookieTextarea.value = cookieTextarea.value.trim();
+    });
+}
+
 // 修改表单提交事件
-document.getElementById('ucForm').addEventListener('submit', function(e) {
-    e.preventDefault(); // 阻止默认提交
+document.getElementById('ucForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
 
-    printFormData(); // 打印表单数据
+    const accountValidation = validateAccountInfo();
+    if (!accountValidation.isValid) {
+        alert('请填写以下必填项：\n' + accountValidation.errorMessage);
+        return;
+    }
 
-    // 这里可以添加实际的提交逻辑
-    // 例如：使用 fetch 提交表单数据到服务器
-    // const formData = new FormData(this);
-    // fetch('/api/submit', { method: 'POST', body: formData })
-    //     .then(response => response.json())
-    //     .then(data => console.log('提交成功:', data))
-    //     .catch(error => console.error('提交失败:', error));
+    // 如果有自定义模板的Excel数据，先创建Excel文件
+    if (window.customTemplateExcelRows && window.customTemplateExcelRows.length > 0) {
+        const excelData = window.customTemplateExcelRows.map(row => [
+            row['侵权链接'],
+            row['对应原创链接/对应访问码'],
+            row['作品名称']
+        ]);
 
-    // 如果不需要阻止提交，可以注释掉 e.preventDefault()，并调用 this.submit()
+        // 添加表头
+        excelData.unshift(['侵权链接', '对应原创链接/对应访问码', '作品名称']);
+
+        // 创建工作簿和工作表
+        const ws = XLSX.utils.aoa_to_sheet(excelData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '批量导入');
+
+        // 转换为ArrayBuffer
+        const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+        // 创建File对象并设置到excelFile输入框
+        const excelFile = new File([blob], 'custom_template_batch.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const dt = new DataTransfer();
+        dt.items.add(excelFile);
+        document.getElementById('excelFile').files = dt.files;
+    }
+
+    const formData = new FormData(this);
+
+    // 如果表单已被禁用，手动添加禁用的字段值（disabled字段不会被FormData包含）
+    if (document.getElementById('identitySelect').disabled) {
+        // 身份信息
+        const identity = document.querySelector('input[name="identity"]:checked');
+        if (identity) formData.set('identity', identity.value);
+        formData.set('agent', document.getElementById('identitySelect').value);
+        const principal = document.querySelector('select[name="principal"]');
+        if (principal) formData.set('principal', principal.value);
+
+        // 投诉类型
+        const complaintCategory = document.querySelector('input[name="complaint_category"]:checked');
+        if (complaintCategory) formData.set('complaint_category', complaintCategory.value);
+        const complaintType = document.querySelector('input[name="complaint_type"]:checked');
+        if (complaintType) formData.set('complaint_type', complaintType.value);
+
+        // 功能模块
+        const module = document.querySelector('input[name="module"]:checked');
+        if (module) formData.set('module', module.value);
+
+        // 内容类型
+        const contentType = document.querySelector('input[name="content_type"]:checked');
+        if (contentType) formData.set('content_type', contentType.value);
+
+        // 投诉内容描述
+        const description = document.querySelector('textarea[name="description"]');
+        if (description) formData.set('description', description.value);
+    }
+    const cookieValue = formData.get('cookie');
+    if (typeof cookieValue === 'string') {
+        formData.set('cookie', cookieValue.trim());
+    }
+
+    // 验证Cookie是否有效
+    const cookieVerifyBtn = document.getElementById('submitBtn');
+    const originalBtnText = cookieVerifyBtn ? cookieVerifyBtn.textContent : '提交投诉';
+    if (cookieVerifyBtn) {
+        cookieVerifyBtn.disabled = true;
+        cookieVerifyBtn.textContent = '验证Cookie...';
+    }
+
+    try {
+        const verifyResp = await fetch('/api/uc/verify_cookie', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cookie: cookieValue})
+        });
+        const verifyResult = await verifyResp.json();
+
+        if (!verifyResult.success) {
+            alert('Cookie验证失败：' + verifyResult.error + '\n请重新填写Cookie后再次提交');
+            if (cookieVerifyBtn) {
+                cookieVerifyBtn.disabled = false;
+                cookieVerifyBtn.textContent = originalBtnText;
+            }
+            return;
+        }
+
+        if (cookieVerifyBtn) {
+            cookieVerifyBtn.textContent = '提交中...';
+        }
+
+        const response = await fetch('/api/uc/submit', {
+            method: 'POST',
+            body: formData
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+            throw new Error(result.error || '提交失败');
+        }
+
+        alert(`提交成功\n任务编号：${result.task_id}\nExcel行数：${result.excel_rows}\n批次数：${result.batch_count}`);
+        console.log('提交成功:', result);
+
+        // 清空自定义模板数据
+        window.customTemplateExcelRows = null;
+    } catch (error) {
+        alert(error.message || '提交失败');
+        console.error('提交失败:', error);
+    } finally {
+        if (cookieVerifyBtn) {
+            cookieVerifyBtn.disabled = false;
+            cookieVerifyBtn.textContent = originalBtnText;
+        }
+    }
 });
+
+// 校验账号信息
+function validateAccountInfo() {
+    const collectAccount = document.querySelector('input[name="collect_account"]');
+    const cookie = document.querySelector('textarea[name="cookie"]');
+    const principal = document.querySelector('select[name="principal"]');
+    const description = document.querySelector('textarea[name="description"]');
+    const proxyFile = document.getElementById('proxy_file_input');
+    const proofFile = document.getElementById('proof_file_input');
+    const excelFile = document.getElementById('excelFile');
+    const identity = document.querySelector('input[name="identity"]:checked')?.value;
+    const isAgent = identity === '代理人';
+    let isValid = true;
+    let errorMessage = '';
+
+    [collectAccount, cookie, principal, description].forEach(field => {
+        if (field) {
+            field.classList.remove('is-invalid');
+            const feedback = field.parentNode.querySelector('.invalid-feedback');
+            if (feedback) feedback.remove();
+        }
+    });
+
+    const proxyFileInfo = document.getElementById('proxyFileInfo');
+    const proofFileInfo = document.getElementById('proofFileInfo');
+    const excelError = document.getElementById('excelError');
+    if (excelError) {
+        excelError.textContent = '';
+    }
+
+    const selectedIdentity = document.querySelector('input[name="identity"]:checked');
+    if (!selectedIdentity) {
+        isValid = false;
+        errorMessage += '请选择您的身份\n';
+    }
+
+    const complaintCategory = document.querySelector('input[name="complaint_category"]:checked');
+    if (!complaintCategory) {
+        isValid = false;
+        errorMessage += '请选择投诉大类\n';
+    }
+
+    const complaintType = document.querySelector('input[name="complaint_type"]:checked');
+    if (!complaintType) {
+        isValid = false;
+        errorMessage += '请选择投诉类型\n';
+    }
+
+    const module = document.querySelector('input[name="module"]:checked');
+    if (!module) {
+        isValid = false;
+        errorMessage += '请选择功能模块\n';
+    }
+
+    const contentType = document.querySelector('input[name="content_type"]:checked');
+    if (!contentType) {
+        isValid = false;
+        errorMessage += '请选择内容类型\n';
+    }
+
+    if (!collectAccount || !collectAccount.value.trim()) {
+        isValid = false;
+        errorMessage += '请填写采集账号\n';
+        if (collectAccount) {
+            collectAccount.classList.add('is-invalid');
+            if (!collectAccount.nextElementSibling || !collectAccount.nextElementSibling.classList.contains('invalid-feedback')) {
+                const feedback = document.createElement('div');
+                feedback.className = 'invalid-feedback';
+                feedback.textContent = '采集账号不能为空';
+                collectAccount.parentNode.appendChild(feedback);
+            }
+        }
+    }
+
+    if (!cookie || !cookie.value.trim()) {
+        isValid = false;
+        errorMessage += '请填写Cookie信息\n';
+        if (cookie) {
+            cookie.classList.add('is-invalid');
+            if (!cookie.nextElementSibling || !cookie.nextElementSibling.classList.contains('invalid-feedback')) {
+                const feedback = document.createElement('div');
+                feedback.className = 'invalid-feedback';
+                feedback.textContent = 'Cookie信息不能为空';
+                cookie.parentNode.appendChild(feedback);
+            }
+        }
+    }
+
+    if (!description || !description.value.trim()) {
+        isValid = false;
+        errorMessage += '请填写投诉内容描述\n';
+        if (description) {
+            description.classList.add('is-invalid');
+            if (!description.nextElementSibling || !description.nextElementSibling.classList.contains('invalid-feedback')) {
+                const feedback = document.createElement('div');
+                feedback.className = 'invalid-feedback';
+                feedback.textContent = '投诉内容描述不能为空';
+                description.parentNode.appendChild(feedback);
+            }
+        }
+    }
+
+    if (isAgent && (!principal || !principal.value.trim())) {
+        isValid = false;
+        errorMessage += '请选择被代理人（权利人）信息\n';
+        if (principal) {
+            principal.classList.add('is-invalid');
+            if (!principal.nextElementSibling || !principal.nextElementSibling.classList.contains('invalid-feedback')) {
+                const feedback = document.createElement('div');
+                feedback.className = 'invalid-feedback';
+                feedback.textContent = '被代理人不能为空';
+                principal.parentNode.appendChild(feedback);
+            }
+        }
+    }
+
+    if (isAgent && (!proxyFile || !proxyFile.files || !proxyFile.files.length)) {
+        isValid = false;
+        errorMessage += '请上传委托代理文件\n';
+        if (proxyFileInfo) {
+            proxyFileInfo.textContent = '委托代理文件不能为空';
+        }
+    }
+
+    if (!proofFile || !proofFile.files || !proofFile.files.length) {
+        isValid = false;
+        errorMessage += '请上传证明文件\n';
+        if (proofFileInfo) {
+            proofFileInfo.textContent = '证明文件不能为空';
+        }
+    }
+
+    if (!excelFile || (!excelFile.files || !excelFile.files.length) && (!window.customTemplateExcelRows || window.customTemplateExcelRows.length === 0)) {
+        isValid = false;
+        errorMessage += '请上传Excel批量导入文件\n';
+        if (excelError) {
+            excelError.textContent = 'Excel批量导入不能为空';
+        }
+    }
+
+    return {
+        isValid: isValid,
+        errorMessage: errorMessage
+    };
+}
+
+// 下载自定义模版
+function downloadCustomTemplate() {
+    window.location.href = '/api/download_custom_template';
+}
+
+// 处理自定义模版上传
+let currentTemplateId = null;
+
+function handleCustomTemplateUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    fetch('/api/upload_custom_template', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            currentTemplateId = res.template_id;
+            // 等所有异步操作完成后再禁用字段
+            applyCustomTemplateData(res).then(() => {
+                setFormFieldsDisabled(true);
+            });
+            alert('自定义模版加载成功');
+        } else {
+            alert('加载失败：' + res.error);
+            input.value = '';
+        }
+    })
+    .catch(err => {
+        alert('上传失败：' + err.message);
+        input.value = '';
+    });
+}
+
+// 从自定义模板目录获取文件
+function fetchTemplateFileAsBlob(templateId, filename) {
+    return fetch(`/api/custom_template_file/${templateId}/${encodeURIComponent(filename)}`)
+        .then(res => {
+            if (!res.ok) throw new Error('文件加载失败');
+            return res.blob();
+        })
+        .then(blob => {
+            // 从文件名获取类型
+            const ext = filename.split('.').pop().toLowerCase();
+            let mimeType = 'application/octet-stream';
+            if (ext === 'jpg' || ext === 'jpeg') mimeType = 'image/jpeg';
+            else if (ext === 'png') mimeType = 'image/png';
+            else if (ext === 'pdf') mimeType = 'application/pdf';
+            else if (ext === 'bmp') mimeType = 'image/bmp';
+            return new File([blob], filename, { type: mimeType });
+        });
+}
+
+// 应用自定义模版数据到表单
+function applyCustomTemplateData(data) {
+    const formData = data.form_data;
+    const files = data.files;
+    const excelRows = data.excel_rows;
+    const templateId = data.template_id || currentTemplateId;
+
+    // 1. 填充身份信息
+    if (formData['您的身份']) {
+        const identityRadios = document.querySelectorAll('input[name="identity"]');
+        identityRadios.forEach(r => {
+            r.checked = r.value === formData['您的身份'];
+        });
+        onIdentityChange();
+    }
+
+    // 2. 填充代理人/权利人
+    if (formData['代理人/权利人']) {
+        document.getElementById('identitySelect').value = formData['代理人/权利人'];
+    }
+
+    // 3. 填充被代理人
+    if (formData['被代理人（权利人）信息']) {
+        const principalSelect = document.querySelector('select[name="principal"]');
+        if (principalSelect) {
+            principalSelect.value = formData['被代理人（权利人）信息'];
+        }
+    }
+
+    // 4. 填充投诉类型
+    if (formData['投诉大类']) {
+        const categoryRadios = document.querySelectorAll('input[name="complaint_category"]');
+        categoryRadios.forEach(r => {
+            r.checked = r.value === formData['投诉大类'];
+        });
+    }
+
+    if (formData['投诉类型']) {
+        const typeRadios = document.querySelectorAll('input[name="complaint_type"]');
+        typeRadios.forEach(r => {
+            r.checked = r.value === formData['投诉类型'];
+        });
+    }
+
+    // 5. 填充功能模块
+    if (formData['功能模块']) {
+        const moduleRadios = document.querySelectorAll('input[name="module"]');
+        moduleRadios.forEach(r => {
+            r.checked = r.value === formData['功能模块'];
+        });
+    }
+
+    // 6. 填充内容类型
+    if (formData['内容类型']) {
+        const contentTypeRadios = document.querySelectorAll('input[name="content_type"]');
+        contentTypeRadios.forEach(r => {
+            r.checked = r.value === formData['内容类型'];
+        });
+    }
+
+    // 7. 填充投诉内容描述
+    if (formData['投诉内容描述']) {
+        const descTextarea = document.querySelector('textarea[name="description"]');
+        if (descTextarea) {
+            descTextarea.value = formData['投诉内容描述'];
+        }
+    }
+
+    // 8. 处理证明材料文件（异步）
+    const asyncPromises = [];
+
+    if (files.proxy_file && templateId) {
+        asyncPromises.push(
+            fetchTemplateFileAsBlob(templateId, files.proxy_file).then(blob => {
+                const dt = new DataTransfer();
+                dt.items.add(blob);
+                document.getElementById('proxy_file_input').files = dt.files;
+                handleFileUpload(document.getElementById('proxy_file_input'), 'proxyFileBox', 'proxyFilePlaceholder', 'proxyFilePreview', 'proxyFileNonImg', 'proxyFileInfo');
+            }).catch(() => {
+                document.getElementById('proxyFileInfo').textContent = '文件加载失败：' + files.proxy_file;
+            })
+        );
+    }
+
+    if (files.proof_file && templateId) {
+        asyncPromises.push(
+            fetchTemplateFileAsBlob(templateId, files.proof_file).then(blob => {
+                const dt = new DataTransfer();
+                dt.items.add(blob);
+                document.getElementById('proof_file_input').files = dt.files;
+                handleFileUpload(document.getElementById('proof_file_input'), 'proofFileBox', 'proofFilePlaceholder', 'proofFilePreview', 'proofFileNonImg', 'proofFileInfo');
+            }).catch(() => {
+                document.getElementById('proofFileInfo').textContent = '文件加载失败：' + files.proof_file;
+            })
+        );
+    }
+
+    // 9. 处理其他证明文件
+    otherProofFiles = [];
+    document.getElementById('otherProofList').innerHTML = '';
+
+    if (files.other_proof_files && files.other_proof_files.length > 0 && templateId) {
+        files.other_proof_files.forEach((filename) => {
+            asyncPromises.push(
+                fetchTemplateFileAsBlob(templateId, filename).then(blob => {
+                    otherProofFiles.push(blob);
+                    addOtherProofItem(blob, otherProofFiles.length - 1);
+                }).catch(() => {
+                    console.error('文件加载失败：' + filename);
+                })
+            );
+        });
+    }
+
+    // 10. 处理批量导入Excel
+    if (excelRows && excelRows.length > 0) {
+        window.customTemplateExcelRows = excelRows;
+        const excelInfo = document.getElementById('excelInfo');
+        excelInfo.textContent = `已选择：自定义模板投诉内容（共 ${excelRows.length} 行）`;
+    }
+
+    // 返回 Promise，等所有异步操作完成后 resolve
+    return Promise.all(asyncPromises).then(() => {
+        syncOtherProofInput();
+    });
+}
 </script>
 </body>
 </html>
