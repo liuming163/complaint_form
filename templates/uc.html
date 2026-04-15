@@ -7,6 +7,8 @@
     <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="{{ url_for('static', filename='js/xlsx.full.min.js') }}"></script>
+    <script src="https://cdn.bootcdn.net/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.bootcdn.net/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
 </head>
 <body>
 <header class="main-header shadow-sm">
@@ -313,32 +315,135 @@ function lockAllFieldsExceptAccount() {
     });
 }
 
-// 单文件上传预览
+// 悬浮预览相关变量
+let hoverPreviewEl = null;
+let hoverTimeout = null;
+
+function showHoverPreview(file, boxEl, isPdf) {
+    clearTimeout(hoverTimeout);
+    hoverTimeout = setTimeout(() => {
+        const previewBox = document.getElementById('hoverPreviewBox');
+        previewBox.innerHTML = '';
+        previewBox.className = '';
+
+        // 优先复用 boxEl 里已渲染好的缩略图（blob URL）
+        const existingImg = boxEl.querySelector('img[src^="blob:"]');
+        if (existingImg) {
+            const img = document.createElement('img');
+            img.src = existingImg.src;
+            previewBox.appendChild(img);
+        } else if (isPdf) {
+            // PDF 且尚未渲染缩略图时显示占位
+            previewBox.className = 'pdf-preview';
+            previewBox.innerHTML = '<div class="pdf-placeholder"><i class="fas fa-file-pdf fa-3x mb-2"></div>';
+        } else {
+            // 非 PDF 文件显示文件名
+            previewBox.className = 'pdf-preview';
+            previewBox.innerHTML = `<div class="pdf-placeholder"><i class="fas fa-file fa-3x mb-2" style="color:#888"></i><div style="font-size:12px;color:#666;word-break:break-all;margin-top:8px">${escapeHtml(file.name)}</div></div>`;
+        }
+
+        // 定位浮层在鼠标附近
+        const rect = boxEl.getBoundingClientRect();
+        let left = rect.right + 10;
+        let top = rect.top;
+        if (left + 620 > window.innerWidth) left = rect.left - 620;
+        if (top + 620 > window.innerHeight) top = window.innerHeight - 620;
+        if (left < 0) left = rect.left;
+        if (top < 0) top = 10;
+
+        previewBox.style.left = left + 'px';
+        previewBox.style.top = top + 'px';
+        previewBox.style.display = 'block';
+    }, 200);
+}
+
+function hideHoverPreview() {
+    clearTimeout(hoverTimeout);
+    const previewBox = document.getElementById('hoverPreviewBox');
+    previewBox.style.display = 'none';
+    previewBox.innerHTML = '';
+}
+
+// 悬浮预览：boxEl -> { file, isPdf } 映射
+const hoverPreviewMap = new WeakMap();
+
+function setupHoverPreview(boxEl, file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    const isPdf = ext === 'pdf';
+    hoverPreviewMap.set(boxEl, { file, isPdf });
+
+    // 临时移除 locked-upload 以便事件能正常触发
+    boxEl.classList.remove('locked-upload');
+    boxEl.addEventListener('mouseenter', () => showHoverPreview(file, boxEl, isPdf));
+    boxEl.addEventListener('mouseleave', hideHoverPreview);
+}
+
+// 初始化事件委托
+function initHoverEventDelegation() {
+    document.addEventListener('mouseover', e => {
+        for (const [boxEl, info] of hoverPreviewMap) {
+            if (boxEl.contains(e.target)) {
+                showHoverPreview(info.file, boxEl, info.isPdf);
+                return;
+            }
+        }
+    });
+    document.addEventListener('mouseout', e => {
+        for (const [boxEl] of hoverPreviewMap) {
+            if (boxEl.contains(e.target) && !boxEl.contains(e.relatedTarget)) {
+                hideHoverPreview();
+                return;
+            }
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', initHoverEventDelegation);
+
+document.addEventListener('DOMContentLoaded', initHoverEventDelegation);
+
+
 function handleFileUpload(input, boxId, placeholderId, previewId, nonImgId, infoId) {
     const file = input.files[0];
     if (!file) return;
     const placeholder = document.getElementById(placeholderId);
     const preview = document.getElementById(previewId);
     const nonImg = document.getElementById(nonImgId);
+    const boxEl = document.getElementById(boxId);
     const info = document.getElementById(infoId);
     const imgExts = ['png','jpg','jpeg','bmp'];
     const ext = file.name.split('.').pop().toLowerCase();
-    if (imgExts.includes(ext)) {
+
+    // 清除旧的预览状态
+    preview.onload = null;
+    preview.style.display = 'none';
+    nonImg.style.display = 'none';
+    placeholder.style.display = 'none';
+
+    if (ext === 'pdf') {
+        // PDF 渲染缩略图
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            renderPdfThumbnail(e.target.result, blob => {
+                const url = URL.createObjectURL(blob);
+                preview.src = url;
+                preview.style.display = 'block';
+                setupHoverPreview(boxEl, file);
+            });
+        };
+        reader.readAsArrayBuffer(file);
+    } else if (imgExts.includes(ext)) {
         const reader = new FileReader();
         reader.onload = e => {
             preview.src = e.target.result;
             preview.style.display = 'block';
-            nonImg.style.display = 'none';
-            placeholder.style.display = 'none';
+            setupHoverPreview(boxEl, file);
         };
         reader.readAsDataURL(file);
     } else {
-        preview.style.display = 'none';
-        nonImg.style.display = 'flex';
-        nonImg.style.alignItems = 'center';
-        nonImg.style.justifyContent = 'center';
         nonImg.textContent = file.name;
-        placeholder.style.display = 'none';
+        nonImg.style.display = 'flex';
+        setupHoverPreview(boxEl, file);
     }
     if (info) info.textContent = '';
 }
@@ -363,12 +468,18 @@ function addOtherProofItem(file, index) {
     item.id = `otherItem_${index}`;
     const imgExts = ['png','jpg','jpeg','bmp'];
     const ext = file.name.split('.').pop().toLowerCase();
-    if (imgExts.includes(ext)) {
+    const blobUrl = URL.createObjectURL(file);
+
+    if (ext === 'pdf') {
+        // PDF 渲染缩略图
         const img = document.createElement('img');
         img.className = 'file-upload-preview';
-        const reader = new FileReader();
-        reader.onload = e => { img.src = e.target.result; };
-        reader.readAsDataURL(file);
+        renderPdfThumbnailAsImg(file, img);
+        item.appendChild(img);
+    } else if (imgExts.includes(ext)) {
+        const img = document.createElement('img');
+        img.className = 'file-upload-preview';
+        img.src = blobUrl;
         item.appendChild(img);
     } else {
         const label = document.createElement('div');
@@ -379,6 +490,8 @@ function addOtherProofItem(file, index) {
         label.textContent = file.name;
         item.appendChild(label);
     }
+
+    setupHoverPreview(item, file);
     list.appendChild(item);
 }
 
@@ -388,6 +501,70 @@ function syncOtherProofInput() {
     document.getElementById('other_proof_file_input').files = dt.files;
     const names = otherProofFiles.filter(Boolean).map(f => f.name);
     document.getElementById('otherProofInfo').textContent = names.length ? `已选择：${names.join('、')}` : '';
+}
+
+// PDF 缩略图渲染（ArrayBuffer -> blob回调）
+function renderPdfThumbnail(arrayBuffer, callback) {
+    pdfjsLib.getDocument({ data: arrayBuffer }).promise.then(pdf => {
+        pdf.getPage(1).then(page => {
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise.then(() => {
+                canvas.toBlob(callback, 'image/png');
+            });
+        });
+    }).catch(() => {
+        // PDF 渲染失败，显示占位图标
+        callback(null);
+    });
+}
+
+// PDF 缩略图渲染（直接渲染到 img 元素）
+function renderPdfThumbnailAsImg(file, imgElement) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        renderPdfThumbnail(e.target.result, blob => {
+            if (blob) {
+                imgElement.src = URL.createObjectURL(blob);
+            } else {
+                // 渲染失败，显示 PDF 占位图标
+                imgElement.style.display = 'none';
+                imgElement.parentElement.insertAdjacentHTML('beforeend',
+                    '<i class="fas fa-file-pdf fa-3x" style="color:#dc3545;display:flex;align-items:center;justify-content:center;height:80px;"></i>');
+            }
+        });
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+// 打开文件预览
+function openFilePreview(url, filename, type) {
+    const modal = document.getElementById('filePreviewModal');
+    const modalImg = document.getElementById('filePreviewImg');
+    const modalPdf = document.getElementById('filePreviewPdf');
+    const modalNonMedia = document.getElementById('filePreviewNonMedia');
+    const modalName = document.getElementById('filePreviewName');
+
+    modalName.textContent = filename;
+    modalImg.style.display = 'none';
+    modalPdf.style.display = 'none';
+    modalNonMedia.style.display = 'none';
+
+    if (type === 'img' && url) {
+        modalImg.src = url;
+        modalImg.style.display = 'block';
+    } else if (type === 'pdf' && url) {
+        modalPdf.src = url;
+        modalPdf.style.display = 'block';
+    } else {
+        modalNonMedia.style.display = 'flex';
+        document.getElementById('filePreviewNonMediaText').textContent = filename;
+    }
+
+    const bsModal = new bootstrap.Modal(modal);
+    bsModal.show();
 }
 
 // Excel 拖拽
@@ -923,5 +1100,68 @@ function applyCustomTemplateData(data) {
     }
 }
 </script>
+
+<style>
+/* 悬浮预览层 */
+#hoverPreviewBox {
+    position: fixed;
+    z-index: 9998;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    padding: 8px;
+    max-width: 600px;
+    max-height: 600px;
+    display: none;
+    pointer-events: none;
+}
+#hoverPreviewBox img {
+    max-width: 100%;
+    max-height: 584px;
+    display: block;
+    border-radius: 4px;
+}
+#hoverPreviewBox.pdf-preview {
+    background: #f5f5f5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 120px;
+    min-height: 160px;
+}
+#hoverPreviewBox .pdf-placeholder {
+    text-align: center;
+    color: #888;
+}
+#hoverPreviewBox .pdf-placeholder i {
+    font-size: 48px;
+    color: #dc3545;
+}
+</style>
+
+<!-- 悬浮预览容器 -->
+<div id="hoverPreviewBox"></div>
+
+<!-- 文件预览模态框 -->
+<div class="modal fade" id="filePreviewModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div id="filePreviewName" class="modal-title" style="font-size:14px;word-break:break-all;"></div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body text-center" style="background:#f5f5f5;">
+                <img id="filePreviewImg" style="max-width:100%;max-height:80vh;display:none;">
+                <iframe id="filePreviewPdf" style="width:100%;height:80vh;display:none;border:none;"></iframe>
+                <div id="filePreviewNonMedia" style="display:none;padding:40px;text-align:center;color:#888;">
+                    <i class="fas fa-file fa-5x mb-3"></i>
+                    <div id="filePreviewNonMediaText"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 </body>
 </html>
