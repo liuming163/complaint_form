@@ -530,6 +530,23 @@ def upload_custom_template():
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': f'Sheet1解析失败：{str(e)}'}), 400
 
+        # Sheet1 必填字段校验
+        required_fields_sheet1 = {
+            '您的身份': '您的身份',
+            '代理人/权利人': '代理人/权利人',
+            '被代理人（权利人）信息': '被代理人（权利人）信息',
+            '投诉大类': '投诉大类',
+            '投诉类型': '投诉类型',
+            '功能模块': '功能模块',
+            '内容类型': '内容类型',
+            '投诉内容描述': '投诉内容描述',
+            '作品名称': '作品名称',
+        }
+        missing_fields = [label for field, label in required_fields_sheet1.items() if not form_data.get(field, '').strip()]
+        if missing_fields:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': '以下必填项未填写：' + '、'.join(missing_fields)}), 400
+
         # 解析Sheet2批量导入数据
         excel_rows = []
         try:
@@ -546,7 +563,7 @@ def upload_custom_template():
 
         if not excel_rows:
             shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': 'Sheet2中没有可导入的数据行'}), 400
+            return jsonify({'success': False, 'error': 'Sheet2为空，请填写后重新上传'}), 400
 
         # 获取基本信息
         principal = form_data.get('被代理人（权利人）信息', '')  # 如 "北京uc"
@@ -561,21 +578,22 @@ def upload_custom_template():
         work_name = form_data.get('作品名称', '')
         if not work_name and excel_rows:
             work_name = excel_rows[0].get('作品名称', '')
-        # 2. 查找其他证明文件
+        # 校验作品名称目录是否存在
+        drama_dir = os.path.join(static_imgs_dir, '剧名', work_name)
+        if not os.path.isdir(drama_dir):
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'「{work_name}」作品没有匹配到，请检查剧名是否正确'}), 400
         other_proof_files = []
-        if work_name:
-            drama_dir = os.path.join(static_imgs_dir, '剧名', work_name)
-            if os.path.isdir(drama_dir):
-                # 查找以"证明文件_"开头的文件
-                for f in os.listdir(drama_dir):
-                    if f.startswith('证明文件_') and not f.startswith('._'):
-                        proof_file = os.path.join('剧名', work_name, f)
-                        break
+        # 查找以"证明文件_"开头的文件
+        for f in os.listdir(drama_dir):
+            if f.startswith('证明文件_') and not f.startswith('._'):
+                proof_file = os.path.join('剧名', work_name, f)
+                break
 
-                # 查找以"其他证明_"开头的文件
-                for f in os.listdir(drama_dir):
-                    if f.startswith('其他证明_') and not f.startswith('._'):
-                        other_proof_files.append(os.path.join('剧名', work_name, f))
+        # 查找以"其他证明_"开头的文件
+        for f in os.listdir(drama_dir):
+            if f.startswith('其他证明_') and not f.startswith('._'):
+                other_proof_files.append(os.path.join('剧名', work_name, f))
 
         # 2.1 授权委托书: static/imgs/授权委托书/委托授权书_[被代理人].*
         proxy_file = None
