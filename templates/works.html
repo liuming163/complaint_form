@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>作品覆盖列表</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.bootcdn.net/ajax/libs/fuse.js/7.0.0/fuse.min.js"></script>
+</head>
+<body>
+<header class="main-header shadow-sm">
+    <div class="logo-area"><i class="fas fa-images"></i> 作品覆盖列表</div>
+    <div>
+        <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i> 返回首页</a>
+    </div>
+</header>
+
+<div class="form-page-wrap">
+    <div class="form-card">
+        <div class="section-title"><i class="fas fa-search"></i> 搜索作品</div>
+        <div class="mb-3">
+            <input type="text" id="searchInput" class="form-control" placeholder="输入作品名称进行搜索..." autocomplete="off">
+        </div>
+        <div id="resultCount" class="form-text mb-3"></div>
+        <div id="worksGrid" class="works-grid"></div>
+        <div id="emptyState" class="text-center text-muted py-5" style="display:none">
+            <i class="fas fa-folder-open fa-3x mb-3"></i>
+            <div>暂无作品</div>
+        </div>
+        <div id="searchEmpty" class="text-center text-muted py-5" style="display:none">
+            <i class="fas fa-search fa-3x mb-3"></i>
+            <div>未找到匹配的作品</div>
+        </div>
+
+        <div id="copyTooltip" class="copy-tooltip">复制成功</div>
+    </div>
+</div>
+
+<style>
+.works-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+}
+.work-item {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+    font-size: 14px;
+    color: #333;
+    transition: all 0.2s;
+    cursor: default;
+}
+.work-item:hover {
+    background: #e9ecef;
+    border-color: #ced4da;
+}
+.work-item .work-name {
+    font-weight: 600;
+    word-break: break-all;
+}
+.work-item .work-count {
+    font-size: 12px;
+    color: #888;
+    margin-top: 4px;
+}
+
+.copy-tooltip {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #198754;
+    color: #fff;
+    padding: 8px 20px;
+    border-radius: 6px;
+    font-size: 14px;
+    z-index: 9999;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+.copy-tooltip.show {
+    opacity: 1;
+}
+</style>
+
+<script>
+let allWorks = [];
+let fuse = null;
+let debounceTimer = null;
+
+async function loadWorks() {
+    const res = await fetch('/api/works/list');
+    const data = await res.json();
+    if (!data.success) {
+        document.getElementById('worksGrid').innerHTML = '<div class="text-danger">加载失败</div>';
+        return;
+    }
+    allWorks = data.data;
+    fuse = new Fuse(allWorks, {
+        threshold: 0.4,
+        ignoreLocation: true
+    });
+    renderWorks(allWorks);
+}
+
+function renderWorks(works) {
+    const grid = document.getElementById('worksGrid');
+    const emptyState = document.getElementById('emptyState');
+    const searchEmpty = document.getElementById('searchEmpty');
+    const countEl = document.getElementById('resultCount');
+    const searchValue = document.getElementById('searchInput').value.trim();
+
+    grid.innerHTML = '';
+
+    if (works.length === 0) {
+        grid.style.display = 'none';
+        emptyState.style.display = searchValue ? 'none' : 'flex';
+        searchEmpty.style.display = searchValue ? 'flex' : 'none';
+        countEl.textContent = '';
+        return;
+    }
+
+    grid.style.display = 'grid';
+    emptyState.style.display = 'none';
+    searchEmpty.style.display = 'none';
+    countEl.textContent = `共 ${works.length} 个作品`;
+
+    works.forEach(name => {
+        const item = document.createElement('div');
+        item.className = 'work-item';
+        item.innerHTML = `<div class="work-name">${escapeHtml(name)}</div>`;
+        item.style.cursor = 'pointer';
+        item.addEventListener('click', () => copyToClipboard(name));
+        grid.appendChild(item);
+    });
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+            showCopyTooltip();
+        }).catch(() => {
+            fallbackCopyText(text);
+        });
+    } else {
+        fallbackCopyText(text);
+    }
+}
+
+function fallbackCopyText(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try { document.execCommand('copy'); showCopyTooltip(); } catch (e) {}
+    document.body.removeChild(textarea);
+}
+
+function showCopyTooltip() {
+    const tooltip = document.getElementById('copyTooltip');
+    tooltip.classList.add('show');
+    setTimeout(() => tooltip.classList.remove('show'), 1500);
+}
+
+document.getElementById('searchInput').addEventListener('input', function(e) {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+        const keyword = e.target.value.trim();
+        if (!keyword) {
+            renderWorks(allWorks);
+            return;
+        }
+        const results = fuse.search(keyword).map(r => r.item);
+        renderWorks(results);
+    }, 300);
+});
+
+document.addEventListener('DOMContentLoaded', loadWorks);
+</script>
+</body>
+</html>

@@ -137,6 +137,21 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/works')
+def works():
+    return render_template('works.html')
+
+
+@app.route('/api/works/list')
+def works_list():
+    """返回 static/imgs/剧名/ 下的所有文件夹名称"""
+    drama_base = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '剧名')
+    if not os.path.isdir(drama_base):
+        return jsonify({'success': True, 'data': []})
+    folders = sorted([d for d in os.listdir(drama_base) if os.path.isdir(os.path.join(drama_base, d)) and not d.startswith('.')])
+    return jsonify({'success': True, 'data': folders})
+
+
 @app.route('/kuake')
 def kuake():
     return render_template('kuake.html')
