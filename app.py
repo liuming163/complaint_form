@@ -311,6 +311,19 @@ def submit_uc_form():
         proxy_file_path = os.path.join(submission_dir, saved_files['proxy_file']) if saved_files['proxy_file'] else ''
         other_proof_paths = [os.path.join(submission_dir, f) for f in saved_files['other_proof_files']]
 
+        # 追加自定义模板中匹配到的其他证明文件（来自 static/imgs/）
+        static_imgs_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs')
+        template_other_proof = request.form.get('other_proof_files_from_template', '').strip()
+        if template_other_proof:
+            try:
+                template_other_proof_list = json.loads(template_other_proof)
+                for rel_path in template_other_proof_list:
+                    abs_path = os.path.join(static_imgs_dir, rel_path)
+                    if os.path.exists(abs_path):
+                        other_proof_paths.append(abs_path)
+            except json.JSONDecodeError:
+                pass
+
         complaint_category = payload['form']['complaint_category']
         complaint_type = payload['form']['complaint_type']
         copyright_type = complaint_type if complaint_category == '知识产权' else ''
