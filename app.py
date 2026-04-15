@@ -386,23 +386,24 @@ def extract_zip_with_correct_encoding(zip_file_storage, extract_dir):
 def download_custom_template():
     """下载自定义模板Excel（3个Sheet）"""
     try:
-        # Sheet1: 表单内容（除采集账号和Cookie外）
+        # Sheet1: 表单内容（除采集账号和Cookie外，删除委托代理文件）
         sheet1_data = {
             '字段': [
                 '您的身份', '代理人/权利人', '被代理人（权利人）信息', '投诉大类',
-                '投诉类型', '功能模块', '内容类型', '投诉内容描述'
+                '投诉类型', '功能模块', '内容类型', '投诉内容描述', '作品名称'
             ],
             '值': [
                 '', '', '', '',
-                '', '', '', ''
+                '', '', '', '', ''
             ],
             '可选值': [
                 '权利人、代理人', '北京和晞科技有限公司、刘明',
-                '北京uc、深圳uc、上海uc', '知识产权、人身权',
+                '腾讯科技（北京）有限公司、深圳市腾讯计算机系统有限公司、上海腾讯企鹅影视文化传播有限公司、北京卡路里科技有限公司', '知识产权、人身权',
                 '著作权（含视频、图文、图集等）、商标、专利、其他知识产权',
                 '头条内容、大鱼号账号、UC网盘、神马搜索',
                 '影视剧集、其他视频、小说、漫画、图片、文章、软件/游戏、其他',
-                ''
+                '',
+                '填写原创作品名称，用于匹配证明文件，例如： 乔家的儿女'
             ]
         }
         df_sheet1 = pd.DataFrame(sheet1_data)
@@ -435,22 +436,23 @@ def download_custom_template():
             ['字段名', '填写说明'],
             ['侵权链接', '必填，填写需要投诉的侵权内容链接'],
             ['对应原创链接/对应访问码', '必填，填写原创内容链接或访问码'],
-            ['作品名称', '必填，填写原创作品名称'],
+            ['作品名称', '必填，填写原创作品名称，用于自动匹配证明文件'],
             [''],
             ['Sheet3 证明文件说明'],
             [''],
-            ['文件名关键词', '说明'],
-            ['证明文件', '必填，支持jpg/png/jpeg/bmp/pdf格式'],
-            ['委托代理', '代理人身份时必填，支持jpg/png/jpeg/bmp/pdf格式'],
-            ['其他证明', '可选，支持jpg/png/jpeg/bmp/pdf格式'],
+            ['上传Excel后，系统会根据以下规则自动匹配证明文件：'],
+            [''],
+            ['证明文件', '根据「作品名称」在 static/imgs/剧名/作品名称/ 目录下查找「证明文件_*」文件'],
+            ['其他证明[1]', '根据「被代理人」在 static/imgs/授权委托书/ 目录下查找「委托授权书_被代理人」文件'],
+            ['其他证明[2]', '根据「被代理人」在 static/imgs/营业执照/ 目录下查找「营业执照_被代理人」文件'],
+            ['其他证明[3]', '根据「代理人」在 static/imgs/营业执照/ 目录下查找「营业执照_代理人」文件'],
             [''],
             ['注意事项'],
             [''],
-            ['1. 上传自定义模板时，需要将Excel和所有证明文件打包成ZIP文件'],
-            ['2. 证明文件名必须包含「证明文件」关键字'],
-            ['3. 委托代理文件名必须包含「委托代理」关键字（代理人身份时必须）'],
-            ['4. 其他证明文件名必须包含「其他证明」关键字'],
-            ['5. 文件格式支持：jpg、png、jpeg、bmp、pdf'],
+            ['1. 上传自定义模板时，只需上传Excel文件（.xlsx或.xls），无需ZIP打包'],
+            ['2. 作品名称必须与 static/imgs/剧名/ 下的文件夹名称完全一致'],
+            ['3. 代理人默认为「北京和晞科技有限公司」'],
+            ['4. 文件格式支持：jpg、png、jpeg、bmp、pdf'],
         ]
         df_sheet3 = pd.DataFrame(sheet3_lines)
 
@@ -474,60 +476,47 @@ def download_custom_template():
 
 @app.route('/api/upload_custom_template', methods=['POST'])
 def upload_custom_template():
-    """上传自定义模板ZIP，解压并回填表单数据"""
-    # 先清理超过24小时的旧临时文件
-    cleanup_old_template_files(max_age_hours=24)
+    """上传自定义模板Excel，自动匹配证明文件"""
+    import glob
 
     if 'file' not in request.files:
         return jsonify({'success': False, 'error': '未上传文件'}), 400
 
-    zip_file = request.files['file']
-    if not zip_file.filename:
+    excel_file = request.files['file']
+    if not excel_file.filename:
         return jsonify({'success': False, 'error': '文件为空'}), 400
 
-    if not zip_file.filename.lower().endswith('.zip'):
-        return jsonify({'success': False, 'error': '请上传ZIP格式文件'}), 400
+    filename = excel_file.filename.lower()
+    if not (filename.endswith('.xlsx') or filename.endswith('.xls')):
+        return jsonify({'success': False, 'error': '请上传Excel格式文件（.xlsx或.xls）'}), 400
 
     try:
-        # 创建临时目录
+        # 保存上传的Excel到临时位置
         ensure_dir(CUSTOM_TEMPLATE_FOLDER)
         template_id = datetime.now().strftime('%Y%m%d_%H%M%S_') + uuid4().hex[:8]
         template_dir = os.path.join(CUSTOM_TEMPLATE_FOLDER, template_id)
         ensure_dir(template_dir)
 
-        # 使用unzip命令解压ZIP以保留正确的中文文件名
-        extract_zip_with_correct_encoding(zip_file, template_dir)
-
-        # 列出解压后的所有文件（使用正确的中文文件名）
-        zip_contents = {}
-        for root, dirs, files in os.walk(template_dir):
-            for name in files:
-                if name == '.DS_Store' or name.startswith('._'):
-                    continue
-                file_path = os.path.join(root, name)
-                rel_path = os.path.relpath(file_path, template_dir)
-                zip_contents[rel_path] = file_path
-
-        # 查找Excel文件
-        excel_file_name = None
-        for name in zip_contents.keys():
-            if name.endswith('.xlsx') or name.endswith('.xls'):
-                excel_file_name = name
-                break
-
-        if not excel_file_name:
-            # 清理临时目录
-            shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': 'ZIP中未找到Excel模板文件'}), 400
+        excel_path = os.path.join(template_dir, 'template.xlsx')
+        excel_file.save(excel_path)
 
         # 读取Excel
         try:
-            xls = pd.ExcelFile(zip_contents[excel_file_name])
+            xls = pd.ExcelFile(excel_path)
             sheet1_data = pd.read_excel(xls, sheet_name='表单内容')
             sheet2_data = pd.read_excel(xls, sheet_name='批量导入Excel')
         except Exception as e:
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': f'Excel解析失败：{str(e)}'}), 400
+
+        # 辅助函数：标准化括号（全角转半角）
+        def normalize_paren(s):
+            return s.replace('（', '(').replace('）', ')')
+
+        # 辅助函数：检查公司名是否匹配（支持括号中英文模糊匹配）
+        def company_match(principal, filename):
+            # 标准化后精确匹配
+            return normalize_paren(principal) in normalize_paren(filename)
 
         # 解析Sheet1表单数据
         form_data = {}
@@ -555,60 +544,114 @@ def upload_custom_template():
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': f'Sheet2解析失败：{str(e)}'}), 400
 
-        # 查找证明文件
-        proof_file_name = None
-        proxy_file_name = None
-        other_proof_names = []
-
-        identity = form_data.get('您的身份', '')
-
-        for name in zip_contents.keys():
-            if name == excel_file_name:
-                continue
-            name_lower = name.lower()
-
-            if not (name_lower.endswith(('.jpg', '.jpeg', '.png', '.bmp', '.pdf'))):
-                continue
-
-            # 匹配证明文件（包含"证明文件"但不包含"其他证明"/"其它证明"和"委托代理"）
-            if '证明文件' in name and '其他证明' not in name and '其它证明' not in name and '委托代理' not in name:
-                if proof_file_name is None:
-                    proof_file_name = name
-            # 匹配委托代理文件
-            elif '委托代理' in name:
-                if proxy_file_name is None:
-                    proxy_file_name = name
-            # 匹配其他证明（包含"其他证明"或"其它证明"）
-            elif '其他证明' in name or '其它证明' in name:
-                other_proof_names.append(name)
-
-        # 验证委托人必须文件
-        if identity == '代理人' and not proxy_file_name:
+        if not excel_rows:
             shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': '代理人身份必须上传委托代理文件'}), 400
+            return jsonify({'success': False, 'error': 'Sheet2中没有可导入的数据行'}), 400
 
-        # 按文件名排序其他证明
-        other_proof_names.sort()
+        # 获取基本信息
+        principal = form_data.get('被代理人（权利人）信息', '')  # 如 "北京uc"
+        agent = form_data.get('代理人/权利人', '')  # 如 "北京和晞科技有限公司"
 
-        # 准备返回数据（使用template_id作为访问路径）
+        # 定义静态文件目录
+        static_imgs_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs')
+
+        # 1. 查找证明文件: static/imgs/剧名/[作品名称]/证明文件_*
+        # 优先从Sheet1的"作品名称"字段获取，其次从Sheet2第一行的作品名称
+        proof_file = None
+        work_name = form_data.get('作品名称', '')
+        if not work_name and excel_rows:
+            work_name = excel_rows[0].get('作品名称', '')
+        if work_name:
+            drama_dir = os.path.join(static_imgs_dir, '剧名', work_name)
+            if os.path.isdir(drama_dir):
+                # 查找以"证明文件_"开头的文件
+                for f in os.listdir(drama_dir):
+                    if f.startswith('证明文件_') and not f.startswith('._'):
+                        proof_file = os.path.join('剧名', work_name, f)
+                        break
+
+        # 2. 查找其他证明文件
+        other_proof_files = []
+
+        # 2.1 授权委托书: static/imgs/授权委托书/委托授权书_[被代理人].*
+        proxy_file = None
+        if principal:
+            auth_dir = os.path.join(static_imgs_dir, '授权委托书')
+            if os.path.isdir(auth_dir):
+                # 精确匹配公司名（支持括号中英文模糊匹配）
+                for f in os.listdir(auth_dir):
+                    if f.startswith('委托授权书_') and not f.startswith('._'):
+                        if company_match(principal, f):
+                            proxy_file = os.path.join('授权委托书', f)
+                            break
+
+        # 2.2 营业执照(被代理人): static/imgs/营业执照/营业执照_[被代理人].*
+        biz_license_principal = None
+        if principal:
+            biz_dir = os.path.join(static_imgs_dir, '营业执照')
+            if os.path.isdir(biz_dir):
+                for f in os.listdir(biz_dir):
+                    if f.startswith('营业执照_') and not f.startswith('._'):
+                        if company_match(principal, f):
+                            biz_license_principal = os.path.join('营业执照', f)
+                            break
+
+        # 2.3 营业执照(代理人): static/imgs/营业执照/营业执照_[代理人].*
+        biz_license_agent = None
+        if agent:
+            biz_dir = os.path.join(static_imgs_dir, '营业执照')
+            if os.path.isdir(biz_dir):
+                # 精确匹配代理人公司名（支持括号中英文模糊匹配）
+                for f in os.listdir(biz_dir):
+                    if f.startswith('营业执照_') and not f.startswith('._'):
+                        if company_match(agent, f):
+                            biz_license_agent = os.path.join('营业执照', f)
+                            break
+
+        # 组装其他证明文件列表
+        if proxy_file:
+            other_proof_files.append(proxy_file)
+        if biz_license_principal:
+            other_proof_files.append(biz_license_principal)
+        if biz_license_agent:
+            other_proof_files.append(biz_license_agent)
+
+        # 准备返回数据
         result = {
             'success': True,
             'template_id': template_id,
             'form_data': form_data,
             'excel_rows': excel_rows,
             'files': {
-                'proof_file': proof_file_name,
-                'proxy_file': proxy_file_name,
-                'other_proof_files': other_proof_names
+                'proof_file': proof_file,
+                'proxy_file': None,  # 不再使用委托代理文件
+                'other_proof_files': other_proof_files
             }
         }
 
         return jsonify(result)
 
-    except zipfile.BadZipFile:
-        return jsonify({'success': False, 'error': 'ZIP文件格式无效'}), 400
     except Exception as e:
+        if 'template_dir' in dir() and template_dir:
+            shutil.rmtree(template_dir, ignore_errors=True)
         return jsonify({'success': False, 'error': f'处理失败：{str(e)}'}), 500
+
+
+@app.route('/api/proof_file/<path:filename>', methods=['GET'])
+def serve_proof_file(filename):
+    """服务证明文件（从static/imgs目录）"""
+    # 安全检查：防止路径遍历
+    static_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs')
+    file_path = os.path.normpath(os.path.join(static_dir, filename))
+
+    # 确保文件仍在static_dir内
+    if not file_path.startswith(os.path.abspath(static_dir) + os.sep):
+        return jsonify({'success': False, 'error': '无效的文件路径'}), 400
+
+    if not os.path.exists(file_path):
+        return jsonify({'success': False, 'error': '文件不存在'}), 404
+
+    return send_file(file_path)
 
 
 @app.route('/api/custom_template_file/<template_id>/<path:filename>', methods=['GET'])
