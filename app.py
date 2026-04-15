@@ -561,6 +561,8 @@ def upload_custom_template():
         work_name = form_data.get('作品名称', '')
         if not work_name and excel_rows:
             work_name = excel_rows[0].get('作品名称', '')
+        # 2. 查找其他证明文件
+        other_proof_files = []
         if work_name:
             drama_dir = os.path.join(static_imgs_dir, '剧名', work_name)
             if os.path.isdir(drama_dir):
@@ -570,8 +572,10 @@ def upload_custom_template():
                         proof_file = os.path.join('剧名', work_name, f)
                         break
 
-        # 2. 查找其他证明文件
-        other_proof_files = []
+                # 查找以"其他证明_"开头的文件
+                for f in os.listdir(drama_dir):
+                    if f.startswith('其他证明_') and not f.startswith('._'):
+                        other_proof_files.append(os.path.join('剧名', work_name, f))
 
         # 2.1 授权委托书: static/imgs/授权委托书/委托授权书_[被代理人].*
         proxy_file = None
