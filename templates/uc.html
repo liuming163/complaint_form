@@ -41,11 +41,13 @@
             <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
             <div class="mb-3">
                 <label class="form-label">采集账号</label>
-                <input type="text" class="form-control" name="collect_account" placeholder="请输入采集账号" value="" required>
+                <select class="form-select" name="collect_account" id="collectAccountSelect" required onchange="onCollectAccountChange()">
+                    <option value="">请选择采集账号</option>
+                </select>
             </div>
             <div class="mb-3">
                 <label class="form-label">Cookie</label>
-                <textarea class="form-control" name="cookie" rows="3" placeholder="请输入Cookie信息" required></textarea>
+                <textarea class="form-control" name="cookie" rows="3" placeholder="请从上方选择采集账号，自动填充Cookie" required disabled></textarea>
                 <div class="form-text">请粘贴完整的Cookie信息，用于身份验证</div>
             </div>
         </div>
@@ -399,8 +401,39 @@ function initHoverEventDelegation() {
 }
 
 document.addEventListener('DOMContentLoaded', initHoverEventDelegation);
+document.addEventListener('DOMContentLoaded', loadUcAccounts);
 
-document.addEventListener('DOMContentLoaded', initHoverEventDelegation);
+// 存储当前uc账号列表，供自动填充使用
+let ucAccountsMap = {};
+
+function loadUcAccounts() {
+    fetch('/api/accounts/list?platform_code=uc')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const select = document.getElementById('collectAccountSelect');
+            data.data.forEach(acc => {
+                const opt = document.createElement('option');
+                opt.value = acc.user;
+                opt.textContent = acc.user;
+                select.appendChild(opt);
+                ucAccountsMap[acc.user] = acc;
+            });
+        });
+}
+
+function onCollectAccountChange() {
+    const user = document.getElementById('collectAccountSelect').value;
+    const cookieTextarea = document.querySelector('textarea[name="cookie"]');
+    if (user) {
+        const acc = ucAccountsMap[user];
+        if (acc) {
+            cookieTextarea.value = acc.cookie;
+        }
+    } else {
+        cookieTextarea.value = '';
+    }
+}
 
 
 function handleFileUpload(input, boxId, placeholderId, previewId, nonImgId, infoId) {
@@ -630,7 +663,7 @@ function printFormData() {
     }
 
     // 打印账号信息
-    const collectAccount = document.querySelector('input[name="collect_account"]')?.value;
+    const collectAccount = document.querySelector('select[name="collect_account"]')?.value;
     console.log('采集账号:', collectAccount || '未填写');
 
     const cookie = document.querySelector('textarea[name="cookie"]')?.value;
@@ -727,11 +760,12 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
         document.getElementById('excelFile').files = dt.files;
     }
 
+    // textarea始终disabled，手动从DOM取值加入FormData
+    const cookieTextarea = document.querySelector('textarea[name="cookie"]');
+    const cookieValue = cookieTextarea ? cookieTextarea.value.trim() : '';
+
     const formData = new FormData(this);
-    const cookieValue = formData.get('cookie');
-    if (typeof cookieValue === 'string') {
-        formData.set('cookie', cookieValue.trim());
-    }
+    formData.set('cookie', cookieValue);
 
     // 如果有自定义模板的其他证明文件（其他证明_*），传给后端用于脚本上传
     if (window.customTemplateOtherProofFiles && window.customTemplateOtherProofFiles.length > 0) {
@@ -796,7 +830,7 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
 
 // 校验账号信息
 function validateAccountInfo() {
-    const collectAccount = document.querySelector('input[name="collect_account"]');
+    const collectAccount = document.querySelector('select[name="collect_account"]');
     const cookie = document.querySelector('textarea[name="cookie"]');
     const principal = document.querySelector('select[name="principal"]');
     const description = document.querySelector('textarea[name="description"]');
@@ -853,13 +887,13 @@ function validateAccountInfo() {
 
     if (!collectAccount || !collectAccount.value.trim()) {
         isValid = false;
-        errorMessage += '请填写采集账号\n';
+        errorMessage += '请选择采集账号\n';
         if (collectAccount) {
             collectAccount.classList.add('is-invalid');
             if (!collectAccount.nextElementSibling || !collectAccount.nextElementSibling.classList.contains('invalid-feedback')) {
                 const feedback = document.createElement('div');
                 feedback.className = 'invalid-feedback';
-                feedback.textContent = '采集账号不能为空';
+                feedback.textContent = '请选择采集账号';
                 collectAccount.parentNode.appendChild(feedback);
             }
         }

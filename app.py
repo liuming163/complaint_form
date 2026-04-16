@@ -142,6 +142,91 @@ def works():
     return render_template('works.html')
 
 
+# 投诉账号管理数据文件
+ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__), 'task_results', 'accounts.json')
+
+# 平台映射
+PLATFORM_MAP = {
+    'uc': {'platform_name': 'UC', 'pingtai': 'UC'},
+    'quark': {'platform_name': '夸克', 'pingtai': '夸克'},
+}
+
+def load_accounts():
+    if not os.path.exists(ACCOUNTS_FILE):
+        return []
+    with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_accounts(accounts):
+    with open(ACCOUNTS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(accounts, f, ensure_ascii=False, indent=2)
+
+
+@app.route('/accounts')
+def accounts():
+    return render_template('accounts.html')
+
+
+@app.route('/api/accounts/list')
+def accounts_list():
+    platform_code = request.args.get('platform_code')
+    accounts = load_accounts()
+    if platform_code:
+        accounts = [a for a in accounts if a.get('platform_code') == platform_code]
+    return jsonify({'success': True, 'data': accounts})
+
+
+@app.route('/api/accounts/add', methods=['POST'])
+def accounts_add():
+    data = request.get_json()
+    platform_code = data.get('platform_code', '').strip()
+    user = data.get('user', '').strip()
+    cookie = data.get('cookie', '').strip()
+    if not platform_code or not user or not cookie:
+        return jsonify({'success': False, 'error': '平台名称、投诉账号、Cookie都不能为空'}), 400
+    if platform_code not in PLATFORM_MAP:
+        return jsonify({'success': False, 'error': '平台编码无效'}), 400
+    accounts = load_accounts()
+    if any(a.get('platform_code') == platform_code and a.get('user') == user for a in accounts):
+        return jsonify({'success': False, 'error': f'该平台下投诉账号「{user}」已存在'}), 400
+    new_id = uuid4().hex[:12]
+    now = datetime.now().isoformat()
+    accounts.append({
+        'id': new_id,
+        'platform_code': platform_code,
+        'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
+        'pingtai': PLATFORM_MAP[platform_code]['pingtai'],
+        'user': user,
+        'cookie': cookie,
+        'status': '0',
+        'created_at': now,
+        'updated_at': now,
+    })
+    save_accounts(accounts)
+    return jsonify({'success': True, 'data': accounts[-1]})
+
+
+@app.route('/api/accounts/update_cookie', methods=['POST'])
+def accounts_update_cookie():
+    data = request.get_json()
+    acc_id = data.get('id')
+    cookie = data.get('cookie', '').strip()
+    if not cookie:
+        return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
+    accounts = load_accounts()
+    updated = False
+    for a in accounts:
+        if a.get('id') == acc_id:
+            a['cookie'] = cookie
+            a['updated_at'] = datetime.now().isoformat()
+            updated = True
+            break
+    if not updated:
+        return jsonify({'success': False, 'error': '账号不存在'}), 404
+    save_accounts(accounts)
+    return jsonify({'success': True})
+
+
 @app.route('/api/works/list')
 def works_list():
     """返回 static/imgs/剧名/ 下的所有文件夹名称"""

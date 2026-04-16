@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>投诉账号管理</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+<header class="main-header shadow-sm">
+    <div class="logo-area"><i class="fas fa-user-cog"></i> 投诉账号管理</div>
+    <div>
+        <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i> 返回首页</a>
+    </div>
+</header>
+
+<div class="form-page-wrap">
+    <div class="form-card">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="section-title mb-0"><i class="fas fa-list"></i> 账号列表</div>
+            <button class="btn btn-primary" onclick="openAddModal()">
+                <i class="fas fa-plus"></i> 添加账号
+            </button>
+        </div>
+        <div class="mb-3">
+            <input type="text" id="searchInput" class="form-control" placeholder="搜索平台名称或投诉账号..." autocomplete="off">
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle" id="accountsTable">
+                <thead>
+                    <tr>
+                        <th>平台名称</th>
+                        <th>投诉账号</th>
+                        <th>Cookie</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="accountsTableBody">
+                    <tr><td colspan="4" class="text-center text-muted py-4">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div id="emptyState" class="text-center text-muted py-5" style="display:none">
+            <i class="fas fa-inbox fa-3x mb-3"></i>
+            <div>暂无账号</div>
+        </div>
+        <div id="searchEmpty" class="text-center text-muted py-5" style="display:none">
+            <i class="fas fa-search fa-3x mb-3"></i>
+            <div>未找到匹配的账号</div>
+        </div>
+    </div>
+</div>
+
+<!-- 添加账号弹窗 -->
+<div class="modal fade" id="addModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fas fa-plus me-2"></i>添加账号</div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">平台名称</label>
+                    <select class="form-select" id="inputPlatform">
+                        <option value="uc">UC</option>
+                        <option value="quark">夸克</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">投诉账号</label>
+                    <input type="text" class="form-control" id="inputAccount" placeholder="请输入投诉账号" onblur="this.value = this.value.trim()">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Cookie</label>
+                    <textarea class="form-control" id="inputCookie" rows="3" placeholder="请输入Cookie信息" onblur="this.value = this.value.trim()"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="submitAddAccount()">确认添加</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 更新Cookie弹窗 -->
+<div class="modal fade" id="updateModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fas fa-edit me-2"></i>更新Cookie</div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">平台名称</label>
+                    <input type="text" class="form-control" id="updatePlatform" disabled>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">投诉账号</label>
+                    <input type="text" class="form-control" id="updateAccount" disabled>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Cookie</label>
+                    <textarea class="form-control" id="updateCookie" rows="3" placeholder="请输入Cookie信息" onblur="this.value = this.value.trim()"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="submitUpdateCookie()">确认更新</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+<script>
+let allAccounts = [];
+let debounceTimer = null;
+let addModal = null;
+let updateModal = null;
+let currentUpdateId = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    addModal = new bootstrap.Modal(document.getElementById('addModal'));
+    updateModal = new bootstrap.Modal(document.getElementById('updateModal'));
+    loadAccounts();
+});
+
+async function loadAccounts() {
+    const res = await fetch('/api/accounts/list');
+    const data = await res.json();
+    if (!data.success) {
+        document.getElementById('accountsTableBody').innerHTML = '<tr><td colspan="4" class="text-center text-danger py-4">加载失败</td></tr>';
+        return;
+    }
+    allAccounts = data.data;
+    renderTable(allAccounts);
+}
+
+function renderTable(accounts) {
+    const tbody = document.getElementById('accountsTableBody');
+    const emptyState = document.getElementById('emptyState');
+    const searchEmpty = document.getElementById('searchEmpty');
+    const table = document.getElementById('accountsTable');
+    const searchValue = document.getElementById('searchInput').value.trim();
+
+    tbody.innerHTML = '';
+
+    if (accounts.length === 0) {
+        table.style.display = 'none';
+        emptyState.style.display = searchValue ? 'none' : 'flex';
+        searchEmpty.style.display = searchValue ? 'flex' : 'none';
+        return;
+    }
+
+    table.style.display = '';
+    emptyState.style.display = 'none';
+    searchEmpty.style.display = 'none';
+
+    accounts.forEach(acc => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${escapeHtml(acc.platform_name)}</td>
+            <td>${escapeHtml(acc.user)}</td>
+            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(acc.cookie)}</td>
+            <td>
+                <button class="btn btn-sm btn-outline-primary" onclick="openUpdateModal('${acc.id}')">
+                    <i class="fas fa-edit"></i> 更新Cookie
+                </button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function openAddModal() {
+    document.getElementById('inputPlatform').value = 'uc';
+    document.getElementById('inputAccount').value = '';
+    document.getElementById('inputCookie').value = '';
+    addModal.show();
+}
+
+async function submitAddAccount() {
+    const platform_code = document.getElementById('inputPlatform').value;
+    const user = document.getElementById('inputAccount').value.trim();
+    const cookie = document.getElementById('inputCookie').value.trim();
+
+    if (!platform_code || !user || !cookie) {
+        alert('请填写所有必填项');
+        return;
+    }
+
+    const res = await fetch('/api/accounts/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({platform_code, user, cookie})
+    });
+    const data = await res.json();
+
+    if (!data.success) {
+        alert('添加失败：' + data.error);
+        return;
+    }
+
+    addModal.hide();
+    allAccounts.push(data.data);
+    renderTable(allAccounts);
+}
+
+function openUpdateModal(id) {
+    const acc = allAccounts.find(a => a.id === id);
+    if (!acc) return;
+    currentUpdateId = id;
+    document.getElementById('updatePlatform').value = acc.platform_name;
+    document.getElementById('updateAccount').value = acc.user;
+    document.getElementById('updateCookie').value = acc.cookie;
+    updateModal.show();
+}
+
+async function submitUpdateCookie() {
+    const cookie = document.getElementById('updateCookie').value.trim();
+    if (!cookie) {
+        alert('Cookie不能为空');
+        return;
+    }
+    const res = await fetch('/api/accounts/update_cookie', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: currentUpdateId, cookie})
+    });
+    const data = await res.json();
+    if (!data.success) {
+        alert('更新失败：' + data.error);
+        return;
+    }
+    // 更新本地数据
+    const acc = allAccounts.find(a => a.id === currentUpdateId);
+    if (acc) acc.cookie = cookie;
+    updateModal.hide();
+    renderTable(allAccounts);
+}
+
+document.getElementById('searchInput').addEventListener('input', function(e) {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+        const keyword = e.target.value.trim().toLowerCase();
+        if (!keyword) {
+            renderTable(allAccounts);
+            return;
+        }
+        const filtered = allAccounts.filter(acc =>
+            acc.platform.toLowerCase().includes(keyword) ||
+            acc.account.toLowerCase().includes(keyword)
+        );
+        renderTable(filtered);
+    }, 300);
+});
+</script>
+</body>
+</html>
