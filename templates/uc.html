@@ -82,6 +82,7 @@
                         <option>深圳市腾讯计算机系统有限公司</option>
                         <option>上海腾讯企鹅影视文化传播有限公司</option>
                         <option>北京卡路里科技有限公司</option>
+                        <option>上海宽娱数码科技有限公司</option>
                     </select>
                 </div>
             </div>
@@ -764,8 +765,29 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
     const cookieTextarea = document.querySelector('textarea[name="cookie"]');
     const cookieValue = cookieTextarea ? cookieTextarea.value.trim() : '';
 
+    // 启用被锁定的字段以便FormData能获取其值
+    document.querySelectorAll('input[name="identity"], input[name="complaint_category"], input[name="complaint_type"], input[name="module"], input[name="content_type"]').forEach(el => el.disabled = false);
+    document.querySelector('textarea[name="description"]').disabled = false;
+    document.getElementById('identitySelect').disabled = false;
+    document.querySelector('select[name="principal"]').disabled = false;
+    // 委托代理文件（文件上传input未被disabled，只是pointer-events遮挡，需允许提交）
+    document.querySelectorAll('#excelFile, #proof_file_input, #other_proof_file_input').forEach(el => {
+        el.style.pointerEvents = 'auto';
+        el.style.opacity = '1';
+    });
+
     const formData = new FormData(this);
     formData.set('cookie', cookieValue);
+
+    // 重新锁定这些字段
+    document.querySelectorAll('input[name="identity"], input[name="complaint_category"], input[name="complaint_type"], input[name="module"], input[name="content_type"]').forEach(el => el.disabled = true);
+    document.querySelector('textarea[name="description"]').disabled = true;
+    document.getElementById('identitySelect').disabled = true;
+    document.querySelector('select[name="principal"]').disabled = true;
+    document.querySelectorAll('#excelFile, #proof_file_input, #other_proof_file_input').forEach(el => {
+        el.style.pointerEvents = 'none';
+        el.style.opacity = '0.5';
+    });
 
     // 如果有自定义模板的其他证明文件（其他证明_*），传给后端用于脚本上传
     if (window.customTemplateOtherProofFiles && window.customTemplateOtherProofFiles.length > 0) {
