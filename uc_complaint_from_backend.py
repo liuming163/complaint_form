@@ -151,7 +151,8 @@ def submit_form(page):
 
 
 def get_success_dialog(page):
-    dialogs = page.locator(".el-message-box:visible, .ant-modal-wrap:visible, .ant-modal:visible, [role='dialog']:visible")
+    dialogs = page.locator(
+        ".el-message-box:visible, .ant-modal-wrap:visible, .ant-modal:visible, [role='dialog']:visible")
     dialogs.first.wait_for(state="visible", timeout=15000)
     return dialogs.first
 
@@ -201,8 +202,8 @@ def read_latest_complaint_numbers(page, count):
     return complaint_numbers
 
 
-def fill_initial_form(page, identity, rights_holder, complaint_type, copyright_type,
-                      module, content_type, description, proof_file, proxy_file, other_proof_files):
+def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copyright_type,
+                      module, content_type, description, proof_file, other_proof_files):
     print("📝 开始填写投诉表单...")
 
     print("👤 选择身份信息...")
@@ -215,123 +216,306 @@ def fill_initial_form(page, identity, rights_holder, complaint_type, copyright_t
     human_click(page, identity_radio.first)
     human_delay(1000, 1500)
 
-    print("👤 选择权利人...")
-    combobox = page.get_by_role("combobox").first
-    combobox.wait_for(state="visible", timeout=10000)
-    human_click(page, combobox)
+    # 选择代理人/权利人下拉框（id=obligee_id）
+    print("👤 选择代理人/权利人...")
+    agent_select = page.locator("#obligee_id .ant-select-selection")
+    agent_select.wait_for(state="visible", timeout=10000)
+    human_click(page, agent_select)
     human_delay(500, 800)
-    option = page.get_by_role("option", name=rights_holder)
-    if option.count() == 0:
-        raise RuntimeError(f"未找到权利人选项: {rights_holder}")
-    human_click(page, option.first)
+    # 等待下拉菜单出现，在dropdown内找选项
+    page.wait_for_selector(".ant-select-dropdown", timeout=5000)
+    agent_option = page.locator(".ant-select-dropdown").get_by_role("option", name=agent)
+    if agent_option.count() == 0:
+        raise RuntimeError(f"未找到代理人/权利人选项: {agent}")
+    human_click(page, agent_option.first)
     human_delay(1000, 1500)
+
+    # 选择被代理人（权利人）下拉框（id=proxy_id，仅代理人身份时显示）
+    if identity == "代理人":
+        print("👤 选择被代理人（权利人）信息...")
+        principal_select = page.locator("#proxy_id .ant-select-selection")
+        principal_select.wait_for(state="visible", timeout=10000)
+        human_click(page, principal_select)
+        human_delay(800, 1200)
+
+        # 等待被代理人下拉菜单出现
+        print("⏳ 等待被代理人下拉菜单出现...")
+        dropdown = None
+        for attempt in range(15):  # 最多等待15秒
+            # 查找可见的下拉菜单
+            dropdowns = page.locator(".ant-select-dropdown:visible")
+            count = dropdowns.count()
+
+            if count > 0:
+                # 获取最后一个下拉菜单（新打开的一般在最后）
+                dropdown = dropdowns.last
+                # 检查下拉菜单是否包含选项
+                options = dropdown.locator(".ant-select-dropdown-menu-item, [role='option']")
+                if options.count() > 0:
+                    print(f"✅ 下拉菜单已打开，包含 {options.count()} 个选项")
+                    break
+
+            human_delay(500, 800)
+            if attempt == 14:
+                # 打印调试信息
+                print("⚠️ 未找到下拉菜单，当前页面上的下拉菜单:")
+                all_dropdowns = page.locator(".ant-select-dropdown")
+                for i in range(all_dropdowns.count()):
+                    is_visible = all_dropdowns.nth(i).is_visible()
+                    print(f"  下拉菜单 {i + 1}: visible={is_visible}")
+                raise RuntimeError("等待被代理人下拉菜单超时")
+        else:
+            raise RuntimeError("等待被代理人下拉菜单超时")
+
+        print("✅ 下拉菜单已打开")
+
+        # 策略1：先尝试在搜索框输入关键词（如果有的话）
+        search_input = dropdown.locator("input").first
+        if search_input.count() > 0 and search_input.is_visible():
+            print(f"🔍 在搜索框输入关键词: {rights_holder}")
+            human_type(page, search_input, rights_holder)
+            human_delay(1000, 1500)
+
+        # 策略2：查找选项（支持分组结构）
+        principal_option = None
+
+        # 获取所有选项
+        all_options = dropdown.locator(".ant-select-dropdown-menu-item, [role='option']")
+        total_options = all_options.count()
+        print(f"📋 下拉列表中共有 {total_options} 个选项")
+
+        if total_options == 0:
+            print("\n🔍 下拉菜单HTML结构（前500字符）:")
+            html_preview = dropdown.inner_html()[:500]
+            print(html_preview)
+            raise RuntimeError(f"下拉列表为空，无法选择被代理人: {rights_holder}")
+
+        # 打印所有选项并查找目标
+        print("\n📋 下拉列表所有选项:")
+        found = False
+        for idx in range(total_options):
+            option_text = all_options.nth(idx).text_content().strip()
+            print(f"  {idx + 1}. {option_text}")
+            if rights_holder in option_text or option_text == rights_holder:
+                principal_option = all_options.nth(idx)
+                found = True
+                print(f"✅ 在第 {idx + 1} 个位置找到匹配: {option_text}")
+                break
+
+        # 如果没找到，尝试滚动查找（因为选项可能在不可见区域）
+        if not found and total_options > 0:
+            print(f"🔄 目标 '{rights_holder}' 不在当前可见选项中，尝试滚动查找...")
+
+            # 获取下拉菜单内容容器
+            dropdown_content = dropdown.locator(".ant-select-dropdown-content")
+            if dropdown_content.count() == 0:
+                dropdown_content = dropdown.locator(".rc-virtual-list")
+            if dropdown_content.count() == 0:
+                dropdown_content = dropdown
+
+            # 滚动查找
+            scroll_attempts = 0
+            max_scrolls = 20
+
+            for i in range(max_scrolls):
+                # 滚动
+                if dropdown_content.count() > 0:
+                    current_scroll = dropdown_content.evaluate("el => el.scrollTop")
+                    dropdown_content.evaluate(f"el => el.scrollTop = {current_scroll + 150}")
+                else:
+                    page.keyboard.press("ArrowDown")
+
+                human_delay(300, 500)
+
+                # 重新获取选项并检查
+                current_options = dropdown.locator(".ant-select-dropdown-menu-item, [role='option']")
+                for idx in range(current_options.count()):
+                    option_text = current_options.nth(idx).text_content().strip()
+                    if rights_holder in option_text or option_text == rights_holder:
+                        principal_option = current_options.nth(idx)
+                        found = True
+                        print(f"✅ 滚动后在第 {idx + 1} 个位置找到: {option_text}")
+                        break
+
+                if found:
+                    break
+
+                scroll_attempts += 1
+
+            if not found:
+                # 最后尝试：归一化匹配
+                normalized_target = rights_holder.replace(" ", "").strip()
+                for idx in range(total_options):
+                    option_text = all_options.nth(idx).text_content().strip()
+                    normalized_option = option_text.replace(" ", "").strip()
+                    if normalized_target == normalized_option or normalized_target in normalized_option:
+                        principal_option = all_options.nth(idx)
+                        found = True
+                        print(f"✅ 通过归一化匹配找到: {option_text}")
+                        break
+
+        if not found or principal_option is None:
+            raise RuntimeError(f"查找后仍未找到被代理人（权利人）选项: {rights_holder}")
+
+        # 确保选项可见并点击
+        principal_option.first.scroll_into_view_if_needed()
+        human_delay(300, 500)
+        print(f"✅ 准备点击被代理人: {rights_holder}")
+
+        # 使用JavaScript点击以确保成功
+        try:
+            principal_option.first.evaluate("el => el.click()")
+        except Exception:
+            human_click(page, principal_option.first)
+
+        human_delay(1500, 2000)
+        print("✅ 被代理人选择完成")
 
     print("📌 选择投诉类型...")
-    ip_radio = page.get_by_role("radio", name=complaint_type)
-    if ip_radio.count() > 0:
-        human_click(page, ip_radio.first)
+    try:
+        ip_radio = page.get_by_role("radio", name=complaint_type)
+        if ip_radio.count() == 0:
+            print(f"⚠️ 未找到投诉类型radio: {complaint_type}，尝试其他方式")
+            ip_radio = page.locator(f"input[type='radio']").filter(has_text=complaint_type)
+        if ip_radio.count() > 0:
+            human_click(page, ip_radio.first)
         human_delay(500, 800)
-    if copyright_type:
-        copyright_cb = page.get_by_role("checkbox", name=copyright_type)
-        if copyright_cb.count() > 0:
-            human_click(page, copyright_cb.first)
-    human_delay(1000, 1500)
+        if copyright_type:
+            copyright_cb = page.get_by_role("checkbox", name=copyright_type)
+            if copyright_cb.count() > 0:
+                human_click(page, copyright_cb.first)
+        human_delay(1000, 1500)
+        print("✅ 投诉类型选择完成")
+    except Exception as e:
+        print(f"❌ 选择投诉类型失败: {e}")
+        raise
 
     print("📦 选择功能模块...")
-    module_radio = page.get_by_role("radio", name=module)
-    if module_radio.count() == 0:
-        raise RuntimeError(f"未找到功能模块选项: {module}")
-    human_click(page, module_radio.first)
-    human_delay(1000, 1500)
+    try:
+        module_radio = page.get_by_role("radio", name=module)
+        if module_radio.count() == 0:
+            raise RuntimeError(f"未找到功能模块选项: {module}")
+        human_click(page, module_radio.first)
+        human_delay(1000, 1500)
+        print("✅ 功能模块选择完成")
+    except Exception as e:
+        print(f"❌ 选择功能模块失败: {e}")
+        raise
 
     print("🎬 选择内容类型...")
-    content_radio = page.get_by_role("radio", name=content_type)
-    if content_radio.count() == 0:
-        raise RuntimeError(f"未找到内容类型选项: {content_type}")
-    human_click(page, content_radio.first)
-    human_delay(1000, 1500)
+    try:
+        content_radio = page.get_by_role("radio", name=content_type)
+        if content_radio.count() == 0:
+            raise RuntimeError(f"未找到内容类型选项: {content_type}")
+        human_click(page, content_radio.first)
+        human_delay(1000, 1500)
+        print("✅ 内容类型选择完成")
+    except Exception as e:
+        print(f"❌ 选择内容类型失败: {e}")
+        raise
 
     print("📝 填写投诉描述...")
-    desc_textarea = page.get_by_role("textbox", name="请客观公正描述具体侵权所在，最多填写1000字")
-    if desc_textarea.count() == 0:
-        desc_textarea = page.locator("textarea").first
-    if desc_textarea.count() == 0:
-        raise RuntimeError("未找到投诉描述输入框")
-    human_type(page, desc_textarea.first, description)
-    human_delay(1000, 1500)
+    try:
+        desc_textarea = page.get_by_role("textbox", name="请客观公正描述具体侵权所在，最多填写1000字")
+        if desc_textarea.count() == 0:
+            desc_textarea = page.locator("textarea").first
+        if desc_textarea.count() == 0:
+            raise RuntimeError("未找到投诉描述输入框")
+        human_type(page, desc_textarea.first, description)
+        human_delay(1000, 1500)
+        print("✅ 投诉描述填写完成")
+    except Exception as e:
+        print(f"❌ 填写投诉描述失败: {e}")
+        raise
 
     print("📤 上传证明文件...")
     if proof_file and os.path.exists(proof_file):
-        proof_upload = None
-        proof_label = page.get_by_text("证明文件", exact=True).first
-        if proof_label.count() > 0:
-            proof_block = proof_label.locator("xpath=ancestor::div[contains(@class, 'mb-3')][1]").first
-            scoped_upload = proof_block.locator("input[type='file']")
-            if scoped_upload.count() > 0:
-                proof_upload = scoped_upload.first
-        if proof_upload is None:
-            proof_upload = page.locator("input[type='file']:not([multiple])").first
-        if proof_upload.count() == 0:
-            raise RuntimeError("未找到证明文件上传框")
-        proof_upload.set_input_files(proof_file)
-        human_delay(2000, 3000)
+        # 定位到"证明文件："区域的上传框（第一个 upload-wrapper）
+        proof_section = page.locator("#evidences").locator("h1:has-text('证明文件：')").first
+        if proof_section.count() == 0:
+            # 备用方案：直接找第一个 upload-wrapper
+            proof_upload_wrapper = page.locator("#evidences .upload-wrapper").first
+        else:
+            # 找到证明文件区域下的 upload-wrapper
+            proof_upload_wrapper = proof_section.locator("..").locator(".upload-wrapper").first
 
-    print("📤 上传委托代理文件...")
-    if identity == "代理人":
-        if not proxy_file or not os.path.exists(proxy_file):
-            raise RuntimeError("缺少委托代理文件")
-        proxy_upload = None
-        proxy_label = page.get_by_text("委托代理文件", exact=True).first
-        if proxy_label.count() == 0:
-            proxy_label = page.get_by_text("委托代理", exact=False).first
-        if proxy_label.count() > 0:
-            proxy_block = proxy_label.locator("xpath=ancestor::div[contains(@class, 'mb-3')][1]").first
-            scoped_upload = proxy_block.locator("input[type='file']")
-            if scoped_upload.count() > 0:
-                proxy_upload = scoped_upload.first
-        if proxy_upload is None:
-            file_inputs = page.locator("input[type='file']:not([multiple])")
-            if file_inputs.count() > 1:
-                proxy_upload = file_inputs.nth(1)
-        if proxy_upload is None or proxy_upload.count() == 0:
-            raise RuntimeError("未找到委托代理文件上传框")
-        proxy_upload.set_input_files(proxy_file)
+        if proof_upload_wrapper.count() == 0:
+            proof_upload_wrapper = page.locator("#evidences .upload-wrapper").first
+
+        file_input = proof_upload_wrapper.locator("input[type='file']")
+        if file_input.count() == 0:
+            raise RuntimeError("未找到证明文件上传框")
+
+        file_input.set_input_files(proof_file)
+        print(f"✅ 已上传证明文件: {os.path.basename(proof_file)}")
         human_delay(2000, 3000)
 
     print("📤 上传其他证明文件...")
     if other_proof_files:
         scroll_to_bottom(page)
         human_delay(1000, 1500)
-        other_proof_title = page.locator("text=其他证明：").first
-        if other_proof_title.count() == 0:
-            other_proof_title = page.get_by_text("其他证明", exact=True).first
-        if other_proof_title.count() == 0:
-            raise RuntimeError("未找到其他证明区域")
 
-        add_button = page.get_by_text("添 加", exact=True).first
-        if add_button.count() == 0:
-            add_button = page.get_by_text("添加", exact=True).first
-        if add_button.count() == 0:
-            add_button = page.locator("button.add.ant-btn-default").first
+        # 获取所有上传框
+        all_upload_wrappers = page.locator("#evidences .upload-wrapper").all()
 
-        add_clicks = max(len(other_proof_files) - 1, 0)
-        for _ in range(add_clicks):
-            add_button.scroll_into_view_if_needed()
-            human_delay(300, 500)
-            add_button.click()
-            human_delay(2000, 2500)
+        # 第一个上传框是"证明文件"区域的，需要跳过
+        # 从第二个开始才是"其他证明"区域的
+        other_upload_wrappers = all_upload_wrappers[1:] if len(all_upload_wrappers) > 1 else []
 
-        other_proof_container = other_proof_title.locator("xpath=..").first
-        upload_wrappers = other_proof_container.locator(".upload-wrapper").all()
+        print(f"📊 找到 {len(other_upload_wrappers)} 个其他证明上传框，需要上传 {len(other_proof_files)} 个文件")
+
+        # 如果上传框不够，需要点击添加按钮
+        if len(other_upload_wrappers) < len(other_proof_files):
+            add_button = page.locator("#evidences").get_by_text("添 加", exact=True)
+            if add_button.count() == 0:
+                add_button = page.locator("#evidences").get_by_text("添加", exact=True)
+
+            needed_clicks = len(other_proof_files) - len(other_upload_wrappers)
+            print(f"🖱️ 需要点击添加按钮 {needed_clicks} 次")
+
+            for i in range(needed_clicks):
+                try:
+                    # 每次点击前重新获取按钮，避免 stale element
+                    add_button = page.locator("#evidences").get_by_text("添 加", exact=True)
+                    if add_button.count() == 0:
+                        add_button = page.locator("#evidences").get_by_text("添加", exact=True)
+
+                    if add_button.count() > 0:
+                        add_button.first.click()
+                        print(f"✅ 已点击添加按钮 ({i + 1}/{needed_clicks})")
+                        human_delay(1500, 2000)
+                    else:
+                        print(f"⚠️ 添加按钮不存在，停止添加")
+                        break
+                except Exception as e:
+                    print(f"⚠️ 点击添加按钮失败: {e}")
+                    break
+
+            # 重新获取上传框
+            all_upload_wrappers = page.locator("#evidences .upload-wrapper").all()
+            other_upload_wrappers = all_upload_wrappers[1:] if len(all_upload_wrappers) > 1 else []
+
+        # 上传其他证明文件
         for idx, proof_path in enumerate(other_proof_files):
-            if idx >= len(upload_wrappers):
-                raise RuntimeError(f"其他证明上传框不足，第 {idx + 1} 个文件无法上传")
-            wrapper = upload_wrappers[idx]
-            file_input = wrapper.locator("input[type='file']")
+            if idx >= len(other_upload_wrappers):
+                print(f"⚠️ 第 {idx + 1} 个文件没有对应的上传框，跳过")
+                continue
+
+            # 找到上传框内的 file input
+            file_input = other_upload_wrappers[idx].locator("input[type='file']")
             if file_input.count() == 0:
-                raise RuntimeError(f"第 {idx + 1} 个其他证明未找到文件输入框")
-            file_input.set_input_files(proof_path)
-            human_delay(2000, 2500)
+                print(f"⚠️ 第 {idx + 1} 个上传框未找到文件输入框，跳过")
+                continue
+
+            if os.path.exists(proof_path):
+                file_input.set_input_files(proof_path)
+                print(f"✅ 已上传第 {idx + 1} 个文件: {os.path.basename(proof_path)}")
+            else:
+                print(f"⚠️ 文件不存在: {proof_path}")
+
+            human_delay(1500, 2000)
+
+        print("✅ 其他证明文件上传完成")
 
 
 def open_complaint_form(page):
@@ -369,10 +553,10 @@ def main(args):
     task_id = args.task_id or f"uc_{int(time.time())}"
     cookie = args.cookie
     proof_file = args.proof_file
-    proxy_file = args.proxy_file
     other_proof_files = args.other_proof_files.split(',') if args.other_proof_files else []
     description = args.description
     identity = args.identity
+    agent = args.agent
     rights_holder = args.rights_holder
     complaint_type = args.complaint_type
     copyright_type = args.copyright_type
@@ -496,30 +680,31 @@ def main(args):
 
             open_complaint_form(page)
             fill_initial_form(
-                page, identity, rights_holder, complaint_type, copyright_type,
-                module, content_type, description, proof_file, proxy_file, other_proof_files
+                page, identity, agent, rights_holder, complaint_type, copyright_type,
+                module, content_type, description, proof_file, other_proof_files
             )
 
             for index, excel_file in enumerate(excel_files, start=1):
                 result["current_batch"] = index
                 print(f"\n===== 开始第 {index}/{len(excel_files)} 批 =====")
                 upload_batch_excel(page, excel_file)
-                submit_form(page)
-
-                if index < len(excel_files):
-                    click_continue_in_success_dialog(page)
-                    update_batch_result(result, index, "completed")
-                    human_delay(1500, 2500)
-                else:
-                    click_list_in_success_dialog(page)
-                    update_batch_result(result, index, "completed")
-
-            complaint_numbers = read_latest_complaint_numbers(page, len(excel_files))
-            result["complaint_numbers"] = complaint_numbers
-            result["complaint_number"] = complaint_numbers[0] if complaint_numbers else None
-            result["status"] = "completed"
-            if len(complaint_numbers) != len(excel_files):
-                result["error"] = f"投诉已提交，但仅获取到 {len(complaint_numbers)} 个投诉单号"
+                # === 以下步骤暂时注释，待测试后再放开 ===
+                # submit_form(page)
+                #
+                # if index < len(excel_files):
+                #     click_continue_in_success_dialog(page)
+                #     update_batch_result(result, index, "completed")
+                #     human_delay(1500, 2500)
+                # else:
+                #     click_list_in_success_dialog(page)
+                #     update_batch_result(result, index, "completed")
+                #
+                # complaint_numbers = read_latest_complaint_numbers(page, len(excel_files))
+                # result["complaint_numbers"] = complaint_numbers
+                # result["complaint_number"] = complaint_numbers[0] if complaint_numbers else None
+                # result["status"] = "completed"
+                # if len(complaint_numbers) != len(excel_files):
+                #     result["error"] = f"投诉已提交，但仅获取到 {len(complaint_numbers)} 个投诉单号"
 
         except Exception as e:
             batch_no = result.get("current_batch") or 1
@@ -542,10 +727,10 @@ if __name__ == "__main__":
     parser.add_argument("--excel-files", type=str, help="Excel文件路径列表JSON")
     parser.add_argument("--batch-metadata", type=str, help="批次元数据JSON")
     parser.add_argument("--proof-file", type=str, help="证明文件路径")
-    parser.add_argument("--proxy-file", type=str, help="委托代理文件路径")
     parser.add_argument("--other-proof-files", type=str, help="其他证明文件，逗号分隔")
     parser.add_argument("--description", type=str, required=True, help="投诉描述")
     parser.add_argument("--identity", type=str, required=True, help="身份类型")
+    parser.add_argument("--agent", type=str, required=True, help="代理人/权利人")
     parser.add_argument("--rights-holder", type=str, required=True, help="权利人名称")
     parser.add_argument("--complaint-type", type=str, help="投诉类型")
     parser.add_argument("--copyright-type", type=str, help="著作权类型")
