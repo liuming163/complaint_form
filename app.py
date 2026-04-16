@@ -304,8 +304,6 @@ def submit_uc_form():
         missing_fields.append('Excel批量导入')
     if not request.files.get('proof_file') or not request.files['proof_file'].filename:
         missing_fields.append('证明文件')
-    if identity == '代理人' and (not request.files.get('proxy_file') or not request.files['proxy_file'].filename):
-        missing_fields.append('委托代理文件')
 
     if missing_fields:
         return jsonify({'success': False, 'error': '缺少必填项：' + '、'.join(missing_fields)}), 400
@@ -331,15 +329,12 @@ def submit_uc_form():
 
         saved_files = {
             'excel_file': excel_filename,
-            'proxy_file': save_uploaded_file(request.files.get('proxy_file'), submission_dir, 'proxy'),
             'proof_file': save_uploaded_file(request.files.get('proof_file'), submission_dir, 'proof'),
             'other_proof_files': []
         }
 
         if not saved_files['proof_file']:
             return jsonify({'success': False, 'error': '证明文件保存失败'}), 400
-        if identity == '代理人' and not saved_files['proxy_file']:
-            return jsonify({'success': False, 'error': '委托代理文件保存失败'}), 400
 
         for index, file_storage in enumerate(request.files.getlist('other_proof_file')):
             saved_name = save_uploaded_file(file_storage, submission_dir, f'other_{index + 1}')
@@ -408,7 +403,6 @@ def submit_uc_form():
         }
 
         proof_file_path = os.path.join(submission_dir, saved_files['proof_file'])
-        proxy_file_path = os.path.join(submission_dir, saved_files['proxy_file']) if saved_files['proxy_file'] else ''
         other_proof_paths = [os.path.join(submission_dir, f) for f in saved_files['other_proof_files']]
 
         # 追加自定义模板中匹配到的其他证明文件（来自 static/imgs/）
@@ -434,10 +428,10 @@ def submit_uc_form():
             batch_files,
             payload['form']['cookie'],
             proof_file_path,
-            proxy_file_path,
             other_proof_paths,
             payload['form']['description'],
             payload['form']['identity'],
+            payload['form']['agent'],
             rights_holder,
             complaint_category,
             copyright_type,
@@ -511,7 +505,7 @@ def download_custom_template():
             ],
             '可选值': [
                 '权利人、代理人', '北京和晞科技有限公司、刘明',
-                '腾讯科技（北京）有限公司、深圳市腾讯计算机系统有限公司、上海腾讯企鹅影视文化传播有限公司、北京卡路里科技有限公司', '知识产权、人身权',
+                '腾讯科技（北京）有限公司、深圳市腾讯计算机系统有限公司、上海腾讯企鹅影视文化传播有限公司、上海宽娱数码科技有限公司、北京卡路里科技有限公司', '知识产权、人身权',
                 '著作权（含视频、图文、图集等）、商标、专利、其他知识产权',
                 '头条内容、大鱼号账号、UC网盘、神马搜索',
                 '影视剧集、其他视频、小说、漫画、图片、文章、软件/游戏、其他',
@@ -759,7 +753,6 @@ def upload_custom_template():
             'excel_rows': excel_rows,
             'files': {
                 'proof_file': proof_file,
-                'proxy_file': None,  # 不再使用委托代理文件
                 'other_proof_files': other_proof_files
             }
         }
@@ -806,8 +799,8 @@ def serve_custom_template_file(template_id, filename):
     return send_file(file_path)
 
 
-def run_complaint_script(task_id, excel_files, cookie, proof_file, proxy_file, other_proof_files, description,
-                         identity, rights_holder, complaint_category, copyright_type, module, content_type,
+def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_files, description,
+                         identity, agent, rights_holder, complaint_category, copyright_type, module, content_type,
                          batch_metadata):
     """在后台线程中执行UC投诉自动化脚本"""
     import sys
@@ -820,9 +813,9 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, proxy_file, o
         '--task-id', task_id,
         '--excel-files', json.dumps(excel_files, ensure_ascii=False),
         '--proof-file', proof_file if proof_file else '',
-        '--proxy-file', proxy_file if proxy_file else '',
         '--description', description,
         '--identity', identity,
+        '--agent', agent,
         '--rights-holder', rights_holder,
         '--module', module,
         '--content-type', content_type,
