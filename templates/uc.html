@@ -1063,6 +1063,8 @@ function applyCustomTemplateData(data) {
             dt.items.add(blob);
             document.getElementById('proof_file_input').files = dt.files;
             handleFileUpload(document.getElementById('proof_file_input'), 'proofFileBox', 'proofFilePlaceholder', 'proofFilePreview', 'proofFileNonImg', 'proofFileInfo');
+            // 证明文件显示文件名
+            document.getElementById('proofFileInfo').textContent = '已选择：' + files.proof_file.split('/').pop();
         }).catch(() => {
             document.getElementById('proofFileInfo').textContent = '文件加载失败：' + files.proof_file;
         });
