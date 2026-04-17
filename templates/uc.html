@@ -778,6 +778,10 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
 
     const formData = new FormData(this);
     formData.set('cookie', cookieValue);
+    // 如果有自定义模板的作品名称，也传给后端
+    if (window.customTemplateWorkName) {
+        formData.set('作品名称', window.customTemplateWorkName);
+    }
 
     // 重新锁定这些字段
     document.querySelectorAll('input[name="identity"], input[name="complaint_category"], input[name="complaint_type"], input[name="module"], input[name="content_type"]').forEach(el => el.disabled = true);
@@ -1153,6 +1157,8 @@ function applyCustomTemplateData(data) {
     if (excelRows && excelRows.length > 0) {
         // 将excel数据存储在表单上用于后续提交
         window.customTemplateExcelRows = excelRows;
+        // 保存作品名称用于提交
+        window.customTemplateWorkName = formData['作品名称'] || '';
         const excelInfo = document.getElementById('excelInfo');
         excelInfo.textContent = `已选择：自定义模板投诉内容（共 ${excelRows.length} 行）`;
     }

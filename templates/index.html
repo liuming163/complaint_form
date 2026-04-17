@@ -115,6 +115,7 @@ function refreshUcStatus() {
                             <tr>
                                 <th>时间</th>
                                 <th>采集账号</th>
+                                <th>作品名称</th>
                                 <th>投诉单号</th>
                                 <th>脚本执行状态</th>
                             </tr>
@@ -126,14 +127,13 @@ function refreshUcStatus() {
                     let timeStr = '-';
                     if (item.submitted_at) {
                         const d = new Date(item.submitted_at);
-                        timeStr = d.toLocaleString('zh-CN', {
-                            month: '2-digit', day: '2-digit',
-                            hour: '2-digit', minute: '2-digit'
-                        });
+                        const pad = n => String(n).padStart(2, '0');
+                        timeStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
                     }
 
                     // 采集账号
                     let accountStr = item.collect_account || '-';
+                    let workNameStr = item.work_name || '-';
 
                     // 投诉单号
                     let complaintStr = '-';
@@ -156,6 +156,7 @@ function refreshUcStatus() {
                         <tr>
                             <td>${timeStr}</td>
                             <td>${accountStr}</td>
+                            <td>${workNameStr}</td>
                             <td>${complaintStr}</td>
                             <td><span class="status-badge ${statusClass}">${item.status}</span></td>
                         </tr>
