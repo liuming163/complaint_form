@@ -571,12 +571,18 @@ def download_custom_template():
             df_sheet2.to_excel(writer, sheet_name='批量导入Excel', index=False)
             df_sheet3.to_excel(writer, sheet_name='填写说明', index=False, header=False)
 
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_sheet1.to_excel(writer, sheet_name='表单内容', index=False)
+            df_sheet2.to_excel(writer, sheet_name='批量导入Excel', index=False)
+            df_sheet3.to_excel(writer, sheet_name='填写说明', index=False, header=False)
+
         output.seek(0)
         return send_file(
             output,
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             as_attachment=True,
-            attachment_filename='custom_template.xlsx'
+            download_name='custom_template.xlsx'
         )
     except Exception as e:
         return jsonify({'success': False, 'error': f'生成模板失败：{str(e)}'}), 500
