@@ -13,7 +13,7 @@
     <div>
         <a href="/accounts" class="back-btn"><i class="fas fa-user-cog"></i> 投诉账号管理</a>
         <a href="/works" class="back-btn" style="margin-left:8px"><i class="fas fa-images"></i> 作品覆盖列表</a>
-        <a href="/" class="back-btn" style="margin-left:8px"><i class="fas fa-arrow-left"></i> 返回首页</a>
+        {% if not is_index %}<a href="/" class="back-btn" style="margin-left:8px"><i class="fas fa-arrow-left"></i> 返回首页</a>{% endif %}
     </div>
 </header>
 

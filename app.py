@@ -134,7 +134,7 @@ start_queue_worker()
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', is_index=True)
 
 
 @app.route('/works')
