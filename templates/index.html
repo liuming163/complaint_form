@@ -85,9 +85,25 @@
 
 <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
 <script>
+let isRefreshing = false;
+
 function refreshUcStatus() {
+    if (isRefreshing) return;
+    isRefreshing = true;
+
     const container = document.getElementById('ucStatusTable');
-    container.innerHTML = '<div class="status-loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>';
+    // 刷新按钮在 .status-card-header 里，不在 container 里
+    const cardHeader = container.closest('.status-card').querySelector('.status-card-header');
+    const refreshBtn = cardHeader ? cardHeader.querySelector('button') : null;
+
+    container.innerHTML = '<div class="status-loading"><i class="fas fa-spinner fa-spin"></i> 刷新中...</div>';
+    if (refreshBtn) {
+        refreshBtn.disabled = true;
+        const icon = refreshBtn.querySelector('i');
+        const text = refreshBtn.childNodes[refreshBtn.childNodes.length - 1];
+        if (icon) icon.classList.add('fa-spin');
+        if (text && text.nodeType === Node.TEXT_NODE) text.textContent = ' 刷新中...';
+    }
 
     fetch('/api/uc/status_list')
         .then(res => res.json())
@@ -163,6 +179,19 @@ function refreshUcStatus() {
                     加载失败: ${err}
                 </div>
             `;
+        })
+        .finally(() => {
+            // 锁定2秒后释放，防止请求很快完成时用户还能继续点
+            setTimeout(() => {
+                isRefreshing = false;
+                if (refreshBtn) {
+                    refreshBtn.disabled = false;
+                    const icon = refreshBtn.querySelector('i');
+                    const text = refreshBtn.childNodes[refreshBtn.childNodes.length - 1];
+                    if (icon) icon.classList.remove('fa-spin');
+                    if (text && text.nodeType === Node.TEXT_NODE) text.textContent = ' 刷新';
+                }
+            }, 2000);
         });
 }
 
