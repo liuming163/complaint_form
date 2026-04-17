@@ -310,6 +310,8 @@ function lockAllFieldsExceptAccount() {
     document.querySelectorAll('input[name="module"]').forEach(el => el.disabled = true);
     document.querySelectorAll('input[name="content_type"]').forEach(el => el.disabled = true);
     document.querySelectorAll('textarea[name="description"]').forEach(el => el.disabled = true);
+    // Cookie框始终禁用
+    document.querySelector('textarea[name="cookie"]').disabled = true;
 
     // 文件上传input保持启用状态以便提交，但通过CSS pointer-events防止点击
     document.querySelectorAll('#excelFile, #proof_file_input, #other_proof_file_input').forEach(el => {
@@ -329,8 +331,8 @@ function showHoverPreview(file, boxEl, isPdf) {
         previewBox.innerHTML = '';
         previewBox.className = '';
 
-        // 优先复用 boxEl 里已渲染好的缩略图（blob URL）
-        const existingImg = boxEl.querySelector('img[src^="blob:"]');
+        // 优先复用 boxEl 里已渲染好的缩略图（blob URL 或 data:image URL）
+        const existingImg = boxEl.querySelector('img[src^="blob:"], img[src^="data:image"]');
         if (existingImg) {
             const img = document.createElement('img');
             img.src = existingImg.src;
