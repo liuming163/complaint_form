@@ -42,5 +42,40 @@
     "status": "0",
     "created_at": "2026-04-16T15:01:22.487500",
     "updated_at": "2026-04-17T11:25:50.842656"
+  },
+  {
+    "id": "58a4cba0ab48",
+    "platform_code": "uc",
+    "platform_name": "UC",
+    "pingtai": "UC",
+    "user": "19311219152",
+    "cookie": "426455342454",
+    "status": "0",
+    "created_at": "2026-04-20T15:21:24.015091",
+    "updated_at": "2026-04-20T15:21:24.015091"
+  },
+  {
+    "id": "37a8d98186ca",
+    "platform_code": "uc",
+    "platform_name": "UC",
+    "pingtai": "UC",
+    "user": "test001",
+    "cookie": "test_cookie",
+    "account_purpose": "UC投诉专用",
+    "status": "0",
+    "created_at": "2026-04-20T15:28:41.990446",
+    "updated_at": "2026-04-20T15:28:41.990446"
+  },
+  {
+    "id": "bac0d231c91c",
+    "platform_code": "quark",
+    "platform_name": "夸克",
+    "pingtai": "夸克",
+    "user": "kk002",
+    "cookie": "rrff",
+    "account_purpose": "夸克测试",
+    "status": "0",
+    "created_at": "2026-04-20T15:29:39.198080",
+    "updated_at": "2026-04-20T15:29:39.198080"
   }
 ]

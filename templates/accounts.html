@@ -32,12 +32,13 @@
                     <tr>
                         <th>平台名称</th>
                         <th>投诉账号</th>
+                        <th>账号用途</th>
                         <th>Cookie</th>
                         <th>操作</th>
                     </tr>
                 </thead>
                 <tbody id="accountsTableBody">
-                    <tr><td colspan="4" class="text-center text-muted py-4">加载中...</td></tr>
+                    <tr><td colspan="5" class="text-center text-muted py-4">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -75,6 +76,10 @@
                 <div class="mb-3">
                     <label class="form-label">Cookie</label>
                     <textarea class="form-control" id="inputCookie" rows="3" placeholder="请输入Cookie信息" onblur="this.value = this.value.trim()"></textarea>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">账号用途</label>
+                    <input type="text" class="form-control" id="inputPurpose" placeholder="请输入账号用途" onblur="this.value = this.value.trim()">
                 </div>
             </div>
             <div class="modal-footer">
@@ -165,6 +170,7 @@ function renderTable(accounts) {
         tr.innerHTML = `
             <td>${escapeHtml(acc.platform_name)}</td>
             <td>${escapeHtml(acc.user)}</td>
+            <td>${escapeHtml(acc.account_purpose || '-')}</td>
             <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(acc.cookie)}</td>
             <td>
                 <button class="btn btn-sm btn-outline-primary" onclick="openUpdateModal('${acc.id}')">
@@ -186,6 +192,7 @@ function openAddModal() {
     document.getElementById('inputPlatform').value = 'uc';
     document.getElementById('inputAccount').value = '';
     document.getElementById('inputCookie').value = '';
+    document.getElementById('inputPurpose').value = '';
     addModal.show();
 }
 
@@ -193,6 +200,7 @@ async function submitAddAccount() {
     const platform_code = document.getElementById('inputPlatform').value;
     const user = document.getElementById('inputAccount').value.trim();
     const cookie = document.getElementById('inputCookie').value.trim();
+    const account_purpose = document.getElementById('inputPurpose').value.trim();
 
     if (!platform_code || !user || !cookie) {
         alert('请填写所有必填项');
@@ -202,7 +210,7 @@ async function submitAddAccount() {
     const res = await fetch('/api/accounts/add', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({platform_code, user, cookie})
+        body: JSON.stringify({platform_code, user, cookie, account_purpose})
     });
     const data = await res.json();
 
