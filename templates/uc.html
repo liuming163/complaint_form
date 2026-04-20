@@ -414,7 +414,7 @@ function loadUcAccounts() {
             data.data.forEach(acc => {
                 const opt = document.createElement('option');
                 opt.value = acc.user;
-                opt.textContent = acc.user;
+                opt.textContent = acc.user + (acc.account_purpose ? ' - ' + acc.account_purpose : '');
                 select.appendChild(opt);
                 ucAccountsMap[acc.user] = acc;
             });
