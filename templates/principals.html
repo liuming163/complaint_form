@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>被代理人信息管理</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+<div id="toastContainer" style="position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;"></div>
+<header class="main-header shadow-sm">
+    <div class="logo-area"><i class="fas fa-building"></i> 被代理人信息管理</div>
+    <div>
+        <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i> 返回首页</a>
+    </div>
+</header>
+
+<div class="form-page-wrap">
+    <div class="form-card">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="section-title mb-0"><i class="fas fa-list"></i> 被代理人列表</div>
+            <button class="btn btn-primary" onclick="openAddModal()">
+                <i class="fas fa-plus"></i> 添加被代理人
+            </button>
+        </div>
+        <div class="mb-3">
+            <input type="text" id="searchInput" class="form-control" placeholder="搜索平台名称、投诉账号或被代理人信息..." autocomplete="off">
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle" id="principalsTable">
+                <thead>
+                    <tr>
+                        <th>平台名称</th>
+                        <th>投诉账号</th>
+                        <th>账号用途</th>
+                        <th>被代理人信息</th>
+                    </tr>
+                </thead>
+                <tbody id="principalsTableBody">
+                    <tr><td colspan="4" class="text-center text-muted py-4">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div id="emptyState" class="text-center text-muted py-5" style="display:none">
+            <i class="fas fa-inbox fa-3x mb-3"></i>
+            <div>暂无数据</div>
+        </div>
+        <div id="searchEmpty" class="text-center text-muted py-5" style="display:none">
+            <i class="fas fa-search fa-3x mb-3"></i>
+            <div>未找到匹配的记录</div>
+        </div>
+    </div>
+</div>
+
+<!-- 添加被代理人弹窗 -->
+<div class="modal fade" id="addModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fas fa-plus me-2"></i>添加被代理人</div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">平台名称</label>
+                    <select class="form-select" id="inputPlatform" onchange="onPlatformChange()">
+                        <option value="uc">UC</option>
+                        <option value="quark">夸克</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">投诉账号</label>
+                    <select class="form-select" id="inputAccount">
+                        <option value="">请先选择平台</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">被代理人信息</label>
+                    <input type="text" class="form-control" id="inputPrincipal" placeholder="请输入被代理人信息，如：腾讯科技（北京）有限公司" onblur="this.value = this.value.trim()">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="submitAddPrincipal()">确认添加</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+<script>
+let allPrincipals = [];
+let allAccounts = [];
+let debounceTimer = null;
+let addModal = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    addModal = new bootstrap.Modal(document.getElementById('addModal'));
+    loadAccounts();
+    loadPrincipals();
+});
+
+async function loadAccounts() {
+    const res = await fetch('/api/accounts/list');
+    const data = await res.json();
+    if (!data.success) return;
+    allAccounts = data.data;
+}
+
+function onPlatformChange() {
+    const platformCode = document.getElementById('inputPlatform').value;
+    const accountSelect = document.getElementById('inputAccount');
+    accountSelect.innerHTML = '<option value="">请选择投诉账号</option>';
+    const filtered = allAccounts.filter(a => a.platform_code === platformCode);
+    filtered.forEach(acc => {
+        const opt = document.createElement('option');
+        opt.value = acc.user;
+        opt.textContent = acc.user;
+        accountSelect.appendChild(opt);
+    });
+}
+
+async function loadPrincipals() {
+    const res = await fetch('/api/principals/list');
+    const data = await res.json();
+    if (!data.success) {
+        document.getElementById('principalsTableBody').innerHTML = '<tr><td colspan="3" class="text-center text-danger py-4">加载失败</td></tr>';
+        return;
+    }
+    allPrincipals = data.data;
+    renderTable(allPrincipals);
+}
+
+function renderTable(principals) {
+    const tbody = document.getElementById('principalsTableBody');
+    const emptyState = document.getElementById('emptyState');
+    const searchEmpty = document.getElementById('searchEmpty');
+    const table = document.getElementById('principalsTable');
+    const searchValue = document.getElementById('searchInput').value.trim();
+
+    tbody.innerHTML = '';
+
+    if (principals.length === 0) {
+        table.style.display = 'none';
+        emptyState.style.display = searchValue ? 'none' : 'flex';
+        searchEmpty.style.display = searchValue ? 'flex' : 'none';
+        return;
+    }
+
+    table.style.display = '';
+    emptyState.style.display = 'none';
+    searchEmpty.style.display = 'none';
+
+    principals.forEach(item => {
+        const tr = document.createElement('tr');
+        let html = '';
+        if (item.rowspan > 0) {
+            html += `<td rowspan="${item.rowspan}" style="font-weight:bold;vertical-align:middle;">${escapeHtml(item.platform_name)}</td>`;
+            html += `<td rowspan="${item.rowspan}" style="font-weight:bold;vertical-align:middle;">${escapeHtml(item.account_user)}</td>`;
+            html += `<td rowspan="${item.rowspan}" style="font-weight:bold;vertical-align:middle;">${escapeHtml(item.account_purpose || '-')}</td>`;
+        }
+        html += `<td>${escapeHtml(item.principal_name)}</td>`;
+        tr.innerHTML = html;
+        tbody.appendChild(tr);
+    });
+}
+
+function showToast(message, isError = false) {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = 'toast show';
+    toast.style.cssText = 'min-width:200px;background:' + (isError ? '#f8d7da;color:#721c24' : '#d4edda;color:#155724') + ';border:1px solid ' + (isError ? '#f5c6cb':'#c3e6cb') + ';border-radius:4px;padding:12px 16px;box-shadow:0 4px 12px rgba(0,0,0,0.15);font-size:14px;animation:slideIn 0.3s ease';
+    toast.innerHTML = isError ? '<i class="fas fa-times-circle me-2"></i>' + message : '<i class="fas fa-check-circle me-2"></i>' + message;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease forwards';
+        setTimeout(() => toast.remove(), 300);
+    }, 5000);
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function fuzzyMatch(text, keyword) {
+    if (!keyword) return true;
+    text = text.toLowerCase();
+    keyword = keyword.toLowerCase();
+    // 简单模糊：关键词所有字符按顺序出现在文本中
+    let ki = 0;
+    for (let i = 0; i < text.length && ki < keyword.length; i++) {
+        if (text[i] === keyword[ki]) ki++;
+    }
+    return ki === keyword.length;
+}
+
+function openAddModal() {
+    document.getElementById('inputPlatform').value = 'uc';
+    document.getElementById('inputPrincipal').value = '';
+    onPlatformChange();
+    addModal.show();
+}
+
+async function submitAddPrincipal() {
+    const platform_code = document.getElementById('inputPlatform').value;
+    const account_user = document.getElementById('inputAccount').value.trim();
+    const principal_name = document.getElementById('inputPrincipal').value.trim();
+
+    if (!platform_code || !account_user || !principal_name) {
+        showToast('请填写所有必填项', true);
+        return;
+    }
+
+    const res = await fetch('/api/principals/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({platform_code, account_user, principal_name})
+    });
+    const data = await res.json();
+
+    if (!data.success) {
+    showToast('添加失败：' + data.error, true);
+        return;
+    }
+
+    showToast('添加成功');
+    addModal.hide();
+}
+
+document.getElementById('addModal').addEventListener('hidden.bs.modal', () => {
+    loadPrincipals();
+});
+
+document.getElementById('searchInput').addEventListener('input', function(e) {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+        const keyword = e.target.value.trim();
+        if (!keyword) {
+            renderTable(allPrincipals);
+            return;
+        }
+        const filtered = allPrincipals.filter(item =>
+            fuzzyMatch(item.platform_name, keyword) ||
+            fuzzyMatch(item.account_user, keyword) ||
+            fuzzyMatch(item.principal_name, keyword)
+        );
+        renderTable(filtered);
+    }, 300);
+});
+</script>
+<style>
+@keyframes slideIn {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+@keyframes slideOut {
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(20px); }
+}
+</style>
+</body>
+</html>

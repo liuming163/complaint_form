@@ -74,17 +74,13 @@
                 </select>
             </div>
             <div id="principalWrap" class="locked-section">
-                <div class="mb-3">
-                    <label class="form-label">被代理人（权利人）信息</label>
-                    <select class="form-select" name="principal" required disabled>
-                        <option value="">请选择被代理人</option>
-                        <option>腾讯科技（北京）有限公司</option>
-                        <option>深圳市腾讯计算机系统有限公司</option>
-                        <option>上海腾讯企鹅影视文化传播有限公司</option>
-                        <option>北京卡路里科技有限公司</option>
-                        <option>上海宽娱数码科技有限公司</option>
-                    </select>
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <label class="form-label mb-0">被代理人（权利人）信息</label>
+                    <a href="/principals" target="_blank" class="small"><i class="fas fa-cog"></i> 管理被代理人</a>
                 </div>
+                <select class="form-select" name="principal" required disabled>
+                    <option value="">请先选择采集账号</option>
+                </select>
             </div>
         </div>
 
@@ -432,9 +428,34 @@ function onCollectAccountChange() {
         const acc = ucAccountsMap[user];
         if (acc) {
             cookieTextarea.value = acc.cookie;
+            loadPrincipalsForAccount(user);
+        } else {
+            cookieTextarea.value = '';
         }
     } else {
         cookieTextarea.value = '';
+    }
+}
+
+async function loadPrincipalsForAccount(accountUser) {
+    const principalSelect = document.querySelector('select[name="principal"]');
+    principalSelect.innerHTML = '<option value="">加载中...</option>';
+    try {
+        const res = await fetch(`/api/principals/list?platform_code=uc&account_user=${encodeURIComponent(accountUser)}`);
+        const data = await res.json();
+        principalSelect.innerHTML = '<option value="">请选择被代理人</option>';
+        if (data.success && data.data.length > 0) {
+            data.data.forEach(item => {
+                const opt = document.createElement('option');
+                opt.value = item.principal_name;
+                opt.textContent = item.principal_name;
+                principalSelect.appendChild(opt);
+            });
+        } else {
+            principalSelect.innerHTML += '<option value="" disabled>暂无可用被代理人，请先添加</option>';
+        }
+    } catch (e) {
+        principalSelect.innerHTML = '<option value="">加载失败</option>';
     }
 }
 
@@ -1071,11 +1092,17 @@ function applyCustomTemplateData(data) {
         document.getElementById('identitySelect').value = formData['代理人/权利人'];
     }
 
-    // 3. 填充被代理人
+    // 3. 填充被代理人（先加载该账号的被代理人列表）
     if (formData['被代理人（权利人）信息']) {
-        const principalSelect = document.querySelector('select[name="principal"]');
-        if (principalSelect) {
-            principalSelect.value = formData['被代理人（权利人）信息'];
+        const accountUser = document.getElementById('collectAccountSelect').value;
+        if (accountUser) {
+            loadPrincipalsForAccount(accountUser).then(() => {
+                const principalSelect = document.querySelector('select[name="principal"]');
+                if (principalSelect) principalSelect.value = formData['被代理人（权利人）信息'];
+            });
+        } else {
+            const principalSelect = document.querySelector('select[name="principal"]');
+            if (principalSelect) principalSelect.value = formData['被代理人（权利人）信息'];
         }
     }
 

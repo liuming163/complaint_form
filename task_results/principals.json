@@ -1,0 +1,52 @@
+{
+  "uc:test": {
+    "platform_code": "uc",
+    "platform_name": "UC",
+    "account_user": "test",
+    "principals": [
+      "腾讯科技"
+    ],
+    "created_at": "2026-04-20T11:16:21.632793"
+  },
+  "uc:uc001": {
+    "platform_code": "uc",
+    "platform_name": "UC",
+    "account_user": "uc001",
+    "principals": [
+      "腾讯科技",
+      "宽娱科技",
+      "阿里云"
+    ],
+    "created_at": "2026-04-20T11:29:41.365064"
+  },
+  "uc:19311219150": {
+    "platform_code": "uc",
+    "platform_name": "UC",
+    "account_user": "19311219150",
+    "principals": [
+      "腾讯科技有限公司",
+      "优酷",
+      "无忧",
+      "微信"
+    ],
+    "created_at": "2026-04-20T11:39:53.435470"
+  },
+  "uc:uc003": {
+    "platform_code": "uc",
+    "platform_name": "UC",
+    "account_user": "uc003",
+    "principals": [
+      "百度"
+    ],
+    "created_at": "2026-04-20T11:47:45.466237"
+  },
+  "quark:kk001": {
+    "platform_code": "quark",
+    "platform_name": "夸克",
+    "account_user": "kk001",
+    "principals": [
+      "阿里云"
+    ],
+    "created_at": "2026-04-20T15:14:30.618331"
+  }
+}

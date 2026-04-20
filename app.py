@@ -145,6 +145,9 @@ def works():
 # 投诉账号管理数据文件
 ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__), 'task_results', 'accounts.json')
 
+# 被代理人信息数据文件
+PRINCIPALS_FILE = os.path.join(os.path.dirname(__file__), 'task_results', 'principals.json')
+
 # 平台映射
 PLATFORM_MAP = {
     'uc': {'platform_name': 'UC', 'pingtai': 'UC'},
@@ -162,9 +165,25 @@ def save_accounts(accounts):
         json.dump(accounts, f, ensure_ascii=False, indent=2)
 
 
+def load_principals():
+    if not os.path.exists(PRINCIPALS_FILE):
+        return {}
+    with open(PRINCIPALS_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_principals(data):
+    with open(PRINCIPALS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 @app.route('/accounts')
 def accounts():
     return render_template('accounts.html')
+
+
+@app.route('/principals')
+def principals():
+    return render_template('principals.html')
 
 
 @app.route('/api/accounts/list')
@@ -198,6 +217,7 @@ def accounts_add():
         'pingtai': PLATFORM_MAP[platform_code]['pingtai'],
         'user': user,
         'cookie': cookie,
+        'account_purpose': data.get('account_purpose', '').strip(),
         'status': '0',
         'created_at': now,
         'updated_at': now,
@@ -225,6 +245,78 @@ def accounts_update_cookie():
         return jsonify({'success': False, 'error': '账号不存在'}), 404
     save_accounts(accounts)
     return jsonify({'success': True})
+
+
+@app.route('/api/principals/list')
+def principals_list():
+    """返回所有账号及其被代理人信息，每行一个被代理人"""
+    principals_data = load_principals()
+    accounts = load_accounts()
+    results = []
+    for acc in accounts:
+        key = f"{acc['platform_code']}:{acc['user']}"
+        entry = principals_data.get(key, {})
+        principals = entry.get('principals', [])
+        count = len(principals) if principals else 1
+        if principals:
+            for i, name in enumerate(principals):
+                results.append({
+                    'platform_code': acc['platform_code'],
+                    'platform_name': acc.get('platform_name', ''),
+                    'account_user': acc['user'],
+                    'account_purpose': acc.get('account_purpose', ''),
+                    'principal_name': name,
+                    'rowspan': count if i == 0 else 0,  # 0 表示不渲染 td
+                })
+        else:
+            results.append({
+                'platform_code': acc['platform_code'],
+                'platform_name': acc.get('platform_name', ''),
+                'account_user': acc['user'],
+                'account_purpose': acc.get('account_purpose', ''),
+                'principal_name': '-',
+                'rowspan': 1,
+            })
+    return jsonify({'success': True, 'data': results})
+
+
+@app.route('/api/principals/add', methods=['POST'])
+def principals_add():
+    """添加被代理人信息，按 (platform_code + account_user) 分组"""
+    data = request.get_json()
+    platform_code = data.get('platform_code', '').strip()
+    account_user = data.get('account_user', '').strip()
+    principal_name = data.get('principal_name', '').strip()
+
+    if not platform_code or not account_user or not principal_name:
+        return jsonify({'success': False, 'error': '平台名称、投诉账号、被代理人信息都不能为空'}), 400
+    if platform_code not in PLATFORM_MAP:
+        return jsonify({'success': False, 'error': '平台编码无效'}), 400
+
+    principals_data = load_principals()
+    key = f"{platform_code}:{account_user}"
+
+    if key not in principals_data:
+        principals_data[key] = {
+            'platform_code': platform_code,
+            'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
+            'account_user': account_user,
+            'principals': [],
+            'created_at': datetime.now().isoformat(),
+        }
+
+    if principal_name in principals_data[key]['principals']:
+        return jsonify({'success': False, 'error': f'该被代理人信息已存在'}), 400
+
+    principals_data[key]['principals'].append(principal_name)
+    save_principals(principals_data)
+
+    return jsonify({'success': True, 'data': {
+        'platform_code': platform_code,
+        'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
+        'account_user': account_user,
+        'principal_name': principal_name,
+    }})
 
 
 @app.route('/api/works/list')
