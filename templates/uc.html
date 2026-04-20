@@ -20,6 +20,22 @@
 
 <div class="form-page-wrap">
 
+    <!-- 账号信息 -->
+    <div class="form-card">
+        <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
+        <div class="mb-3">
+            <label class="form-label">采集账号</label>
+            <select class="form-select" name="collect_account" id="collectAccountSelect" required onchange="onCollectAccountChange()">
+                <option value="">请选择采集账号</option>
+            </select>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Cookie</label>
+            <textarea class="form-control" name="cookie" rows="3" placeholder="请从上方选择采集账号，自动填充Cookie" required disabled></textarea>
+            <div class="form-text">请粘贴完整的Cookie信息，用于身份验证</div>
+        </div>
+    </div>
+
     <!-- 投诉模版 -->
     <div class="form-card mb-4">
         <div class="section-title"><i class="fas fa-clone"></i> 投诉模版</div>
@@ -35,22 +51,6 @@
     </div>
 
     <form id="ucForm" enctype="multipart/form-data">
-
-        <!-- 账号信息 -->
-        <div class="form-card">
-            <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
-            <div class="mb-3">
-                <label class="form-label">采集账号</label>
-                <select class="form-select" name="collect_account" id="collectAccountSelect" required onchange="onCollectAccountChange()">
-                    <option value="">请选择采集账号</option>
-                </select>
-            </div>
-            <div class="mb-3">
-                <label class="form-label">Cookie</label>
-                <textarea class="form-control" name="cookie" rows="3" placeholder="请从上方选择采集账号，自动填充Cookie" required disabled></textarea>
-                <div class="form-text">请粘贴完整的Cookie信息，用于身份验证</div>
-            </div>
-        </div>
 
         <!-- 身份信息 -->
         <div class="form-card">
@@ -1023,6 +1023,14 @@ let currentTemplateId = null;
 function handleCustomTemplateUpload(input) {
     const file = input.files[0];
     if (!file) return;
+
+    // 校验是否已选择采集账号
+    const collectAccount = document.getElementById('collectAccountSelect').value;
+    if (!collectAccount) {
+        alert('请先选择采集账号，再上传自定义模版');
+        input.value = '';
+        return;
+    }
 
     const formData = new FormData();
     formData.append('file', file);
