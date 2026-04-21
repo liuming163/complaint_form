@@ -137,13 +137,10 @@ function refreshUcStatus() {
                     let accountStr = item.collect_account || '-';
                     let workNameStr = item.work_name || '-';
 
-                    // 投诉单号
+                    // 投诉单号（反转数组，使第一次投诉的单号在上）
                     let complaintStr = '-';
                     if (item.complaint_numbers && item.complaint_numbers.length > 0) {
-                        complaintStr = item.complaint_numbers.slice(0, 3).join('<br>');
-                        if (item.complaint_numbers.length > 3) {
-                            complaintStr += '...';
-                        }
+                        complaintStr = item.complaint_numbers.slice().reverse().join('<br>');
                     } else if (item.batch_count) {
                         complaintStr = `${item.batch_count}批(${item.excel_rows}条)`;
                     }
