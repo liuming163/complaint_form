@@ -78,7 +78,7 @@ def create_submission_dir():
     return submission_id, submission_dir
 
 
-def split_excel_into_batches(df, batch_dir, batch_size=2):
+def split_excel_into_batches(df, batch_dir, batch_size=200):
     ensure_dir(batch_dir)
     batches = []
 
@@ -356,7 +356,7 @@ def check_excel():
         rows = len(df)
         if rows <= 0:
             return jsonify({'success': False, 'error': 'Excel 文件没有可提交的数据行'}), 400
-        batch_size = 2
+        batch_size = 200
         batch_count = math.ceil(rows / batch_size)
         return jsonify({
             'success': True,
@@ -415,7 +415,7 @@ def submit_uc_form():
         rows = len(df)
         if rows <= 0:
             return jsonify({'success': False, 'error': 'Excel 文件没有可提交的数据行'}), 400
-        batch_size = 2
+        batch_size = 200
         batch_dir = os.path.join(submission_dir, 'batches')
         batches = split_excel_into_batches(df, batch_dir, batch_size=batch_size)
 
