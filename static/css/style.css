@@ -175,6 +175,11 @@ body { background-color: #f8f9fa; font-size: 14px; }
     opacity: 0.7;
 }
 
+.locked-section a,
+.locked-section label {
+    pointer-events: auto;
+}
+
 .locked-upload {
     pointer-events: none !important;
 }
