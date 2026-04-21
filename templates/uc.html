@@ -800,6 +800,8 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
     });
 
     const formData = new FormData(this);
+    const collectAccountValue = document.getElementById('collectAccountSelect').value;
+    formData.set('collect_account', collectAccountValue);
     formData.set('cookie', cookieValue);
     // 如果有自定义模板的作品名称，也传给后端
     if (window.customTemplateWorkName) {
