@@ -755,21 +755,39 @@ def upload_custom_template():
 
         # 解析Sheet2批量导入数据
         excel_rows = []
+        empty_rows = []
         try:
-            for _, row in sheet2_data.iterrows():
-                if pd.notna(row.iloc[0]) and str(row.iloc[0]).strip():
-                    excel_rows.append({
-                        '侵权链接': str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else '',
-                        '对应原创链接/对应访问码': str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else '',
-                        '作品名称': str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
-                    })
+            for i, row in sheet2_data.iterrows():
+                # 检测空行：侵权链接列为空或仅空白字符
+                if not (pd.notna(row.iloc[0]) and str(row.iloc[0]).strip()):
+                    empty_rows.append(f'第{i + 2}行')  # +2 因为第1行是标题
+                    continue
+                excel_rows.append({
+                    '侵权链接': str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else '',
+                    '对应原创链接/对应访问码': str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else '',
+                    '作品名称': str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
+                })
         except Exception as e:
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': f'Sheet2解析失败：{str(e)}'}), 400
 
+        if empty_rows:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': 'Sheet2中存在空行：' + '、'.join(empty_rows) + '，请删除空行后再上传'}), 400
+
         if not excel_rows:
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': 'Sheet2为空，请填写后重新上传'}), 400
+
+        # 校验Sheet2 A列（侵权链接）格式：每行必须以 http 或 https 开头
+        invalid_rows = []
+        for i, row in enumerate(excel_rows, start=2):  # start=2 因为第1行是标题
+            link = row.get('侵权链接', '')
+            if link and not link.startswith('http://') and not link.startswith('https://'):
+                invalid_rows.append(f'第{i}行')
+        if invalid_rows:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': 'Sheet2 A列（侵权链接）格式错误：' + '、'.join(invalid_rows) + '，必须以 http:// 或 https:// 开头'}), 400
 
         # 获取基本信息
         principal = form_data.get('被代理人（权利人）信息', '')  # 如 "北京uc"
