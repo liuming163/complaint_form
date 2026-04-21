@@ -689,22 +689,22 @@ def main(args):
                 print(f"\n===== 开始第 {index}/{len(excel_files)} 批 =====")
                 upload_batch_excel(page, excel_file)
                 # === 以下步骤暂时注释，待测试后再放开 ===
-                # submit_form(page)
-                #
-                # if index < len(excel_files):
-                #     click_continue_in_success_dialog(page)
-                #     update_batch_result(result, index, "completed")
-                #     human_delay(1500, 2500)
-                # else:
-                #     click_list_in_success_dialog(page)
-                #     update_batch_result(result, index, "completed")
-                #
-                # complaint_numbers = read_latest_complaint_numbers(page, len(excel_files))
-                # result["complaint_numbers"] = complaint_numbers
-                # result["complaint_number"] = complaint_numbers[0] if complaint_numbers else None
-                # result["status"] = "completed"
-                # if len(complaint_numbers) != len(excel_files):
-                #     result["error"] = f"投诉已提交，但仅获取到 {len(complaint_numbers)} 个投诉单号"
+                submit_form(page)
+
+                if index < len(excel_files):
+                    click_continue_in_success_dialog(page)
+                    update_batch_result(result, index, "completed")
+                    human_delay(1500, 2500)
+                else:
+                    click_list_in_success_dialog(page)
+                    update_batch_result(result, index, "completed")
+
+                complaint_numbers = read_latest_complaint_numbers(page, len(excel_files))
+                result["complaint_numbers"] = complaint_numbers
+                result["complaint_number"] = complaint_numbers[0] if complaint_numbers else None
+                result["status"] = "completed"
+                if len(complaint_numbers) != len(excel_files):
+                    result["error"] = f"投诉已提交，但仅获取到 {len(complaint_numbers)} 个投诉单号"
 
         except Exception as e:
             batch_no = result.get("current_batch") or 1
