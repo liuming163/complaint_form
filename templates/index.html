@@ -119,6 +119,7 @@ function refreshUcStatus() {
                                 <th>作品名称</th>
                                 <th>投诉单号</th>
                                 <th>脚本执行状态</th>
+                                <th>预估完成时间</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -153,6 +154,15 @@ function refreshUcStatus() {
                     else if (item.status === '执行中') statusClass = 'status-running';
                     else if (item.status === '失败') statusClass = 'status-failed';
 
+                    // 预估完成时间：执行中时为 提交时间 + 批次数*1分钟；其他状态显示 -
+                    let estimatedTimeStr = '-';
+                    if (item.status === '执行中' && item.submitted_at && item.batch_count) {
+                        const startTime = new Date(item.submitted_at);
+                        startTime.setMinutes(startTime.getMinutes() + item.batch_count);
+                        const pad = n => String(n).padStart(2, '0');
+                        estimatedTimeStr = `${startTime.getFullYear()}-${pad(startTime.getMonth() + 1)}-${pad(startTime.getDate())} ${pad(startTime.getHours())}:${pad(startTime.getMinutes())}`;
+                    }
+
                     html += `
                         <tr>
                             <td>${timeStr}</td>
@@ -160,6 +170,7 @@ function refreshUcStatus() {
                             <td>${workNameStr}</td>
                             <td>${complaintStr}</td>
                             <td><span class="status-badge ${statusClass}">${item.status}</span></td>
+                            <td>${estimatedTimeStr}</td>
                         </tr>
                     `;
                 });
