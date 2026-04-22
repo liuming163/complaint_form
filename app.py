@@ -12,6 +12,7 @@ import zipfile
 import io
 from datetime import datetime
 from pathlib import Path
+from openpyxl import load_workbook
 from uuid import uuid4
 
 import pandas as pd
@@ -714,6 +715,19 @@ def upload_custom_template():
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': f'Excel解析失败：{str(e)}'}), 400
 
+        # 检测Sheet2是否有空行（通过openpyxl读取真实行数，与pandas读取结果对比）
+        try:
+            wb_check = load_workbook(excel_path)
+            ws_sheet2 = wb_check['批量导入Excel']
+            actual_data_rows = ws_sheet2.max_row - 1  # 减去标题行
+            pandas_data_rows = len(sheet2_data)
+            if actual_data_rows > pandas_data_rows:
+                empty_count = actual_data_rows - pandas_data_rows
+                shutil.rmtree(template_dir, ignore_errors=True)
+                return jsonify({'success': False, 'error': f'Sheet2中存在 {empty_count} 行空行，请删除空行后再上传'}), 400
+        except Exception:
+            pass  # 忽略openpyxl读取错误，以pandas结果为准
+
         # 辅助函数：标准化括号（全角转半角）
         def normalize_paren(s):
             return s.replace('（', '(').replace('）', ')')
@@ -754,13 +768,11 @@ def upload_custom_template():
 
         # 解析Sheet2批量导入数据
         excel_rows = []
-        empty_rows = []
         try:
             for i, row in sheet2_data.iterrows():
                 # 检测空行：侵权链接列为空或仅空白字符
                 if not (pd.notna(row.iloc[0]) and str(row.iloc[0]).strip()):
-                    empty_rows.append(f'第{i + 2}行')  # +2 因为第1行是标题
-                    continue
+                    continue  # 空行已被前面的 openpyxl 检测捕获，这里静默跳过
                 excel_rows.append({
                     '侵权链接': str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else '',
                     '对应原创链接/对应访问码': str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else '',
@@ -769,10 +781,6 @@ def upload_custom_template():
         except Exception as e:
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': f'Sheet2解析失败：{str(e)}'}), 400
-
-        if empty_rows:
-            shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': 'Sheet2中存在空行：' + '、'.join(empty_rows) + '，请删除空行后再上传'}), 400
 
         if not excel_rows:
             shutil.rmtree(template_dir, ignore_errors=True)
@@ -825,7 +833,7 @@ def upload_custom_template():
             if os.path.isdir(auth_dir):
                 # 精确匹配公司名（支持括号中英文模糊匹配）
                 for f in os.listdir(auth_dir):
-                    if f.startswith('委托授权书_') and not f.startswith('._'):
+                    if (f.startswith('委托授权书_') or f.startswith('授权委托书_')) and not f.startswith('._'):
                         if company_match(principal, f):
                             proxy_file = os.path.join('授权委托书', f)
                             break
@@ -860,6 +868,21 @@ def upload_custom_template():
             other_proof_files.append(biz_license_principal)
         if biz_license_agent:
             other_proof_files.append(biz_license_agent)
+
+        # 校验必须匹配到的证明文件
+        missing_proofs = []
+        if not proof_file:
+            missing_proofs.append('证明文件（侵权证明）')
+        if not proxy_file:
+            missing_proofs.append('授权委托书（委托授权书_被代理人）')
+        if not biz_license_principal:
+            missing_proofs.append('营业执照（被代理人）')
+        if not biz_license_agent:
+            missing_proofs.append('营业执照（代理人）')
+
+        if missing_proofs:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': '以下证明文件未匹配到，请检查被代理人信息或文件是否齐全：' + '、'.join(missing_proofs)}), 400
 
         # 准备返回数据
         result = {

@@ -784,43 +784,52 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
         document.getElementById('excelFile').files = dt.files;
     }
 
-    // textarea始终disabled，手动从DOM取值加入FormData
+    // textarea始终disabled，手动从DOM取值
     const cookieTextarea = document.querySelector('textarea[name="cookie"]');
     const cookieValue = cookieTextarea ? cookieTextarea.value.trim() : '';
 
-    // 启用被锁定的字段以便FormData能获取其值
-    document.querySelectorAll('input[name="identity"], input[name="complaint_category"], input[name="complaint_type"], input[name="module"], input[name="content_type"]').forEach(el => el.disabled = false);
-    document.querySelector('textarea[name="description"]').disabled = false;
-    document.getElementById('identitySelect').disabled = false;
-    document.querySelector('select[name="principal"]').disabled = false;
-    // 委托代理文件（文件上传input未被disabled，只是pointer-events遮挡，需允许提交）
-    document.querySelectorAll('#excelFile, #proof_file_input, #other_proof_file_input').forEach(el => {
-        el.style.pointerEvents = 'auto';
-        el.style.opacity = '1';
-    });
+    // 不使用 new FormData(this)，因为它会自动捕获hidden input中残留的旧文件
+    // 改为手动构造FormData，完全控制提交内容
+    const formData = new FormData();
 
-    const formData = new FormData(this);
-    const collectAccountValue = document.getElementById('collectAccountSelect').value;
-    formData.set('collect_account', collectAccountValue);
-    formData.set('cookie', cookieValue);
-    // 如果有自定义模板的作品名称，也传给后端
-    if (window.customTemplateWorkName) {
-        formData.set('作品名称', window.customTemplateWorkName);
+    // 手动获取每个字段的正确值
+    formData.append('collect_account', document.getElementById('collectAccountSelect')?.value.trim() || '');
+    formData.append('cookie', document.querySelector('textarea[name="cookie"]')?.value.trim() || '');
+    // Radio button组需要用:checked选择器获取当前选中项的value
+    formData.append('identity', document.querySelector('input[name="identity"]:checked')?.value.trim() || '');
+    formData.append('agent', document.getElementById('identitySelect')?.value.trim() || '');
+    formData.append('principal', document.querySelector('select[name="principal"]')?.value.trim() || '');
+    formData.append('complaint_category', document.querySelector('input[name="complaint_category"]:checked')?.value.trim() || '');
+    formData.append('complaint_type', document.querySelector('input[name="complaint_type"]:checked')?.value.trim() || '');
+    formData.append('module', document.querySelector('input[name="module"]:checked')?.value.trim() || '');
+    formData.append('content_type', document.querySelector('input[name="content_type"]:checked')?.value.trim() || '');
+    formData.append('description', document.querySelector('textarea[name="description"]')?.value.trim() || '');
+    // 作品名称不是表单元素，从内存变量获取
+    formData.append('作品名称', window.customTemplateWorkName || '');
+
+    // Excel文件（始终从#excelFile获取）
+    const excelFiles = document.getElementById('excelFile').files;
+    if (excelFiles.length > 0) {
+        formData.append('excel_file', excelFiles[0]);
     }
 
-    // 重新锁定这些字段
-    document.querySelectorAll('input[name="identity"], input[name="complaint_category"], input[name="complaint_type"], input[name="module"], input[name="content_type"]').forEach(el => el.disabled = true);
-    document.querySelector('textarea[name="description"]').disabled = true;
-    document.getElementById('identitySelect').disabled = true;
-    document.querySelector('select[name="principal"]').disabled = true;
-    document.querySelectorAll('#excelFile, #proof_file_input, #other_proof_file_input').forEach(el => {
-        el.style.pointerEvents = 'none';
-        el.style.opacity = '0.5';
-    });
+    // 证明文件（始终从#proof_file_input获取）
+    const proofFiles = document.getElementById('proof_file_input').files;
+    if (proofFiles.length > 0) {
+        formData.append('proof_file', proofFiles[0]);
+    }
 
-    // 如果有自定义模板的其他证明文件（其他证明_*），传给后端用于脚本上传
+    // 其他证明文件：优先使用 customTemplateOtherProofFiles（模板匹配的文件）
+    // 如果没有模板文件，则使用用户手动上传的文件（otherProofFiles）
+    // 无论如何都不使用hidden input，因为它可能残留旧文件
     if (window.customTemplateOtherProofFiles && window.customTemplateOtherProofFiles.length > 0) {
-        formData.set('other_proof_files_from_template', JSON.stringify(window.customTemplateOtherProofFiles));
+        // 模板匹配的文件通过JSON字符串传给后端
+        formData.append('other_proof_files_from_template', JSON.stringify(window.customTemplateOtherProofFiles));
+    } else if (otherProofFiles.length > 0) {
+        // 用户手动上传的文件，逐个append
+        otherProofFiles.filter(Boolean).forEach(file => {
+            formData.append('other_proof_file', file);
+        });
     }
 
     // 验证Cookie是否有效
@@ -1026,6 +1035,14 @@ function handleCustomTemplateUpload(input) {
     const file = input.files[0];
     if (!file) return;
 
+    // 清除之前的模板残留数据
+    window.customTemplateOtherProofFiles = null;
+    window.customTemplateExcelRows = null;
+    otherProofFiles = [];
+    document.getElementById('otherProofList').innerHTML = '';
+    document.getElementById('otherProofInfo').textContent = '';
+    document.getElementById('other_proof_file_input').value = '';
+
     // 校验是否已选择采集账号
     const collectAccount = document.getElementById('collectAccountSelect').value;
     if (!collectAccount) {
@@ -1172,15 +1189,31 @@ function applyCustomTemplateData(data) {
     // 9. 处理其他证明文件
     otherProofFiles = [];
     document.getElementById('otherProofList').innerHTML = '';
+    // 无论有没有模板匹配的文件，都要清空隐藏输入框，避免残留之前手动上传的文件
+    const emptyDt = new DataTransfer();
+    document.getElementById('other_proof_file_input').files = emptyDt.files;
+    window.customTemplateOtherProofFiles = null;
 
     if (files.other_proof_files && files.other_proof_files.length > 0) {
         // 提取"其他证明_*"文件路径，用于提交时传给脚本
         window.customTemplateOtherProofFiles = files.other_proof_files.filter(filename => {
             const name = filename.split('/').pop();
-            return name.startsWith('其他证明_');
+            // 保留其他证明文件、授权委托书、营业执照
+            return name.startsWith('其他证明_') ||
+                   name.startsWith('委托授权书_') ||
+                   name.startsWith('营业执照_');
         });
 
-        Promise.all(files.other_proof_files.map((filename, index) => {
+        // 按文件名去重，避免用户上传的文件与模板匹配的文件重复
+        const seenNames = new Set();
+        const uniqueFiles = files.other_proof_files.filter(filename => {
+            const name = filename.split('/').pop();
+            if (seenNames.has(name)) return false;
+            seenNames.add(name);
+            return true;
+        });
+
+        Promise.all(uniqueFiles.map((filename, index) => {
             return fetchTemplateFileAsBlob(filename).then(blob => {
                 otherProofFiles.push(blob);
                 addOtherProofItem(blob, otherProofFiles.length - 1);
