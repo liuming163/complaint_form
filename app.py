@@ -207,6 +207,143 @@ def row_to_account_dict(row):
     }
 
 
+def guess_mime_type(filename):
+    suffix = Path(filename).suffix.lower()
+    mapping = {
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        '.xls': 'application/vnd.ms-excel',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.pdf': 'application/pdf',
+        '.bmp': 'image/bmp',
+    }
+    return mapping.get(suffix, 'application/octet-stream')
+
+
+def build_file_asset_row(business_type, business_id, category, local_path, saved_name, original_name=None):
+    path_obj = Path(local_path)
+    return {
+        'asset_id': uuid4().hex[:12],
+        'business_type': business_type,
+        'business_id': business_id,
+        'category': category,
+        'storage_type': 'local',
+        'bucket_name': None,
+        'object_key': None,
+        'local_path': str(path_obj),
+        'original_name': original_name or saved_name,
+        'saved_name': saved_name,
+        'mime_type': guess_mime_type(saved_name),
+        'file_size': path_obj.stat().st_size if path_obj.exists() else 0,
+        'file_hash': None,
+        'created_at': datetime.now(),
+    }
+
+
+def insert_file_asset(asset_row):
+    with get_db_session() as session:
+        exists = session.execute(text("""
+            SELECT 1 FROM file_assets
+            WHERE business_type = :business_type
+              AND business_id = :business_id
+              AND category = :category
+              AND saved_name = :saved_name
+            LIMIT 1
+        """), {
+            'business_type': asset_row['business_type'],
+            'business_id': asset_row['business_id'],
+            'category': asset_row['category'],
+            'saved_name': asset_row['saved_name'],
+        }).first()
+        if exists:
+            return False
+        session.execute(text("""
+            INSERT INTO file_assets (
+                asset_id, business_type, business_id, category, storage_type,
+                bucket_name, object_key, local_path, original_name, saved_name,
+                mime_type, file_size, file_hash, created_at
+            ) VALUES (
+                :asset_id, :business_type, :business_id, :category, :storage_type,
+                :bucket_name, :object_key, :local_path, :original_name, :saved_name,
+                :mime_type, :file_size, :file_hash, :created_at
+            )
+        """), asset_row)
+        session.commit()
+        return True
+
+
+def register_submission_files(submission_id, submission_dir, saved_files, batches, original_names=None):
+    original_names = original_names or {}
+
+    if saved_files.get('excel_file'):
+        insert_file_asset(build_file_asset_row(
+            'submission', submission_id, 'excel_source',
+            os.path.join(submission_dir, saved_files['excel_file']),
+            saved_files['excel_file'],
+            original_names.get('excel_file')
+        ))
+
+    if saved_files.get('proof_file'):
+        insert_file_asset(build_file_asset_row(
+            'submission', submission_id, 'proof_file',
+            os.path.join(submission_dir, saved_files['proof_file']),
+            saved_files['proof_file'],
+            original_names.get('proof_file')
+        ))
+
+    other_original_names = original_names.get('other_proof_files', [])
+    for index, saved_name in enumerate(saved_files.get('other_proof_files', [])):
+        insert_file_asset(build_file_asset_row(
+            'submission', submission_id, 'other_proof_file',
+            os.path.join(submission_dir, saved_name),
+            saved_name,
+            other_original_names[index] if index < len(other_original_names) else saved_name
+        ))
+
+    for batch in batches:
+        insert_file_asset(build_file_asset_row(
+            'batch', submission_id, 'excel_batch',
+            os.path.join(submission_dir, 'batches', batch['filename']),
+            batch['filename'],
+            batch['filename']
+        ))
+
+
+def migrate_submission_file_assets_if_needed():
+    submissions_root = Path(app.config['UC_SUBMISSION_FOLDER'])
+    if not submissions_root.exists():
+        return
+
+    for item in sorted(submissions_root.iterdir()):
+        if not item.is_dir() or item.name.startswith('.'):
+            continue
+        submission_file = item / 'submission.json'
+        if not submission_file.exists():
+            continue
+        with submission_file.open('r', encoding='utf-8') as f:
+            payload = json.load(f)
+
+        submission_id = payload.get('submission_id', item.name)
+        files = payload.get('files', {})
+        saved_files = {
+            'excel_file': files.get('excel_file'),
+            'proof_file': files.get('proof_file'),
+            'other_proof_files': files.get('other_proof_files', []),
+        }
+        register_submission_files(
+            submission_id,
+            str(item),
+            saved_files,
+            payload.get('batches', []),
+            {
+                'excel_file': files.get('excel_file'),
+                'proof_file': files.get('proof_file'),
+                'other_proof_files': files.get('other_proof_files', []),
+            }
+        )
+
+
 def load_accounts():
     with get_db_session() as session:
         rows = session.execute(text("""
@@ -244,6 +381,350 @@ def load_principals_map():
         if row.principal_name:
             entry['principals'].append(row.principal_name)
     return principals_map
+
+
+def serialize_complaint_numbers(value):
+    if value is None:
+        return json.dumps([])
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def deserialize_complaint_numbers(value):
+    if not value:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+
+def map_task_status_label(status):
+    if status == 'running':
+        return '执行中'
+    if status == 'completed':
+        return '已完成'
+    if status == 'failed':
+        return '失败'
+    if status == 'pending' or status == 'queued':
+        return '等待中'
+    if status == 'partial_failed':
+        return '部分失败'
+    return status or '未知'
+
+
+def insert_complaint_submission(payload, rights_holder):
+    submitted_at = datetime.fromisoformat(payload['submitted_at'])
+    work_name = payload['form'].get('作品名称') or None
+    with get_db_session() as session:
+        session.execute(text("""
+            INSERT INTO complaint_submissions (
+                submission_id, platform_code, collect_account, cookie_snapshot,
+                identity_type, agent_name, principal_name, rights_holder_name,
+                complaint_category, complaint_type, module_name, content_type,
+                description_text, work_name, excel_rows, batch_size, batch_count,
+                status, submitted_at, created_at, updated_at
+            ) VALUES (
+                :submission_id, :platform_code, :collect_account, :cookie_snapshot,
+                :identity_type, :agent_name, :principal_name, :rights_holder_name,
+                :complaint_category, :complaint_type, :module_name, :content_type,
+                :description_text, :work_name, :excel_rows, :batch_size, :batch_count,
+                :status, :submitted_at, :created_at, :updated_at
+            )
+        """), {
+            'submission_id': payload['submission_id'],
+            'platform_code': 'uc',
+            'collect_account': payload['form'].get('collect_account', ''),
+            'cookie_snapshot': payload['form'].get('cookie', ''),
+            'identity_type': payload['form'].get('identity', ''),
+            'agent_name': payload['form'].get('agent', ''),
+            'principal_name': payload['form'].get('principal') or None,
+            'rights_holder_name': rights_holder,
+            'complaint_category': payload['form'].get('complaint_category', ''),
+            'complaint_type': payload['form'].get('complaint_type', ''),
+            'module_name': payload['form'].get('module', ''),
+            'content_type': payload['form'].get('content_type', ''),
+            'description_text': payload['form'].get('description', ''),
+            'work_name': work_name,
+            'excel_rows': payload.get('excel_rows', 0),
+            'batch_size': payload.get('batch_size', 0),
+            'batch_count': payload.get('batch_count', 0),
+            'status': 'pending',
+            'submitted_at': submitted_at,
+            'created_at': submitted_at,
+            'updated_at': submitted_at,
+        })
+        session.commit()
+
+
+def insert_complaint_task(task_id, submission_id, submitted_at, batch_count, excel_rows):
+    dt = datetime.fromisoformat(submitted_at)
+    with get_db_session() as session:
+        session.execute(text("""
+            INSERT INTO complaint_tasks (
+                task_id, submission_id, queue_name, status, current_batch, batch_count,
+                completed_batches, failed_batches, complaint_numbers_json, error_message,
+                submitted_at, queued_at, created_at, updated_at
+            ) VALUES (
+                :task_id, :submission_id, :queue_name, :status, :current_batch, :batch_count,
+                :completed_batches, :failed_batches, :complaint_numbers_json, :error_message,
+                :submitted_at, :queued_at, :created_at, :updated_at
+            )
+        """), {
+            'task_id': task_id,
+            'submission_id': submission_id,
+            'queue_name': 'uc_complaint',
+            'status': 'pending',
+            'current_batch': 0,
+            'batch_count': batch_count,
+            'completed_batches': 0,
+            'failed_batches': 0,
+            'complaint_numbers_json': serialize_complaint_numbers([]),
+            'error_message': None,
+            'submitted_at': dt,
+            'queued_at': dt,
+            'created_at': dt,
+            'updated_at': dt,
+        })
+        session.commit()
+
+
+def insert_complaint_batches(submission_id, batches):
+    with get_db_session() as session:
+        for batch in batches:
+            now = datetime.now()
+            session.execute(text("""
+                INSERT INTO complaint_batches (
+                    batch_id, submission_id, batch_no, source_asset_id, batch_filename,
+                    start_row, end_row, row_count, status, complaint_number,
+                    error_message, created_at, updated_at
+                ) VALUES (
+                    :batch_id, :submission_id, :batch_no, :source_asset_id, :batch_filename,
+                    :start_row, :end_row, :row_count, :status, :complaint_number,
+                    :error_message, :created_at, :updated_at
+                )
+            """), {
+                'batch_id': uuid4().hex[:12],
+                'submission_id': submission_id,
+                'batch_no': batch['batch_no'],
+                'source_asset_id': None,
+                'batch_filename': batch.get('filename'),
+                'start_row': batch.get('start_row', 0),
+                'end_row': batch.get('end_row', 0),
+                'row_count': batch.get('rows', 0),
+                'status': 'pending',
+                'complaint_number': None,
+                'error_message': None,
+                'created_at': now,
+                'updated_at': now,
+            })
+        session.commit()
+
+
+def update_complaint_task(task_id, **fields):
+    if not fields:
+        return
+    allowed = {
+        'status', 'current_batch', 'batch_count', 'completed_batches', 'failed_batches',
+        'complaint_numbers_json', 'error_message', 'worker_name', 'redis_job_id',
+        'submitted_at', 'queued_at', 'started_at', 'completed_at'
+    }
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if 'complaint_numbers_json' in updates:
+        updates['complaint_numbers_json'] = serialize_complaint_numbers(updates['complaint_numbers_json'])
+    if not updates:
+        return
+    updates['updated_at'] = datetime.now()
+    set_clause = ', '.join(f"{key} = :{key}" for key in updates.keys())
+    updates['task_id'] = task_id
+    with get_db_session() as session:
+        session.execute(text(f"UPDATE complaint_tasks SET {set_clause} WHERE task_id = :task_id"), updates)
+        session.commit()
+
+
+def update_complaint_batch(submission_id, batch_no, **fields):
+    if not fields:
+        return
+    allowed = {'status', 'complaint_number', 'error_message'}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    updates['updated_at'] = datetime.now()
+    updates['submission_id'] = submission_id
+    updates['batch_no'] = batch_no
+    set_clause = ', '.join(f"{key} = :{key}" for key in updates.keys() if key not in {'submission_id', 'batch_no'})
+    with get_db_session() as session:
+        session.execute(text(f"""
+            UPDATE complaint_batches
+            SET {set_clause}
+            WHERE submission_id = :submission_id AND batch_no = :batch_no
+        """), updates)
+        session.commit()
+
+
+def get_complaint_task(task_id):
+    with get_db_session() as session:
+        task = session.execute(text("""
+            SELECT task_id, submission_id, status, current_batch, batch_count,
+                   completed_batches, failed_batches, complaint_numbers_json,
+                   error_message, submitted_at, queued_at, started_at, completed_at
+            FROM complaint_tasks
+            WHERE task_id = :task_id
+            LIMIT 1
+        """), {'task_id': task_id}).mappings().first()
+        if not task:
+            return None
+        batches = session.execute(text("""
+            SELECT batch_no, row_count, start_row, end_row, batch_filename,
+                   status, complaint_number, error_message
+            FROM complaint_batches
+            WHERE submission_id = :submission_id
+            ORDER BY batch_no ASC
+        """), {'submission_id': task['submission_id']}).mappings().all()
+
+    complaint_numbers = deserialize_complaint_numbers(task.get('complaint_numbers_json'))
+    batch_items = []
+    for batch in batches:
+        batch_items.append({
+            'batch_no': batch['batch_no'],
+            'rows': batch['row_count'],
+            'start_row': batch['start_row'],
+            'end_row': batch['end_row'],
+            'filename': batch.get('batch_filename'),
+            'status': batch['status'],
+            'error': batch.get('error_message'),
+            'complaint_number': batch.get('complaint_number'),
+        })
+    complaint_number = complaint_numbers[0] if complaint_numbers else None
+    return {
+        'task_id': task['task_id'],
+        'submission_id': task['submission_id'],
+        'status': task['status'],
+        'complaint_number': complaint_number,
+        'complaint_numbers': complaint_numbers,
+        'batch_count': task['batch_count'],
+        'completed_batches': task['completed_batches'],
+        'failed_batches': task['failed_batches'],
+        'current_batch': task['current_batch'],
+        'batches': batch_items,
+        'error': task.get('error_message'),
+        'submitted_at': normalize_datetime(task.get('submitted_at')),
+        'started_at': normalize_datetime(task.get('started_at')),
+        'completed_at': normalize_datetime(task.get('completed_at')),
+    }
+
+
+def get_submission_status_list():
+    with get_db_session() as session:
+        rows = session.execute(text("""
+            SELECT s.submission_id, s.submitted_at, s.collect_account, s.work_name,
+                   s.excel_rows, s.batch_count, t.status, t.complaint_numbers_json
+            FROM complaint_submissions s
+            LEFT JOIN complaint_tasks t ON t.submission_id = s.submission_id
+            WHERE s.platform_code = 'uc'
+            ORDER BY s.submitted_at DESC
+        """)).mappings().all()
+
+    items = []
+    for row in rows:
+        items.append({
+            'submission_id': row['submission_id'],
+            'submitted_at': normalize_datetime(row.get('submitted_at')),
+            'collect_account': row.get('collect_account') or '',
+            'work_name': row.get('work_name') or '',
+            'excel_rows': row.get('excel_rows') or 0,
+            'batch_count': row.get('batch_count') or 0,
+            'status': map_task_status_label(row.get('status')),
+            'complaint_numbers': deserialize_complaint_numbers(row.get('complaint_numbers_json')),
+        })
+    return items
+
+
+def migrate_submission_and_task_data_if_needed():
+    submissions_root = Path(app.config['UC_SUBMISSION_FOLDER'])
+    results_root = Path(app.config['TASK_RESULT_FOLDER'])
+    if not submissions_root.exists():
+        return
+
+    with get_db_session() as session:
+        existing_submission_ids = {
+            row[0] for row in session.execute(text("SELECT submission_id FROM complaint_submissions")).all()
+        }
+        existing_task_ids = {
+            row[0] for row in session.execute(text("SELECT task_id FROM complaint_tasks")).all()
+        }
+        existing_batch_keys = {
+            (row[0], row[1]) for row in session.execute(text("SELECT submission_id, batch_no FROM complaint_batches")).all()
+        }
+
+    for item in sorted(submissions_root.iterdir()):
+        if not item.is_dir() or item.name.startswith('.'):
+            continue
+        submission_file = item / 'submission.json'
+        if not submission_file.exists():
+            continue
+        with submission_file.open('r', encoding='utf-8') as f:
+            payload = json.load(f)
+
+        submission_id = payload.get('submission_id', item.name)
+        task_id = f'uc_{submission_id}'
+        rights_holder = payload.get('form', {}).get('principal') or payload.get('form', {}).get('agent') or ''
+
+        if submission_id not in existing_submission_ids:
+            insert_complaint_submission(payload, rights_holder)
+            existing_submission_ids.add(submission_id)
+
+        if task_id not in existing_task_ids:
+            insert_complaint_task(task_id, submission_id, payload.get('submitted_at', datetime.now().isoformat()), payload.get('batch_count', 0), payload.get('excel_rows', 0))
+            existing_task_ids.add(task_id)
+
+        pending_batch_inserts = []
+        for batch in payload.get('batches', []):
+            key = (submission_id, batch['batch_no'])
+            if key in existing_batch_keys:
+                continue
+            pending_batch_inserts.append(batch)
+            existing_batch_keys.add(key)
+        if pending_batch_inserts:
+            insert_complaint_batches(submission_id, pending_batch_inserts)
+
+        result_file = results_root / f'{task_id}.json'
+        if result_file.exists():
+            with result_file.open('r', encoding='utf-8') as f:
+                task_result = json.load(f)
+            update_fields = {
+                'status': task_result.get('status'),
+                'current_batch': task_result.get('current_batch'),
+                'completed_batches': task_result.get('completed_batches'),
+                'failed_batches': task_result.get('failed_batches'),
+                'complaint_numbers_json': task_result.get('complaint_numbers', []),
+                'error_message': task_result.get('error'),
+            }
+            if task_result.get('started_at'):
+                update_fields['started_at'] = datetime.fromisoformat(task_result['started_at'])
+            if task_result.get('completed_at'):
+                update_fields['completed_at'] = datetime.fromisoformat(task_result['completed_at'])
+            update_complaint_task(task_id, **update_fields)
+            for batch in task_result.get('batches', []):
+                update_complaint_batch(
+                    submission_id,
+                    batch['batch_no'],
+                    status=batch.get('status'),
+                    complaint_number=batch.get('complaint_number'),
+                    error_message=batch.get('error')
+                )
+
+    with get_db_session() as session:
+        session.execute(text("""
+            UPDATE complaint_submissions s
+            JOIN complaint_tasks t ON t.submission_id = s.submission_id
+            SET s.status = t.status, s.updated_at = NOW()
+            WHERE s.platform_code = 'uc'
+        """))
+        session.commit()
 
 
 def migrate_json_seed_data_if_needed():
@@ -319,6 +800,8 @@ def migrate_json_seed_data_if_needed():
 
 
 migrate_json_seed_data_if_needed()
+migrate_submission_and_task_data_if_needed()
+migrate_submission_file_assets_if_needed()
 
 
 @app.route('/accounts')
@@ -705,14 +1188,15 @@ def submit_uc_form():
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
         task_id = f"uc_{submission_id}"
-        tasks[task_id] = {
+        task_state = {
             'status': 'pending',
             'submission_id': submission_id,
-            'submitted_at': datetime.now().isoformat(),
-            'queued_at': datetime.now().isoformat(),
+            'submitted_at': payload['submitted_at'],
+            'queued_at': payload['submitted_at'],
             'excel_rows': rows,
             'batch_count': len(batches),
             'completed_batches': 0,
+            'failed_batches': 0,
             'current_batch': 0,
             'complaint_numbers': [],
             'batches': [
@@ -721,12 +1205,28 @@ def submit_uc_form():
                     'rows': batch['rows'],
                     'start_row': batch['start_row'],
                     'end_row': batch['end_row'],
+                    'filename': batch['filename'],
                     'status': 'pending',
                     'error': None,
                 }
                 for batch in batches
             ],
         }
+        tasks[task_id] = task_state
+        insert_complaint_submission(payload, rights_holder)
+        insert_complaint_task(task_id, submission_id, payload['submitted_at'], len(batches), rows)
+        insert_complaint_batches(submission_id, payload['batches'])
+        register_submission_files(
+            submission_id,
+            submission_dir,
+            saved_files,
+            payload['batches'],
+            {
+                'excel_file': excel_file.filename,
+                'proof_file': request.files.get('proof_file').filename if request.files.get('proof_file') else saved_files['proof_file'],
+                'other_proof_files': [f.filename for f in request.files.getlist('other_proof_file') if f and f.filename],
+            }
+        )
 
         proof_file_path = os.path.join(submission_dir, saved_files['proof_file'])
         other_proof_paths = [os.path.join(submission_dir, f) for f in saved_files['other_proof_files']]
@@ -1177,6 +1677,7 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_f
     import sys
 
     script_path = os.path.join(os.path.dirname(__file__), 'uc_complaint_from_backend.py')
+    submission_id = task_id[3:] if task_id.startswith('uc_') else task_id
 
     cmd = [
         sys.executable,
@@ -1198,15 +1699,17 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_f
         other_proof_str = ','.join([f for f in other_proof_files if f])
         cmd.extend(['--other-proof-files', other_proof_str])
 
-    # 处理投诉类型
     if complaint_category == '知识产权' and copyright_type:
         cmd.extend(['--complaint-type', complaint_category, '--copyright-type', copyright_type])
 
     print(f"[{task_id}] 执行命令: {' '.join(cmd)}")
 
     try:
-        tasks[task_id]['status'] = 'running'
-        tasks[task_id]['started_at'] = datetime.now().isoformat()
+        started_at = datetime.now().isoformat()
+        if task_id in tasks:
+            tasks[task_id]['status'] = 'running'
+            tasks[task_id]['started_at'] = started_at
+        update_complaint_task(task_id, status='running', started_at=datetime.fromisoformat(started_at))
 
         result = subprocess.run(
             cmd,
@@ -1218,36 +1721,68 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_f
         print(f"[{task_id}] stdout: {result.stdout}")
         print(f"[{task_id}] stderr: {result.stderr}")
 
-        # 解析JSON结果
         task_result = None
         try:
-            # 从输出中提取JSON结果
             start_idx = result.stdout.find('JSON_RESULT_START')
             end_idx = result.stdout.find('JSON_RESULT_END')
             if start_idx != -1 and end_idx != -1:
                 json_str = result.stdout[start_idx + 17:end_idx].strip()
                 task_result = json.loads(json_str)
-        except:
+        except Exception:
             pass
 
         if task_result:
-            tasks[task_id].update(task_result)
+            if task_id in tasks:
+                tasks[task_id].update(task_result)
+            update_fields = {
+                'status': task_result.get('status'),
+                'current_batch': task_result.get('current_batch'),
+                'completed_batches': task_result.get('completed_batches'),
+                'failed_batches': task_result.get('failed_batches'),
+                'complaint_numbers_json': task_result.get('complaint_numbers', []),
+                'error_message': task_result.get('error'),
+            }
+            if task_result.get('started_at'):
+                update_fields['started_at'] = datetime.fromisoformat(task_result['started_at'])
+            if task_result.get('completed_at'):
+                update_fields['completed_at'] = datetime.fromisoformat(task_result['completed_at'])
+            update_complaint_task(task_id, **update_fields)
+            for batch in task_result.get('batches', []):
+                update_complaint_batch(
+                    submission_id,
+                    batch['batch_no'],
+                    status=batch.get('status'),
+                    complaint_number=batch.get('complaint_number'),
+                    error_message=batch.get('error')
+                )
         else:
-            tasks[task_id]['status'] = 'failed'
-            tasks[task_id]['error'] = result.stderr or '执行失败'
-
+            if task_id in tasks:
+                tasks[task_id]['status'] = 'failed'
+                tasks[task_id]['error'] = result.stderr or '执行失败'
+            update_complaint_task(
+                task_id,
+                status='failed',
+                error_message=result.stderr or '执行失败',
+                completed_at=datetime.now()
+            )
     except subprocess.TimeoutExpired:
-        tasks[task_id]['status'] = 'failed'
-        tasks[task_id]['error'] = '执行超时'
+        if task_id in tasks:
+            tasks[task_id]['status'] = 'failed'
+            tasks[task_id]['error'] = '执行超时'
+        update_complaint_task(task_id, status='failed', error_message='执行超时', completed_at=datetime.now())
     except Exception as e:
-        tasks[task_id]['status'] = 'failed'
-        tasks[task_id]['error'] = str(e)
+        if task_id in tasks:
+            tasks[task_id]['status'] = 'failed'
+            tasks[task_id]['error'] = str(e)
+        update_complaint_task(task_id, status='failed', error_message=str(e), completed_at=datetime.now())
 
 
 @app.route('/api/uc/task/<task_id>', methods=['GET'])
 def get_task_status(task_id):
     """查询任务状态"""
-    task = tasks.get(task_id)
+    task = get_complaint_task(task_id)
+    if not task:
+        task = tasks.get(task_id)
     if not task:
         task = load_task_result(task_id)
 
@@ -1274,6 +1809,10 @@ def get_task_status(task_id):
 @app.route('/api/uc/status_list', methods=['GET'])
 def get_uc_status_list():
     """获取UC投诉状态列表"""
+    submissions = get_submission_status_list()
+    if submissions:
+        return jsonify({'success': True, 'data': submissions})
+
     submissions = []
     uc_submissions_path = app.config['UC_SUBMISSION_FOLDER']
 
@@ -1293,7 +1832,6 @@ def get_uc_status_list():
             with open(submission_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
-            # 获取任务状态
             task_id = f"uc_{data.get('submission_id', item)}"
             task_info = tasks.get(task_id)
             if not task_info:
@@ -1301,19 +1839,8 @@ def get_uc_status_list():
 
             status = '未知'
             if task_info:
-                status = task_info.get('status', '未知')
-                if status == 'running':
-                    status = '执行中'
-                elif status == 'completed':
-                    status = '已完成'
-                elif status == 'failed':
-                    status = '失败'
-                elif status == 'pending':
-                    status = '等待中'
-                elif status == 'partial_failed':
-                    status = '部分失败'
+                status = map_task_status_label(task_info.get('status', '未知'))
 
-            # 获取投诉单号
             complaint_numbers = []
             if task_info and task_info.get('complaint_numbers'):
                 complaint_numbers = task_info.get('complaint_numbers', [])
@@ -1330,7 +1857,7 @@ def get_uc_status_list():
                 'status': status,
                 'complaint_numbers': complaint_numbers,
             })
-        except Exception as e:
+        except Exception:
             continue
 
     return jsonify({'success': True, 'data': submissions})
