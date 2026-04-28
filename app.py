@@ -17,7 +17,18 @@ from uuid import uuid4
 
 import pandas as pd
 from flask import Flask, render_template, request, jsonify, send_file
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 from werkzeug.utils import secure_filename
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+BASE_DIR = os.path.dirname(__file__)
+if load_dotenv:
+    load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'complaint-form-secret'
@@ -25,6 +36,19 @@ app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), 'uploads')
 app.config['UC_SUBMISSION_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'uc_submissions')
 app.config['TASK_RESULT_FOLDER'] = os.path.join(os.path.dirname(__file__), 'task_results')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+DB_HOST = os.getenv('DB_HOST', '127.0.0.1')
+DB_PORT = os.getenv('DB_PORT', '3306')
+DB_NAME = os.getenv('DB_NAME', 'complaint_form')
+DB_USER = os.getenv('DB_USER', 'navicat')
+DB_PASSWORD = os.getenv('DB_PASSWORD', 'navicat123')
+DATABASE_URL = os.getenv(
+    'DATABASE_URL',
+    f'mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4'
+)
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 # 任务状态存储（生产环境建议用数据库）
 tasks = {}
@@ -155,26 +179,146 @@ PLATFORM_MAP = {
     'quark': {'platform_name': '夸克', 'pingtai': '夸克'},
 }
 
+
+def get_db_session():
+    return SessionLocal()
+
+
+def normalize_datetime(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def row_to_account_dict(row):
+    return {
+        'id': row.account_id,
+        'platform_code': row.platform_code,
+        'platform_name': row.platform_name,
+        'pingtai': row.platform_label,
+        'user': row.account_user,
+        'cookie': row.cookie_text,
+        'account_purpose': row.account_purpose,
+        'status': row.status,
+        'created_at': normalize_datetime(row.created_at),
+        'updated_at': normalize_datetime(row.updated_at),
+    }
+
+
 def load_accounts():
-    if not os.path.exists(ACCOUNTS_FILE):
-        return []
-    with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    with get_db_session() as session:
+        rows = session.execute(text("""
+            SELECT account_id, platform_code, platform_name, platform_label,
+                   account_user, cookie_text, account_purpose, status,
+                   created_at, updated_at
+            FROM accounts
+            ORDER BY id ASC
+        """)).mappings().all()
+        return [row_to_account_dict(row) for row in rows]
 
-def save_accounts(accounts):
-    with open(ACCOUNTS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(accounts, f, ensure_ascii=False, indent=2)
+
+def load_principals_map():
+    with get_db_session() as session:
+        rows = session.execute(text("""
+            SELECT g.group_id, g.platform_code, g.platform_name, g.account_user,
+                   i.principal_name, g.created_at, g.updated_at
+            FROM principal_groups g
+            LEFT JOIN principal_items i ON i.group_id = g.group_id
+            ORDER BY g.id ASC, i.id ASC
+        """)).mappings().all()
+
+    principals_map = {}
+    for row in rows:
+        key = f"{row.platform_code}:{row.account_user}"
+        entry = principals_map.setdefault(key, {
+            'group_id': row.group_id,
+            'platform_code': row.platform_code,
+            'platform_name': row.platform_name,
+            'account_user': row.account_user,
+            'principals': [],
+            'created_at': normalize_datetime(row.created_at),
+            'updated_at': normalize_datetime(row.updated_at),
+        })
+        if row.principal_name:
+            entry['principals'].append(row.principal_name)
+    return principals_map
 
 
-def load_principals():
-    if not os.path.exists(PRINCIPALS_FILE):
-        return {}
-    with open(PRINCIPALS_FILE, 'r', encoding='utf-8') as f:
-        return json.load(f)
+def migrate_json_seed_data_if_needed():
+    with get_db_session() as session:
+        account_count = session.execute(text("SELECT COUNT(*) FROM accounts")).scalar_one()
+        group_count = session.execute(text("SELECT COUNT(*) FROM principal_groups")).scalar_one()
 
-def save_principals(data):
-    with open(PRINCIPALS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        if account_count == 0 and os.path.exists(ACCOUNTS_FILE):
+            with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
+                accounts_data = json.load(f)
+            for item in accounts_data:
+                created_at = datetime.fromisoformat(item['created_at']) if item.get('created_at') else datetime.now()
+                updated_at = datetime.fromisoformat(item['updated_at']) if item.get('updated_at') else created_at
+                session.execute(text("""
+                    INSERT INTO accounts (
+                        account_id, platform_code, platform_name, platform_label,
+                        account_user, cookie_text, account_purpose, status,
+                        created_at, updated_at
+                    ) VALUES (
+                        :account_id, :platform_code, :platform_name, :platform_label,
+                        :account_user, :cookie_text, :account_purpose, :status,
+                        :created_at, :updated_at
+                    )
+                """), {
+                    'account_id': item['id'],
+                    'platform_code': item['platform_code'],
+                    'platform_name': item.get('platform_name') or PLATFORM_MAP.get(item['platform_code'], {}).get('platform_name', item['platform_code']),
+                    'platform_label': item.get('pingtai') or item.get('platform_name'),
+                    'account_user': item['user'],
+                    'cookie_text': item['cookie'],
+                    'account_purpose': item.get('account_purpose') or None,
+                    'status': 'active' if item.get('status') in {'0', 0, 'active', None, ''} else str(item.get('status')),
+                    'created_at': created_at,
+                    'updated_at': updated_at,
+                })
+
+        if group_count == 0 and os.path.exists(PRINCIPALS_FILE):
+            with open(PRINCIPALS_FILE, 'r', encoding='utf-8') as f:
+                principals_data = json.load(f)
+            for key, item in principals_data.items():
+                group_id = uuid4().hex[:12]
+                created_at = datetime.fromisoformat(item['created_at']) if item.get('created_at') else datetime.now()
+                updated_at = datetime.fromisoformat(item['updated_at']) if item.get('updated_at') else created_at
+                session.execute(text("""
+                    INSERT INTO principal_groups (
+                        group_id, platform_code, platform_name, account_user, created_at, updated_at
+                    ) VALUES (
+                        :group_id, :platform_code, :platform_name, :account_user, :created_at, :updated_at
+                    )
+                """), {
+                    'group_id': group_id,
+                    'platform_code': item['platform_code'],
+                    'platform_name': item.get('platform_name') or PLATFORM_MAP.get(item['platform_code'], {}).get('platform_name', item['platform_code']),
+                    'account_user': item['account_user'],
+                    'created_at': created_at,
+                    'updated_at': updated_at,
+                })
+                for principal_name in item.get('principals', []):
+                    session.execute(text("""
+                        INSERT INTO principal_items (
+                            item_id, group_id, principal_name, created_at
+                        ) VALUES (
+                            :item_id, :group_id, :principal_name, :created_at
+                        )
+                    """), {
+                        'item_id': uuid4().hex[:12],
+                        'group_id': group_id,
+                        'principal_name': principal_name,
+                        'created_at': created_at,
+                    })
+
+        session.commit()
+
+
+migrate_json_seed_data_if_needed()
 
 
 @app.route('/accounts')
@@ -206,25 +350,52 @@ def accounts_add():
         return jsonify({'success': False, 'error': '平台名称、投诉账号、Cookie都不能为空'}), 400
     if platform_code not in PLATFORM_MAP:
         return jsonify({'success': False, 'error': '平台编码无效'}), 400
-    accounts = load_accounts()
-    if any(a.get('platform_code') == platform_code and a.get('user') == user for a in accounts):
-        return jsonify({'success': False, 'error': f'该平台下投诉账号「{user}」已存在'}), 400
-    new_id = uuid4().hex[:12]
-    now = datetime.now().isoformat()
-    accounts.append({
-        'id': new_id,
-        'platform_code': platform_code,
-        'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
-        'pingtai': PLATFORM_MAP[platform_code]['pingtai'],
-        'user': user,
-        'cookie': cookie,
-        'account_purpose': data.get('account_purpose', '').strip(),
-        'status': '0',
-        'created_at': now,
-        'updated_at': now,
-    })
-    save_accounts(accounts)
-    return jsonify({'success': True, 'data': accounts[-1]})
+
+    with get_db_session() as session:
+        exists = session.execute(text("""
+            SELECT 1 FROM accounts
+            WHERE platform_code = :platform_code AND account_user = :account_user
+            LIMIT 1
+        """), {'platform_code': platform_code, 'account_user': user}).first()
+        if exists:
+            return jsonify({'success': False, 'error': f'该平台下投诉账号「{user}」已存在'}), 400
+
+        new_id = uuid4().hex[:12]
+        now = datetime.now()
+        session.execute(text("""
+            INSERT INTO accounts (
+                account_id, platform_code, platform_name, platform_label,
+                account_user, cookie_text, account_purpose, status,
+                created_at, updated_at
+            ) VALUES (
+                :account_id, :platform_code, :platform_name, :platform_label,
+                :account_user, :cookie_text, :account_purpose, :status,
+                :created_at, :updated_at
+            )
+        """), {
+            'account_id': new_id,
+            'platform_code': platform_code,
+            'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
+            'platform_label': PLATFORM_MAP[platform_code]['pingtai'],
+            'account_user': user,
+            'cookie_text': cookie,
+            'account_purpose': data.get('account_purpose', '').strip() or None,
+            'status': 'active',
+            'created_at': now,
+            'updated_at': now,
+        })
+        session.commit()
+
+        row = session.execute(text("""
+            SELECT account_id, platform_code, platform_name, platform_label,
+                   account_user, cookie_text, account_purpose, status,
+                   created_at, updated_at
+            FROM accounts
+            WHERE account_id = :account_id
+            LIMIT 1
+        """), {'account_id': new_id}).mappings().one()
+
+    return jsonify({'success': True, 'data': row_to_account_dict(row)})
 
 
 @app.route('/api/accounts/update_cookie', methods=['POST'])
@@ -234,24 +405,28 @@ def accounts_update_cookie():
     cookie = data.get('cookie', '').strip()
     if not cookie:
         return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
-    accounts = load_accounts()
-    updated = False
-    for a in accounts:
-        if a.get('id') == acc_id:
-            a['cookie'] = cookie
-            a['updated_at'] = datetime.now().isoformat()
-            updated = True
-            break
-    if not updated:
-        return jsonify({'success': False, 'error': '账号不存在'}), 404
-    save_accounts(accounts)
+
+    with get_db_session() as session:
+        result = session.execute(text("""
+            UPDATE accounts
+            SET cookie_text = :cookie_text, updated_at = :updated_at
+            WHERE account_id = :account_id
+        """), {
+            'cookie_text': cookie,
+            'updated_at': datetime.now(),
+            'account_id': acc_id,
+        })
+        session.commit()
+        if result.rowcount == 0:
+            return jsonify({'success': False, 'error': '账号不存在'}), 404
+
     return jsonify({'success': True})
 
 
 @app.route('/api/principals/list')
 def principals_list():
     """返回所有账号及其被代理人信息，每行一个被代理人"""
-    principals_data = load_principals()
+    principals_data = load_principals_map()
     accounts = load_accounts()
     results = []
     for acc in accounts:
@@ -267,7 +442,7 @@ def principals_list():
                     'account_user': acc['user'],
                     'account_purpose': acc.get('account_purpose', ''),
                     'principal_name': name,
-                    'rowspan': count if i == 0 else 0,  # 0 表示不渲染 td
+                    'rowspan': count if i == 0 else 0,
                 })
         else:
             results.append({
@@ -294,23 +469,80 @@ def principals_add():
     if platform_code not in PLATFORM_MAP:
         return jsonify({'success': False, 'error': '平台编码无效'}), 400
 
-    principals_data = load_principals()
-    key = f"{platform_code}:{account_user}"
-
-    if key not in principals_data:
-        principals_data[key] = {
+    with get_db_session() as session:
+        account_exists = session.execute(text("""
+            SELECT platform_name FROM accounts
+            WHERE platform_code = :platform_code AND account_user = :account_user
+            LIMIT 1
+        """), {
             'platform_code': platform_code,
-            'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
             'account_user': account_user,
-            'principals': [],
-            'created_at': datetime.now().isoformat(),
-        }
+        }).mappings().first()
+        if not account_exists:
+            return jsonify({'success': False, 'error': '投诉账号不存在'}), 400
 
-    if principal_name in principals_data[key]['principals']:
-        return jsonify({'success': False, 'error': f'该被代理人信息已存在'}), 400
+        group = session.execute(text("""
+            SELECT group_id, platform_name
+            FROM principal_groups
+            WHERE platform_code = :platform_code AND account_user = :account_user
+            LIMIT 1
+        """), {
+            'platform_code': platform_code,
+            'account_user': account_user,
+        }).mappings().first()
 
-    principals_data[key]['principals'].append(principal_name)
-    save_principals(principals_data)
+        if not group:
+            group_id = uuid4().hex[:12]
+            now = datetime.now()
+            session.execute(text("""
+                INSERT INTO principal_groups (
+                    group_id, platform_code, platform_name, account_user, created_at, updated_at
+                ) VALUES (
+                    :group_id, :platform_code, :platform_name, :account_user, :created_at, :updated_at
+                )
+            """), {
+                'group_id': group_id,
+                'platform_code': platform_code,
+                'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
+                'account_user': account_user,
+                'created_at': now,
+                'updated_at': now,
+            })
+        else:
+            group_id = group['group_id']
+
+        exists = session.execute(text("""
+            SELECT 1 FROM principal_items
+            WHERE group_id = :group_id AND principal_name = :principal_name
+            LIMIT 1
+        """), {
+            'group_id': group_id,
+            'principal_name': principal_name,
+        }).first()
+        if exists:
+            return jsonify({'success': False, 'error': '该被代理人信息已存在'}), 400
+
+        session.execute(text("""
+            INSERT INTO principal_items (
+                item_id, group_id, principal_name, created_at
+            ) VALUES (
+                :item_id, :group_id, :principal_name, :created_at
+            )
+        """), {
+            'item_id': uuid4().hex[:12],
+            'group_id': group_id,
+            'principal_name': principal_name,
+            'created_at': datetime.now(),
+        })
+        session.execute(text("""
+            UPDATE principal_groups
+            SET updated_at = :updated_at
+            WHERE group_id = :group_id
+        """), {
+            'updated_at': datetime.now(),
+            'group_id': group_id,
+        })
+        session.commit()
 
     return jsonify({'success': True, 'data': {
         'platform_code': platform_code,
