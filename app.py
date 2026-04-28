@@ -10,6 +10,7 @@ import subprocess
 import threading
 import zipfile
 import io
+import redis
 from datetime import datetime
 from pathlib import Path
 from openpyxl import load_workbook
@@ -46,15 +47,16 @@ DATABASE_URL = os.getenv(
     'DATABASE_URL',
     f'mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4'
 )
+REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
+UC_QUEUE_NAME = os.getenv('UC_QUEUE_NAME', 'uc_complaint_queue')
+UC_WORKER_LOCK_KEY = os.getenv('UC_WORKER_LOCK_KEY', 'uc_complaint_worker_lock')
+UC_WORKER_LOCK_TTL = int(os.getenv('UC_WORKER_LOCK_TTL', '15'))
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 # 任务状态存储（生产环境建议用数据库）
 tasks = {}
-task_queue = queue.Queue()
-worker_thread = None
-worker_lock = threading.Lock()
 
 @app.after_request
 def no_cache(response):
@@ -134,27 +136,47 @@ def load_task_result(task_id):
         return json.load(f)
 
 
-def queue_worker():
-    while True:
-        task_args = task_queue.get()
-        try:
-            run_complaint_script(*task_args)
-        finally:
-            task_queue.task_done()
+def get_redis_client():
+    return redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 
-def start_queue_worker():
-    global worker_thread
-
-    with worker_lock:
-        if worker_thread and worker_thread.is_alive():
-            return
-
-        worker_thread = threading.Thread(target=queue_worker, daemon=True, name='uc-complaint-worker')
-        worker_thread.start()
+def enqueue_uc_task(task_payload):
+    client = get_redis_client()
+    client.lpush(UC_QUEUE_NAME, json.dumps(task_payload, ensure_ascii=False))
 
 
-start_queue_worker()
+def dequeue_uc_task(timeout=0):
+    client = get_redis_client()
+    item = client.brpop(UC_QUEUE_NAME, timeout=timeout)
+    if not item:
+        return None
+    _, payload = item
+    return json.loads(payload)
+
+
+def acquire_worker_lock(ttl_seconds=None):
+    client = get_redis_client()
+    token = uuid4().hex
+    ttl = ttl_seconds or UC_WORKER_LOCK_TTL
+    acquired = client.set(UC_WORKER_LOCK_KEY, token, nx=True, ex=ttl)
+    return token if acquired else None
+
+
+def refresh_worker_lock(token, ttl_seconds=None):
+    client = get_redis_client()
+    ttl = ttl_seconds or UC_WORKER_LOCK_TTL
+    current = client.get(UC_WORKER_LOCK_KEY)
+    if current != token:
+        return False
+    client.expire(UC_WORKER_LOCK_KEY, ttl)
+    return True
+
+
+def release_worker_lock(token):
+    client = get_redis_client()
+    current = client.get(UC_WORKER_LOCK_KEY)
+    if current == token:
+        client.delete(UC_WORKER_LOCK_KEY)
 
 
 @app.route('/')
@@ -1248,23 +1270,26 @@ def submit_uc_form():
         complaint_type = payload['form']['complaint_type']
         copyright_type = complaint_type if complaint_category == '知识产权' else ''
         batch_files = [batch['path'] for batch in batches]
+        task_payload = {
+            'task_id': task_id,
+            'excel_files': batch_files,
+            'cookie': payload['form']['cookie'],
+            'proof_file': proof_file_path,
+            'other_proof_files': other_proof_paths,
+            'description': payload['form']['description'],
+            'identity': payload['form']['identity'],
+            'agent': payload['form']['agent'],
+            'rights_holder': rights_holder,
+            'complaint_category': complaint_category,
+            'copyright_type': copyright_type,
+            'module': payload['form']['module'],
+            'content_type': payload['form']['content_type'],
+            'batch_metadata': payload['batches'],
+        }
 
-        task_queue.put((
-            task_id,
-            batch_files,
-            payload['form']['cookie'],
-            proof_file_path,
-            other_proof_paths,
-            payload['form']['description'],
-            payload['form']['identity'],
-            payload['form']['agent'],
-            rights_holder,
-            complaint_category,
-            copyright_type,
-            payload['form']['module'],
-            payload['form']['content_type'],
-            payload['batches'],
-        ))
+        enqueue_uc_task(task_payload)
+        update_complaint_task(task_id, status='queued')
+        tasks[task_id]['status'] = 'queued'
 
         return jsonify({
             'success': True,
