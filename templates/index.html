@@ -157,6 +157,9 @@ function refreshUcStatus() {
                     }
 
                     const logUrl = `/uc/task/uc_${item.submission_id}/log`;
+                    const logCell = item.log_available
+                        ? `<a href="${logUrl}" target="_blank" class="log-link">查看日志</a>`
+                        : `<span class="log-expired">日志已过期</span>`;
 
                     html += `
                         <tr>
@@ -166,7 +169,7 @@ function refreshUcStatus() {
                             <td>${complaintStr}</td>
                             <td><span class="status-badge ${statusClass}">${item.status}</span></td>
                             <td>${estimatedTimeStr}</td>
-                            <td><a href="${logUrl}" target="_blank" class="log-link">查看日志</a></td>
+                            <td>${logCell}</td>
                         </tr>
                     `;
                 });
@@ -333,6 +336,11 @@ document.addEventListener('DOMContentLoaded', refreshUcStatus);
 
 .log-link:hover {
     text-decoration: underline;
+}
+
+.log-expired {
+    color: #999;
+    font-size: 12px;
 }
 
 /* 新增布局样式 */

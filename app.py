@@ -232,6 +232,12 @@ def get_task_execution_log(task_id):
         return row
 
 
+def has_available_task_log(task_id):
+    if read_task_log_file(task_id):
+        return True
+    return bool(get_task_execution_log(task_id))
+
+
 def get_redis_client():
     return redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -750,6 +756,7 @@ def get_submission_status_list():
 
     items = []
     for row in rows:
+        task_id = f"uc_{row['submission_id']}"
         items.append({
             'submission_id': row['submission_id'],
             'submitted_at': normalize_datetime(row.get('submitted_at')),
@@ -759,6 +766,7 @@ def get_submission_status_list():
             'batch_count': row.get('batch_count') or 0,
             'status': map_task_status_label(row.get('status')),
             'complaint_numbers': deserialize_complaint_numbers(row.get('complaint_numbers_json')),
+            'log_available': has_available_task_log(task_id),
         })
     return items
 
