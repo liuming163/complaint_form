@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import threading
 import zipfile
+import html
 import io
 import redis
 from datetime import datetime
@@ -134,6 +135,101 @@ def load_task_result(task_id):
 
     with open(result_path, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+
+def append_task_log(task_id, message):
+    log_path = os.path.join(app.config['TASK_RESULT_FOLDER'], f'{task_id}.log')
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write(f'[{timestamp}] {message}\n')
+
+
+def read_task_log_file(task_id):
+    log_path = os.path.join(app.config['TASK_RESULT_FOLDER'], f'{task_id}.log')
+    if not os.path.exists(log_path):
+        return None
+    with open(log_path, 'r', encoding='utf-8') as f:
+        return f.read()
+
+
+def cleanup_old_task_logs(max_age_days=5):
+    cutoff = datetime.now().timestamp() - max_age_days * 24 * 3600
+    task_results_dir = Path(app.config['TASK_RESULT_FOLDER'])
+    if not task_results_dir.exists():
+        return
+    for path in task_results_dir.glob('uc_*.log'):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+        except FileNotFoundError:
+            continue
+
+
+def upsert_task_execution_log(task_id, submission_id, status, log_text):
+    if not log_text:
+        return
+    with get_db_session() as session:
+        existing = session.execute(text("""
+            SELECT log_id FROM task_execution_logs
+            WHERE task_id = :task_id
+            ORDER BY created_at DESC
+            LIMIT 1
+        """), {'task_id': task_id}).mappings().first()
+        if existing:
+            session.execute(text("""
+                UPDATE task_execution_logs
+                SET submission_id = :submission_id,
+                    platform_code = :platform_code,
+                    status = :status,
+                    log_text = :log_text,
+                    updated_at = :updated_at
+                WHERE log_id = :log_id
+            """), {
+                'submission_id': submission_id,
+                'platform_code': 'uc',
+                'status': status,
+                'log_text': log_text,
+                'updated_at': datetime.now(),
+                'log_id': existing['log_id'],
+            })
+        else:
+            now = datetime.now()
+            session.execute(text("""
+                INSERT INTO task_execution_logs (
+                    log_id, task_id, submission_id, platform_code,
+                    status, log_text, created_at, updated_at
+                ) VALUES (
+                    :log_id, :task_id, :submission_id, :platform_code,
+                    :status, :log_text, :created_at, :updated_at
+                )
+            """), {
+                'log_id': uuid4().hex[:12],
+                'task_id': task_id,
+                'submission_id': submission_id,
+                'platform_code': 'uc',
+                'status': status,
+                'log_text': log_text,
+                'created_at': now,
+                'updated_at': now,
+            })
+        session.commit()
+
+
+def sync_task_log_to_db(task_id, submission_id, status):
+    log_text = read_task_log_file(task_id)
+    upsert_task_execution_log(task_id, submission_id, status, log_text)
+
+
+def get_task_execution_log(task_id):
+    with get_db_session() as session:
+        row = session.execute(text("""
+            SELECT task_id, submission_id, status, log_text, created_at, updated_at
+            FROM task_execution_logs
+            WHERE task_id = :task_id
+            ORDER BY created_at DESC
+            LIMIT 1
+        """), {'task_id': task_id}).mappings().first()
+        return row
 
 
 def get_redis_client():
@@ -621,6 +717,7 @@ def get_complaint_task(task_id):
             'complaint_number': batch.get('complaint_number'),
         })
     complaint_number = complaint_numbers[0] if complaint_numbers else None
+    log_file_path = os.path.join(app.config['TASK_RESULT_FOLDER'], f"{task_id}.log")
     return {
         'task_id': task['task_id'],
         'submission_id': task['submission_id'],
@@ -636,6 +733,7 @@ def get_complaint_task(task_id):
         'submitted_at': normalize_datetime(task.get('submitted_at')),
         'started_at': normalize_datetime(task.get('started_at')),
         'completed_at': normalize_datetime(task.get('completed_at')),
+        'log_file_path': log_file_path,
     }
 
 
@@ -824,6 +922,7 @@ def migrate_json_seed_data_if_needed():
 migrate_json_seed_data_if_needed()
 migrate_submission_and_task_data_if_needed()
 migrate_submission_file_assets_if_needed()
+cleanup_old_task_logs()
 
 
 @app.route('/accounts')
@@ -1728,9 +1827,11 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_f
         cmd.extend(['--complaint-type', complaint_category, '--copyright-type', copyright_type])
 
     print(f"[{task_id}] 执行命令: {' '.join(cmd)}")
+    append_task_log(task_id, f"执行命令: {' '.join(cmd)}")
 
     try:
         started_at = datetime.now().isoformat()
+        append_task_log(task_id, f"任务开始执行，started_at={started_at}")
         if task_id in tasks:
             tasks[task_id]['status'] = 'running'
             tasks[task_id]['started_at'] = started_at
@@ -1745,6 +1846,8 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_f
 
         print(f"[{task_id}] stdout: {result.stdout}")
         print(f"[{task_id}] stderr: {result.stderr}")
+        append_task_log(task_id, 'stdout:\n' + (result.stdout or ''))
+        append_task_log(task_id, 'stderr:\n' + (result.stderr or ''))
 
         task_result = None
         try:
@@ -1757,6 +1860,7 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_f
             pass
 
         if task_result:
+            append_task_log(task_id, '解析到 JSON_RESULT，准备更新任务状态')
             if task_id in tasks:
                 tasks[task_id].update(task_result)
             update_fields = {
@@ -1780,6 +1884,8 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_f
                     complaint_number=batch.get('complaint_number'),
                     error_message=batch.get('error')
                 )
+            append_task_log(task_id, f"任务执行完成，status={task_result.get('status')}, complaint_numbers={task_result.get('complaint_numbers', [])}")
+            sync_task_log_to_db(task_id, submission_id, task_result.get('status'))
         else:
             if task_id in tasks:
                 tasks[task_id]['status'] = 'failed'
@@ -1790,16 +1896,22 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_f
                 error_message=result.stderr or '执行失败',
                 completed_at=datetime.now()
             )
+            append_task_log(task_id, '未解析到 JSON_RESULT，任务标记为 failed')
+            sync_task_log_to_db(task_id, submission_id, 'failed')
     except subprocess.TimeoutExpired:
         if task_id in tasks:
             tasks[task_id]['status'] = 'failed'
             tasks[task_id]['error'] = '执行超时'
         update_complaint_task(task_id, status='failed', error_message='执行超时', completed_at=datetime.now())
+        append_task_log(task_id, '任务执行超时')
+        sync_task_log_to_db(task_id, submission_id, 'failed')
     except Exception as e:
         if task_id in tasks:
             tasks[task_id]['status'] = 'failed'
             tasks[task_id]['error'] = str(e)
         update_complaint_task(task_id, status='failed', error_message=str(e), completed_at=datetime.now())
+        append_task_log(task_id, f'任务执行异常: {str(e)}')
+        sync_task_log_to_db(task_id, submission_id, 'failed')
 
 
 @app.route('/api/uc/task/<task_id>', methods=['GET'])
@@ -1828,7 +1940,83 @@ def get_task_status(task_id):
         'submitted_at': task.get('submitted_at'),
         'started_at': task.get('started_at'),
         'completed_at': task.get('completed_at'),
+        'log_file_path': task.get('log_file_path'),
     })
+
+
+@app.route('/uc/task/<task_id>/log', methods=['GET'])
+def view_task_log(task_id):
+    task_log = get_task_execution_log(task_id)
+    if not task_log:
+        log_text = read_task_log_file(task_id)
+        if not log_text:
+            return f"""
+            <!DOCTYPE html>
+            <html lang='zh-CN'>
+            <head>
+                <meta charset='UTF-8'>
+                <title>任务日志不存在</title>
+                <style>
+                    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f7f7f9; margin: 0; padding: 24px; color: #222; }}
+                    .box {{ max-width: 760px; margin: 40px auto; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 24px; }}
+                    .title {{ font-size: 20px; font-weight: 600; margin-bottom: 12px; }}
+                    .desc {{ color: #666; line-height: 1.7; }}
+                    code {{ background: #f1f3f5; padding: 2px 6px; border-radius: 4px; }}
+                </style>
+            </head>
+            <body>
+                <div class='box'>
+                    <div class='title'>这条任务目前没有可查看的日志</div>
+                    <div class='desc'>
+                        <p><strong>任务ID：</strong><code>{html.escape(task_id)}</code></p>
+                        <p>可能原因：</p>
+                        <ul>
+                            <li>这是较早的历史任务，当时还没有启用详细日志保存功能。</li>
+                            <li>本地日志文件已经被清理（当前本地日志只保留最近 5 天）。</li>
+                            <li>数据库里也没有同步到这条任务的日志内容。</li>
+                        </ul>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """, 404
+        task_log = {
+            'task_id': task_id,
+            'submission_id': task_id[3:] if task_id.startswith('uc_') else task_id,
+            'status': 'unknown',
+            'log_text': log_text,
+            'updated_at': datetime.now(),
+        }
+
+    title = f"任务日志 - {task_id}"
+    safe_log = html.escape(task_log.get('log_text') or '')
+    safe_status = html.escape(str(task_log.get('status') or 'unknown'))
+    safe_submission = html.escape(str(task_log.get('submission_id') or ''))
+    safe_updated = html.escape(normalize_datetime(task_log.get('updated_at')) or '-')
+    return f"""
+    <!DOCTYPE html>
+    <html lang='zh-CN'>
+    <head>
+        <meta charset='UTF-8'>
+        <title>{title}</title>
+        <style>
+            body {{ font-family: Menlo, Monaco, Consolas, monospace; background: #f7f7f9; margin: 0; padding: 24px; color: #222; }}
+            .meta {{ background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }}
+            .meta div {{ margin-bottom: 6px; }}
+            pre {{ background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }}
+        </style>
+    </head>
+    <body>
+        <div class='meta'>
+            <div><strong>任务ID：</strong>{html.escape(task_id)}</div>
+            <div><strong>Submission ID：</strong>{safe_submission}</div>
+            <div><strong>状态：</strong>{safe_status}</div>
+            <div><strong>最后更新时间：</strong>{safe_updated}</div>
+        </div>
+        <pre>{safe_log}</pre>
+    </body>
+    </html>
+    """
 
 
 @app.route('/api/uc/status_list', methods=['GET'])

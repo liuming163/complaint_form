@@ -257,6 +257,49 @@ redis-cli ping
 
 ---
 
+### 4. 想看任务为什么成功 / 为什么失败
+
+现在每条任务都会保存两种结果文件，在：
+
+```text
+task_results/
+```
+
+#### 结果摘要
+看：
+
+```text
+uc_<submission_id>.json
+```
+
+这里能看到：
+- `status`
+- `complaint_number`
+- `complaint_numbers`
+- `completed_at`
+- `error`
+
+#### 详细运行日志
+看：
+
+```text
+uc_<submission_id>.log
+```
+
+这里能看到：
+- 执行命令
+- 开始时间
+- 子脚本完整 stdout
+- 子脚本完整 stderr
+- 是否解析到 JSON_RESULT
+- 为什么失败 / 为什么超时
+
+如果只是想快速判断任务结果，看 `.json`。
+
+如果要排查细节，看 `.log`。
+
+---
+
 ## 八、如果 worker 抢不到锁怎么办
 
 现在项目限制：

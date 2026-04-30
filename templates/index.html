@@ -120,12 +120,12 @@ function refreshUcStatus() {
                                 <th>投诉单号</th>
                                 <th>脚本执行状态</th>
                                 <th>预估完成时间</th>
+                                <th>日志</th>
                             </tr>
                         </thead>
                         <tbody>
                 `;
                 data.data.forEach(item => {
-                    // 格式化时间
                     let timeStr = '-';
                     if (item.submitted_at) {
                         const d = new Date(item.submitted_at);
@@ -133,11 +133,9 @@ function refreshUcStatus() {
                         timeStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
                     }
 
-                    // 采集账号
                     let accountStr = item.collect_account || '-';
                     let workNameStr = item.work_name || '-';
 
-                    // 投诉单号（反转数组，使第一次投诉的单号在上）
                     let complaintStr = '-';
                     if (item.complaint_numbers && item.complaint_numbers.length > 0) {
                         complaintStr = item.complaint_numbers.slice().reverse().join('<br>');
@@ -145,13 +143,11 @@ function refreshUcStatus() {
                         complaintStr = `${item.batch_count}批(${item.excel_rows}条)`;
                     }
 
-                    // 状态样式
                     let statusClass = 'status-default';
                     if (item.status === '已完成') statusClass = 'status-success';
                     else if (item.status === '执行中') statusClass = 'status-running';
                     else if (item.status === '失败') statusClass = 'status-failed';
 
-                    // 预估完成时间：执行中或等待中时为 提交时间 + 批次数*1分钟；其他状态显示 -
                     let estimatedTimeStr = '-';
                     if ((item.status === '执行中' || item.status === '等待中') && item.submitted_at && item.batch_count) {
                         const startTime = new Date(item.submitted_at);
@@ -159,6 +155,8 @@ function refreshUcStatus() {
                         const pad = n => String(n).padStart(2, '0');
                         estimatedTimeStr = `${startTime.getFullYear()}-${pad(startTime.getMonth() + 1)}-${pad(startTime.getDate())} ${pad(startTime.getHours())}:${pad(startTime.getMinutes())}`;
                     }
+
+                    const logUrl = `/uc/task/uc_${item.submission_id}/log`;
 
                     html += `
                         <tr>
@@ -168,6 +166,7 @@ function refreshUcStatus() {
                             <td>${complaintStr}</td>
                             <td><span class="status-badge ${statusClass}">${item.status}</span></td>
                             <td>${estimatedTimeStr}</td>
+                            <td><a href="${logUrl}" target="_blank" class="log-link">查看日志</a></td>
                         </tr>
                     `;
                 });
@@ -324,6 +323,16 @@ document.addEventListener('DOMContentLoaded', refreshUcStatus);
 .status-failed {
     background: #f8d7da;
     color: #721c24;
+}
+
+.log-link {
+    color: #0d6efd;
+    text-decoration: none;
+    font-size: 12px;
+}
+
+.log-link:hover {
+    text-decoration: underline;
 }
 
 /* 新增布局样式 */
