@@ -1038,8 +1038,14 @@ def accounts_update_cookie():
 @app.route('/api/principals/list')
 def principals_list():
     """返回所有账号及其被代理人信息，每行一个被代理人"""
+    platform_code_filter = request.args.get('platform_code', '').strip()
+    account_user_filter = request.args.get('account_user', '').strip()
     principals_data = load_principals_map()
     accounts = load_accounts()
+    if platform_code_filter:
+        accounts = [acc for acc in accounts if acc.get('platform_code') == platform_code_filter]
+    if account_user_filter:
+        accounts = [acc for acc in accounts if acc.get('user') == account_user_filter]
     results = []
     for acc in accounts:
         key = f"{acc['platform_code']}:{acc['user']}"
@@ -1549,6 +1555,8 @@ def upload_custom_template():
     """上传自定义模板Excel，自动匹配证明文件"""
     import glob
 
+    selected_current_principal = request.form.get('current_principal', '').strip()
+
     if 'file' not in request.files:
         return jsonify({'success': False, 'error': '未上传文件'}), 400
 
@@ -1595,6 +1603,9 @@ def upload_custom_template():
         # 辅助函数：标准化括号（全角转半角）
         def normalize_paren(s):
             return s.replace('（', '(').replace('）', ')')
+
+        def normalize_principal_value(s):
+            return normalize_paren((s or '').strip())
 
         # 辅助函数：检查公司名是否匹配（支持括号中英文模糊匹配）
         def company_match(principal, filename):
@@ -1663,6 +1674,24 @@ def upload_custom_template():
         # 获取基本信息
         principal = form_data.get('被代理人（权利人）信息', '')  # 如 "北京uc"
         agent = form_data.get('代理人/权利人', '')  # 如 "北京和晞科技有限公司"
+
+        normalized_template_principal = normalize_principal_value(principal)
+        normalized_selected_current_principal = normalize_principal_value(selected_current_principal)
+        if not normalized_template_principal:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({
+                'success': False,
+                'error': '自定义模板中的“被代理人（权利人）信息”不能为空'
+            }), 400
+
+        if normalized_selected_current_principal and normalized_template_principal != normalized_selected_current_principal:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({
+                'success': False,
+                'error': f'自定义模板中的“被代理人（权利人）信息”与当前页面选择的“本次投诉使用的被代理人信息”不一致。页面选择：{selected_current_principal}；模板内容：{principal}'
+            }), 400
+
+        principal = normalized_template_principal
 
         # 定义静态文件目录
         static_imgs_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs')

@@ -34,6 +34,13 @@
             <textarea class="form-control" name="cookie" rows="3" placeholder="请从上方选择采集账号，自动填充Cookie" required disabled></textarea>
             <div class="form-text">请粘贴完整的Cookie信息，用于身份验证</div>
         </div>
+        <div class="mb-3">
+            <label class="form-label">本次投诉使用的被代理人信息</label>
+            <select class="form-select" name="current_principal" id="currentPrincipalSelect" required>
+                <option value="">请先选择采集账号</option>
+            </select>
+            <div class="form-text">选择本次投诉实际使用的被代理人信息，上传自定义模版时会校验是否一致</div>
+        </div>
     </div>
 
     <!-- 投诉模版 -->
@@ -424,6 +431,7 @@ function loadUcAccounts() {
 function onCollectAccountChange() {
     const user = document.getElementById('collectAccountSelect').value;
     const cookieTextarea = document.querySelector('textarea[name="cookie"]');
+    const currentPrincipalSelect = document.getElementById('currentPrincipalSelect');
     if (user) {
         const acc = ucAccountsMap[user];
         if (acc) {
@@ -431,31 +439,73 @@ function onCollectAccountChange() {
             loadPrincipalsForAccount(user);
         } else {
             cookieTextarea.value = '';
+            currentPrincipalSelect.innerHTML = '<option value="">请先选择采集账号</option>';
         }
     } else {
         cookieTextarea.value = '';
+        currentPrincipalSelect.innerHTML = '<option value="">请先选择采集账号</option>';
     }
+}
+
+function normalizePrincipalValue(value) {
+    return (value || '')
+        .trim()
+        .replace(/（/g, '(')
+        .replace(/）/g, ')');
+}
+
+function validateCurrentPrincipalAgainstTemplate(showAlert = true) {
+    const selectedCurrentPrincipal = normalizePrincipalValue(document.getElementById('currentPrincipalSelect')?.value || '');
+    const templatePrincipal = normalizePrincipalValue(window.currentTemplatePrincipal || '');
+    if (selectedCurrentPrincipal && templatePrincipal && selectedCurrentPrincipal !== templatePrincipal) {
+        if (showAlert) {
+            alert(`自定义模版中的“被代理人（权利人）信息”与当前页面选择的“本次投诉使用的被代理人信息”不一致。\n\n页面选择：${selectedCurrentPrincipal}\n模板内容：${templatePrincipal}`);
+        }
+        return false;
+    }
+    return true;
 }
 
 async function loadPrincipalsForAccount(accountUser) {
     const principalSelect = document.querySelector('select[name="principal"]');
+    const currentPrincipalSelect = document.getElementById('currentPrincipalSelect');
+    const previousPrincipalValue = principalSelect.value;
+    const previousCurrentPrincipalValue = currentPrincipalSelect.value;
     principalSelect.innerHTML = '<option value="">加载中...</option>';
+    currentPrincipalSelect.innerHTML = '<option value="">加载中...</option>';
     try {
         const res = await fetch(`/api/principals/list?platform_code=uc&account_user=${encodeURIComponent(accountUser)}`);
         const data = await res.json();
         principalSelect.innerHTML = '<option value="">请选择被代理人</option>';
+        currentPrincipalSelect.innerHTML = '<option value="">请选择本次投诉使用的被代理人信息</option>';
         if (data.success && data.data.length > 0) {
+            const principalValues = [];
             data.data.forEach(item => {
                 const opt = document.createElement('option');
                 opt.value = item.principal_name;
                 opt.textContent = item.principal_name;
                 principalSelect.appendChild(opt);
+                principalValues.push(item.principal_name);
+
+                const currentOpt = document.createElement('option');
+                currentOpt.value = item.principal_name;
+                currentOpt.textContent = item.principal_name;
+                currentPrincipalSelect.appendChild(currentOpt);
             });
+
+            if (previousPrincipalValue && principalValues.includes(previousPrincipalValue)) {
+                principalSelect.value = previousPrincipalValue;
+            }
+            if (previousCurrentPrincipalValue && principalValues.includes(previousCurrentPrincipalValue)) {
+                currentPrincipalSelect.value = previousCurrentPrincipalValue;
+            }
         } else {
             principalSelect.innerHTML += '<option value="" disabled>暂无可用被代理人，请先添加</option>';
+            currentPrincipalSelect.innerHTML += '<option value="" disabled>暂无可用被代理人，请先添加</option>';
         }
     } catch (e) {
         principalSelect.innerHTML = '<option value="">加载失败</option>';
+        currentPrincipalSelect.innerHTML = '<option value="">加载失败</option>';
     }
 }
 
@@ -757,6 +807,10 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
         return;
     }
 
+    if (!validateCurrentPrincipalAgainstTemplate(true)) {
+        return;
+    }
+
     // 如果有自定义模板的Excel数据，先创建Excel文件
     if (window.customTemplateExcelRows && window.customTemplateExcelRows.length > 0) {
         const excelData = window.customTemplateExcelRows.map(row => [
@@ -793,12 +847,14 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
     const formData = new FormData();
 
     // 手动获取每个字段的正确值
+    const authoritativePrincipal = document.getElementById('currentPrincipalSelect')?.value.trim() || '';
     formData.append('collect_account', document.getElementById('collectAccountSelect')?.value.trim() || '');
     formData.append('cookie', document.querySelector('textarea[name="cookie"]')?.value.trim() || '');
     // Radio button组需要用:checked选择器获取当前选中项的value
     formData.append('identity', document.querySelector('input[name="identity"]:checked')?.value.trim() || '');
     formData.append('agent', document.getElementById('identitySelect')?.value.trim() || '');
-    formData.append('principal', document.querySelector('select[name="principal"]')?.value.trim() || '');
+    formData.append('principal', authoritativePrincipal);
+    formData.append('current_principal', authoritativePrincipal);
     formData.append('complaint_category', document.querySelector('input[name="complaint_category"]:checked')?.value.trim() || '');
     formData.append('complaint_type', document.querySelector('input[name="complaint_type"]:checked')?.value.trim() || '');
     formData.append('module', document.querySelector('input[name="module"]:checked')?.value.trim() || '');
@@ -893,6 +949,7 @@ function validateAccountInfo() {
     const collectAccount = document.querySelector('select[name="collect_account"]');
     const cookie = document.querySelector('textarea[name="cookie"]');
     const principal = document.querySelector('select[name="principal"]');
+    const currentPrincipal = document.getElementById('currentPrincipalSelect');
     const description = document.querySelector('textarea[name="description"]');
     const proofFile = document.getElementById('proof_file_input');
     const excelFile = document.getElementById('excelFile');
@@ -901,7 +958,7 @@ function validateAccountInfo() {
     let isValid = true;
     let errorMessage = '';
 
-    [collectAccount, cookie, principal, description].forEach(field => {
+    [collectAccount, cookie, principal, currentPrincipal, description].forEach(field => {
         if (field) {
             field.classList.remove('is-invalid');
             const feedback = field.parentNode.querySelector('.invalid-feedback');
@@ -1001,6 +1058,20 @@ function validateAccountInfo() {
         }
     }
 
+    if (!currentPrincipal || !currentPrincipal.value.trim()) {
+        isValid = false;
+        errorMessage += '请选择本次投诉使用的被代理人信息\n';
+        if (currentPrincipal) {
+            currentPrincipal.classList.add('is-invalid');
+            if (!currentPrincipal.nextElementSibling || !currentPrincipal.nextElementSibling.classList.contains('invalid-feedback')) {
+                const feedback = document.createElement('div');
+                feedback.className = 'invalid-feedback';
+                feedback.textContent = '本次投诉使用的被代理人信息不能为空';
+                currentPrincipal.parentNode.appendChild(feedback);
+            }
+        }
+    }
+
     if (!proofFile || !proofFile.files || !proofFile.files.length) {
         isValid = false;
         errorMessage += '请上传证明文件\n';
@@ -1030,6 +1101,11 @@ function downloadCustomTemplate() {
 
 // 处理自定义模版上传
 let currentTemplateId = null;
+window.currentTemplatePrincipal = null;
+
+document.getElementById('currentPrincipalSelect')?.addEventListener('change', function() {
+    validateCurrentPrincipalAgainstTemplate(true);
+});
 
 function handleCustomTemplateUpload(input) {
     const file = input.files[0];
@@ -1038,6 +1114,7 @@ function handleCustomTemplateUpload(input) {
     // 清除之前的模板残留数据
     window.customTemplateOtherProofFiles = null;
     window.customTemplateExcelRows = null;
+    window.currentTemplatePrincipal = null;
     otherProofFiles = [];
     document.getElementById('otherProofList').innerHTML = '';
     document.getElementById('otherProofInfo').textContent = '';
@@ -1053,6 +1130,7 @@ function handleCustomTemplateUpload(input) {
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('current_principal', document.getElementById('currentPrincipalSelect')?.value.trim() || '');
 
     fetch('/api/upload_custom_template', {
         method: 'POST',
@@ -1104,6 +1182,11 @@ function applyCustomTemplateData(data) {
     const files = data.files;
     const excelRows = data.excel_rows;
     const templateId = data.template_id || currentTemplateId;
+    window.currentTemplatePrincipal = normalizePrincipalValue(formData['被代理人（权利人）信息'] || '');
+
+    if (!validateCurrentPrincipalAgainstTemplate(true)) {
+        return;
+    }
 
     // 1. 填充身份信息
     if (formData['您的身份']) {
@@ -1125,11 +1208,21 @@ function applyCustomTemplateData(data) {
         if (accountUser) {
             loadPrincipalsForAccount(accountUser).then(() => {
                 const principalSelect = document.querySelector('select[name="principal"]');
-                if (principalSelect) principalSelect.value = formData['被代理人（权利人）信息'];
+                const currentPrincipalSelect = document.getElementById('currentPrincipalSelect');
+                const normalizedTemplatePrincipal = normalizePrincipalValue(formData['被代理人（权利人）信息']);
+                if (principalSelect) principalSelect.value = normalizedTemplatePrincipal;
+                if (currentPrincipalSelect && !currentPrincipalSelect.value) {
+                    currentPrincipalSelect.value = normalizedTemplatePrincipal;
+                }
             });
         } else {
             const principalSelect = document.querySelector('select[name="principal"]');
-            if (principalSelect) principalSelect.value = formData['被代理人（权利人）信息'];
+            const currentPrincipalSelect = document.getElementById('currentPrincipalSelect');
+            const normalizedTemplatePrincipal = normalizePrincipalValue(formData['被代理人（权利人）信息']);
+            if (principalSelect) principalSelect.value = normalizedTemplatePrincipal;
+            if (currentPrincipalSelect && !currentPrincipalSelect.value) {
+                currentPrincipalSelect.value = normalizedTemplatePrincipal;
+            }
         }
     }
 
