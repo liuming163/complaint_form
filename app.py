@@ -322,6 +322,7 @@ def row_to_account_dict(row):
         'platform_code': row.platform_code,
         'platform_name': row.platform_name,
         'pingtai': row.platform_label,
+        'used_company': row.used_company,
         'user': row.account_user,
         'cookie': row.cookie_text,
         'account_purpose': row.account_purpose,
@@ -472,7 +473,7 @@ def load_accounts():
     with get_db_session() as session:
         rows = session.execute(text("""
             SELECT account_id, platform_code, platform_name, platform_label,
-                   account_user, cookie_text, account_purpose, status,
+                   used_company, account_user, cookie_text, account_purpose, status,
                    created_at, updated_at
             FROM accounts
             ORDER BY id ASC
@@ -956,10 +957,13 @@ def accounts_list():
 def accounts_add():
     data = request.get_json()
     platform_code = data.get('platform_code', '').strip()
+    used_company = data.get('used_company', '').strip()
     user = data.get('user', '').strip()
     cookie = data.get('cookie', '').strip()
-    if not platform_code or not user or not cookie:
-        return jsonify({'success': False, 'error': '平台名称、投诉账号、Cookie都不能为空'}), 400
+    if not platform_code or not used_company or not user or not cookie:
+        return jsonify({'success': False, 'error': '使用的公司、平台名称、投诉账号、Cookie都不能为空'}), 400
+    if used_company not in {'和晞科技', '柏蒙文化'}:
+        return jsonify({'success': False, 'error': '使用的公司无效'}), 400
     if platform_code not in PLATFORM_MAP:
         return jsonify({'success': False, 'error': '平台编码无效'}), 400
 
@@ -977,11 +981,11 @@ def accounts_add():
         session.execute(text("""
             INSERT INTO accounts (
                 account_id, platform_code, platform_name, platform_label,
-                account_user, cookie_text, account_purpose, status,
+                used_company, account_user, cookie_text, account_purpose, status,
                 created_at, updated_at
             ) VALUES (
                 :account_id, :platform_code, :platform_name, :platform_label,
-                :account_user, :cookie_text, :account_purpose, :status,
+                :used_company, :account_user, :cookie_text, :account_purpose, :status,
                 :created_at, :updated_at
             )
         """), {
@@ -989,6 +993,7 @@ def accounts_add():
             'platform_code': platform_code,
             'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
             'platform_label': PLATFORM_MAP[platform_code]['pingtai'],
+            'used_company': used_company,
             'account_user': user,
             'cookie_text': cookie,
             'account_purpose': data.get('account_purpose', '').strip() or None,
@@ -1000,7 +1005,7 @@ def accounts_add():
 
         row = session.execute(text("""
             SELECT account_id, platform_code, platform_name, platform_label,
-                   account_user, cookie_text, account_purpose, status,
+                   used_company, account_user, cookie_text, account_purpose, status,
                    created_at, updated_at
             FROM accounts
             WHERE account_id = :account_id
