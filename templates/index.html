@@ -157,9 +157,12 @@ function refreshUcStatus() {
                     }
 
                     const logUrl = `/uc/task/uc_${item.submission_id}/log`;
-                    const logCell = item.log_available
-                        ? `<a href="${logUrl}" target="_blank" class="log-link">查看日志</a>`
-                        : `<span class="log-expired">日志已过期</span>`;
+                    let logCell = `<span class="log-expired">日志已过期</span>`;
+                    if (item.status === '等待中') {
+                        logCell = `<span class="log-pending">待生成</span>`;
+                    } else if (item.log_available) {
+                        logCell = `<a href="${logUrl}" target="_blank" class="log-link">查看日志</a>`;
+                    }
 
                     html += `
                         <tr>
@@ -340,6 +343,11 @@ document.addEventListener('DOMContentLoaded', refreshUcStatus);
 
 .log-expired {
     color: #999;
+    font-size: 12px;
+}
+
+.log-pending {
+    color: #888;
     font-size: 12px;
 }
 
