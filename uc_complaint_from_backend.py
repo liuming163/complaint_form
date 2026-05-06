@@ -705,6 +705,7 @@ def main(args):
                 result["status"] = "completed"
                 if len(complaint_numbers) != len(excel_files):
                     result["error"] = f"投诉已提交，但仅获取到 {len(complaint_numbers)} 个投诉单号"
+                # === 以上步骤暂时注释，待测试后再放开 ===
 
         except Exception as e:
             batch_no = result.get("current_batch") or 1
