@@ -797,6 +797,84 @@ if (cookieTextarea) {
     });
 }
 
+function resetUcForm() {
+    const form = document.getElementById('ucForm');
+    if (form) {
+        form.reset();
+    }
+
+    const collectAccountSelect = document.getElementById('collectAccountSelect');
+    if (collectAccountSelect) collectAccountSelect.value = '';
+
+    const cookieField = document.querySelector('textarea[name="cookie"]');
+    if (cookieField) {
+        cookieField.value = '';
+        cookieField.classList.remove('is-invalid');
+    }
+
+    const currentPrincipalSelect = document.getElementById('currentPrincipalSelect');
+    if (currentPrincipalSelect) {
+        currentPrincipalSelect.innerHTML = '<option value="">请先选择采集账号</option>';
+        currentPrincipalSelect.value = '';
+        currentPrincipalSelect.classList.remove('is-invalid');
+    }
+
+    const principalSelect = document.querySelector('select[name="principal"]');
+    if (principalSelect) {
+        principalSelect.innerHTML = '<option value="">请先选择采集账号</option>';
+        principalSelect.value = '';
+        principalSelect.classList.remove('is-invalid');
+    }
+
+    const descriptionField = document.querySelector('textarea[name="description"]');
+    if (descriptionField) {
+        descriptionField.value = '';
+        descriptionField.classList.remove('is-invalid');
+    }
+
+    document.querySelectorAll('.is-invalid').forEach(el => el.classList.remove('is-invalid'));
+    document.querySelectorAll('.invalid-feedback').forEach(el => el.remove());
+
+    const excelInput = document.getElementById('excelFile');
+    if (excelInput) excelInput.value = '';
+    const proofInput = document.getElementById('proof_file_input');
+    if (proofInput) proofInput.value = '';
+    const otherProofInput = document.getElementById('other_proof_file_input');
+    if (otherProofInput) otherProofInput.value = '';
+
+    const excelInfo = document.getElementById('excelInfo');
+    if (excelInfo) excelInfo.textContent = '';
+    const excelError = document.getElementById('excelError');
+    if (excelError) excelError.textContent = '';
+    const proofFileInfo = document.getElementById('proofFileInfo');
+    if (proofFileInfo) proofFileInfo.textContent = '';
+    const otherProofInfo = document.getElementById('otherProofInfo');
+    if (otherProofInfo) otherProofInfo.textContent = '';
+
+    const proofPlaceholder = document.getElementById('proofFilePlaceholder');
+    const proofPreview = document.getElementById('proofFilePreview');
+    const proofNonImg = document.getElementById('proofFileNonImg');
+    if (proofPlaceholder) proofPlaceholder.style.display = '';
+    if (proofPreview) {
+        proofPreview.style.display = 'none';
+        proofPreview.removeAttribute('src');
+    }
+    if (proofNonImg) {
+        proofNonImg.style.display = 'none';
+        proofNonImg.textContent = '';
+    }
+
+    const otherProofList = document.getElementById('otherProofList');
+    if (otherProofList) otherProofList.innerHTML = '';
+
+    otherProofFiles = [];
+    window.customTemplateExcelRows = null;
+    window.customTemplateOtherProofFiles = null;
+    window.customTemplateWorkName = null;
+    window.currentTemplatePrincipal = null;
+    currentTemplateId = null;
+}
+
 // 修改表单提交事件
 document.getElementById('ucForm').addEventListener('submit', async function(e) {
     e.preventDefault();
@@ -933,6 +1011,7 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
         // 清空自定义模板数据
         window.customTemplateExcelRows = null;
         window.customTemplateOtherProofFiles = null;
+        resetUcForm();
     } catch (error) {
         alert(error.message || '提交失败');
         console.error('提交失败:', error);
