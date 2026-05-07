@@ -32,13 +32,14 @@
                 <thead>
                     <tr>
                         <th>平台名称</th>
+                        <th>使用的公司</th>
                         <th>投诉账号</th>
                         <th>账号用途</th>
                         <th>被代理人信息</th>
                     </tr>
                 </thead>
                 <tbody id="principalsTableBody">
-                    <tr><td colspan="4" class="text-center text-muted py-4">加载中...</td></tr>
+                    <tr><td colspan="5" class="text-center text-muted py-4">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -62,6 +63,13 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
             </div>
             <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">使用的公司</label>
+                    <select class="form-select" id="inputUsedCompany" onchange="onPlatformChange()">
+                        <option value="和晞科技">和晞科技</option>
+                        <option value="柏蒙文化">柏蒙文化</option>
+                    </select>
+                </div>
                 <div class="mb-3">
                     <label class="form-label">平台名称</label>
                     <select class="form-select" id="inputPlatform" onchange="onPlatformChange()">
@@ -110,15 +118,19 @@ async function loadAccounts() {
 
 function onPlatformChange() {
     const platformCode = document.getElementById('inputPlatform').value;
+    const usedCompany = document.getElementById('inputUsedCompany').value;
     const accountSelect = document.getElementById('inputAccount');
     accountSelect.innerHTML = '<option value="">请选择投诉账号</option>';
-    const filtered = allAccounts.filter(a => a.platform_code === platformCode);
+    const filtered = allAccounts.filter(a => a.platform_code === platformCode && a.used_company === usedCompany);
     filtered.forEach(acc => {
         const opt = document.createElement('option');
         opt.value = acc.user;
         opt.textContent = acc.user;
         accountSelect.appendChild(opt);
     });
+    if (filtered.length === 0) {
+        accountSelect.innerHTML += '<option value="" disabled>暂无符合条件的投诉账号，请先到账号管理中添加</option>';
+    }
 }
 
 async function loadPrincipals() {
@@ -157,6 +169,7 @@ function renderTable(principals) {
         let html = '';
         if (item.rowspan > 0) {
             html += `<td rowspan="${item.rowspan}" style="font-weight:bold;vertical-align:middle;">${escapeHtml(item.platform_name)}</td>`;
+            html += `<td rowspan="${item.rowspan}" style="font-weight:bold;vertical-align:middle;">${escapeHtml(item.used_company || '-')}</td>`;
             html += `<td rowspan="${item.rowspan}" style="font-weight:bold;vertical-align:middle;">${escapeHtml(item.account_user)}</td>`;
             html += `<td rowspan="${item.rowspan}" style="font-weight:bold;vertical-align:middle;">${escapeHtml(item.account_purpose || '-')}</td>`;
         }
@@ -198,6 +211,7 @@ function fuzzyMatch(text, keyword) {
 }
 
 function openAddModal() {
+    document.getElementById('inputUsedCompany').value = '和晞科技';
     document.getElementById('inputPlatform').value = 'uc';
     document.getElementById('inputPrincipal').value = '';
     onPlatformChange();
@@ -244,6 +258,7 @@ document.getElementById('searchInput').addEventListener('input', function(e) {
         }
         const filtered = allPrincipals.filter(item =>
             fuzzyMatch(item.platform_name, keyword) ||
+            fuzzyMatch(item.used_company || '', keyword) ||
             fuzzyMatch(item.account_user, keyword) ||
             fuzzyMatch(item.principal_name, keyword)
         );

@@ -1045,12 +1045,15 @@ def principals_list():
     """返回所有账号及其被代理人信息，每行一个被代理人"""
     platform_code_filter = request.args.get('platform_code', '').strip()
     account_user_filter = request.args.get('account_user', '').strip()
+    used_company_filter = request.args.get('used_company', '').strip()
     principals_data = load_principals_map()
     accounts = load_accounts()
     if platform_code_filter:
         accounts = [acc for acc in accounts if acc.get('platform_code') == platform_code_filter]
     if account_user_filter:
         accounts = [acc for acc in accounts if acc.get('user') == account_user_filter]
+    if used_company_filter:
+        accounts = [acc for acc in accounts if acc.get('used_company') == used_company_filter]
     results = []
     for acc in accounts:
         key = f"{acc['platform_code']}:{acc['user']}"
@@ -1062,6 +1065,7 @@ def principals_list():
                 results.append({
                     'platform_code': acc['platform_code'],
                     'platform_name': acc.get('platform_name', ''),
+                    'used_company': acc.get('used_company', ''),
                     'account_user': acc['user'],
                     'account_purpose': acc.get('account_purpose', ''),
                     'principal_name': name,
@@ -1071,6 +1075,7 @@ def principals_list():
             results.append({
                 'platform_code': acc['platform_code'],
                 'platform_name': acc.get('platform_name', ''),
+                'used_company': acc.get('used_company', ''),
                 'account_user': acc['user'],
                 'account_purpose': acc.get('account_purpose', ''),
                 'principal_name': '-',
