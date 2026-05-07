@@ -9,6 +9,7 @@ import os
 import random
 import re
 import time
+import traceback
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -636,6 +637,7 @@ def main(args):
 
     print(f"🚀 开始执行UC投诉任务: {task_id}")
     print(f"📦 批次数量: {len(excel_files)}")
+    current_step = "初始化浏览器"
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -663,6 +665,7 @@ def main(args):
         page = context.new_page()
 
         try:
+            current_step = "设置Cookie"
             if cookie.startswith('[') or cookie.startswith('{'):
                 cookies = json.loads(cookie) if isinstance(cookie, str) else cookie
                 context.add_cookies(cookies)
@@ -678,7 +681,9 @@ def main(args):
                             "path": "/"
                         }])
 
+            current_step = "打开投诉表单"
             open_complaint_form(page)
+            current_step = "填写初始表单"
             fill_initial_form(
                 page, identity, agent, rights_holder, complaint_type, copyright_type,
                 module, content_type, description, proof_file, other_proof_files
@@ -687,18 +692,23 @@ def main(args):
             for index, excel_file in enumerate(excel_files, start=1):
                 result["current_batch"] = index
                 print(f"\n===== 开始第 {index}/{len(excel_files)} 批 =====")
+                current_step = f"第{index}批导入Excel"
                 upload_batch_excel(page, excel_file)
+                current_step = f"第{index}批提交投诉"
                 # === 以下步骤暂时注释，待测试后再放开 ===
                 submit_form(page)
 
                 if index < len(excel_files):
+                    current_step = f"第{index}批点击继续"
                     click_continue_in_success_dialog(page)
                     update_batch_result(result, index, "completed")
                     human_delay(1500, 2500)
                 else:
+                    current_step = f"第{index}批跳转投诉列表"
                     click_list_in_success_dialog(page)
                     update_batch_result(result, index, "completed")
 
+                current_step = f"第{index}批读取投诉单号"
                 complaint_numbers = read_latest_complaint_numbers(page, len(excel_files))
                 result["complaint_numbers"] = complaint_numbers
                 result["complaint_number"] = complaint_numbers[0] if complaint_numbers else None
@@ -711,8 +721,8 @@ def main(args):
             batch_no = result.get("current_batch") or 1
             update_batch_result(result, batch_no, "failed", str(e))
             result["status"] = "partial_failed" if result["completed_batches"] > 0 else "failed"
-            result["error"] = str(e)
-            print(f"❌ 执行失败: {e}")
+            result["error"] = f"{current_step}失败：{str(e)}"
+            print(f"❌ 执行失败（{current_step}）: {e}")
         finally:
             result["completed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             save_task_result(task_id, result)
@@ -739,7 +749,24 @@ if __name__ == "__main__":
     parser.add_argument("--content-type", type=str, required=True, help="内容类型")
 
     args = parser.parse_args()
-    result = main(args)
+    try:
+        result = main(args)
+    except Exception as e:
+        traceback.print_exc()
+        result = {
+            "task_id": args.task_id,
+            "status": "failed",
+            "started_at": None,
+            "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "complaint_number": None,
+            "complaint_numbers": [],
+            "total_batches": 0,
+            "completed_batches": 0,
+            "failed_batches": 0,
+            "current_batch": 0,
+            "batches": [],
+            "error": f"脚本初始化或主流程失败：{str(e)}",
+        }
 
     print("\n" + "=" * 50)
     print("JSON_RESULT_START")
