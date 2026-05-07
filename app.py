@@ -1519,7 +1519,7 @@ def download_custom_template():
             ['上传Excel后，系统会根据以下规则自动匹配证明文件：'],
             [''],
             ['证明文件', '根据「作品名称」在 static/imgs/剧名/作品名称/ 目录下查找「证明文件_*」文件'],
-            ['其他证明[1]', '根据「被代理人」在 static/imgs/授权委托书/ 目录下查找「委托授权书_被代理人」文件'],
+            ['其他证明[1]', '根据「被代理人」在 static/imgs/授权委托书/ 目录下查找「授权委托书_被代理人」文件'],
             ['其他证明[2]', '根据「被代理人」在 static/imgs/营业执照/ 目录下查找「营业执照_被代理人」文件'],
             ['其他证明[3]', '根据「代理人」在 static/imgs/营业执照/ 目录下查找「营业执照_代理人」文件'],
             [''],
@@ -1724,14 +1724,14 @@ def upload_custom_template():
             if f.startswith('其他证明_') and not f.startswith('._'):
                 other_proof_files.append(os.path.join('剧名', work_name, f))
 
-        # 2.1 授权委托书: static/imgs/授权委托书/委托授权书_[被代理人].*
+        # 2.1 授权委托书: static/imgs/授权委托书/授权委托书_[被代理人].*
         proxy_file = None
         if principal:
             auth_dir = os.path.join(static_imgs_dir, '授权委托书')
             if os.path.isdir(auth_dir):
                 # 精确匹配公司名（支持括号中英文模糊匹配）
                 for f in os.listdir(auth_dir):
-                    if (f.startswith('委托授权书_') or f.startswith('授权委托书_')) and not f.startswith('._'):
+                    if f.startswith('授权委托书_') and not f.startswith('._'):
                         if company_match(principal, f):
                             proxy_file = os.path.join('授权委托书', f)
                             break
@@ -1772,7 +1772,7 @@ def upload_custom_template():
         if not proof_file:
             missing_proofs.append('证明文件（侵权证明）')
         if not proxy_file:
-            missing_proofs.append('授权委托书（委托授权书_被代理人）')
+            missing_proofs.append('授权委托书（授权委托书_被代理人）')
         if not biz_license_principal:
             missing_proofs.append('营业执照（被代理人）')
         if not biz_license_agent:

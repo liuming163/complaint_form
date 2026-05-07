@@ -1372,7 +1372,7 @@ function applyCustomTemplateData(data) {
             const name = filename.split('/').pop();
             // 保留其他证明文件、授权委托书、营业执照
             return name.startsWith('其他证明_') ||
-                   name.startsWith('委托授权书_') ||
+                   name.startsWith('授权委托书_') ||
                    name.startsWith('营业执照_');
         });
 
