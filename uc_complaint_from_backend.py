@@ -69,6 +69,10 @@ def human_type(page, element, text):
     human_delay(200, 400)
 
 
+def normalize_company_name(value):
+    return (value or "").replace("（", "(").replace("）", ")").replace(" ", "").strip()
+
+
 # ========== 保存任务结果 ==========
 def save_task_result(task_id, result):
     result_dir = Path("/Users/jan/Desktop/pj/complaint_form/task_results")
@@ -294,10 +298,19 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
         # 打印所有选项并查找目标
         print("\n📋 下拉列表所有选项:")
         found = False
+        normalized_target = normalize_company_name(rights_holder)
+        print(f"🔎 原始目标值: {rights_holder}")
+        print(f"🔎 归一化目标值: {normalized_target}")
         for idx in range(total_options):
             option_text = all_options.nth(idx).text_content().strip()
+            normalized_option = normalize_company_name(option_text)
             print(f"  {idx + 1}. {option_text}")
-            if rights_holder in option_text or option_text == rights_holder:
+            if (
+                option_text == rights_holder
+                or rights_holder in option_text
+                or normalized_target == normalized_option
+                or normalized_target in normalized_option
+            ):
                 principal_option = all_options.nth(idx)
                 found = True
                 print(f"✅ 在第 {idx + 1} 个位置找到匹配: {option_text}")
@@ -332,7 +345,13 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
                 current_options = dropdown.locator(".ant-select-dropdown-menu-item, [role='option']")
                 for idx in range(current_options.count()):
                     option_text = current_options.nth(idx).text_content().strip()
-                    if rights_holder in option_text or option_text == rights_holder:
+                    normalized_option = normalize_company_name(option_text)
+                    if (
+                        option_text == rights_holder
+                        or rights_holder in option_text
+                        or normalized_target == normalized_option
+                        or normalized_target in normalized_option
+                    ):
                         principal_option = current_options.nth(idx)
                         found = True
                         print(f"✅ 滚动后在第 {idx + 1} 个位置找到: {option_text}")
@@ -345,10 +364,9 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
 
             if not found:
                 # 最后尝试：归一化匹配
-                normalized_target = rights_holder.replace(" ", "").strip()
                 for idx in range(total_options):
                     option_text = all_options.nth(idx).text_content().strip()
-                    normalized_option = option_text.replace(" ", "").strip()
+                    normalized_option = normalize_company_name(option_text)
                     if normalized_target == normalized_option or normalized_target in normalized_option:
                         principal_option = all_options.nth(idx)
                         found = True
