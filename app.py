@@ -508,6 +508,125 @@ def load_principals_map():
     return principals_map
 
 
+def normalize_company_name(value):
+    return (value or '').strip().replace('（', '(').replace('）', ')')
+
+
+def get_principal_document_record(platform_code, used_company, principal_name):
+    normalized_company = normalize_company_name(used_company)
+    normalized_principal = normalize_company_name(principal_name)
+    with get_db_session() as session:
+        business_license = session.execute(text("""
+            SELECT business_license_filename
+            FROM principal_documents
+            WHERE principal_name = :principal_name
+              AND business_license_filename IS NOT NULL
+              AND business_license_filename <> ''
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1
+        """), {'principal_name': normalized_principal}).mappings().first()
+        authorization = session.execute(text("""
+            SELECT authorization_filename, authorization_expires_on
+            FROM principal_documents
+            WHERE platform_code = :platform_code
+              AND used_company = :used_company
+              AND principal_name = :principal_name
+              AND authorization_filename IS NOT NULL
+              AND authorization_filename <> ''
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1
+        """), {
+            'platform_code': platform_code,
+            'used_company': normalized_company,
+            'principal_name': normalized_principal,
+        }).mappings().first()
+
+    if not business_license and not authorization:
+        return None
+
+    data = {
+        'principal_name': normalized_principal,
+        'used_company': normalized_company,
+        'business_license_filename': business_license.get('business_license_filename') if business_license else None,
+        'authorization_filename': authorization.get('authorization_filename') if authorization else None,
+        'authorization_expires_on': normalize_datetime(authorization.get('authorization_expires_on')) if authorization else None,
+        'business_license_locked': bool(business_license),
+        'authorization_locked': bool(authorization),
+    }
+    return data
+
+
+def save_named_upload(file_storage, target_dir, target_name_without_ext):
+    if not file_storage or not file_storage.filename:
+        return None
+    suffix = Path(file_storage.filename).suffix.lower()
+    filename = f"{target_name_without_ext}{suffix}"
+    save_path = os.path.join(target_dir, filename)
+    file_storage.save(save_path)
+    return filename
+
+
+def upsert_principal_documents(platform_code, used_company, account_user, principal_name,
+                              business_license_filename, authorization_filename, authorization_expires_on):
+    normalized_company = normalize_company_name(used_company)
+    normalized_principal = normalize_company_name(principal_name)
+    with get_db_session() as session:
+        existing = session.execute(text("""
+            SELECT doc_id
+            FROM principal_documents
+            WHERE platform_code = :platform_code
+              AND used_company = :used_company
+              AND principal_name = :principal_name
+            LIMIT 1
+        """), {
+            'platform_code': platform_code,
+            'used_company': normalized_company,
+            'principal_name': normalized_principal,
+        }).mappings().first()
+        if existing:
+            session.execute(text("""
+                UPDATE principal_documents
+                SET account_user = :account_user,
+                    business_license_filename = :business_license_filename,
+                    authorization_filename = :authorization_filename,
+                    authorization_expires_on = :authorization_expires_on,
+                    updated_at = :updated_at
+                WHERE doc_id = :doc_id
+            """), {
+                'account_user': account_user,
+                'business_license_filename': business_license_filename,
+                'authorization_filename': authorization_filename,
+                'authorization_expires_on': authorization_expires_on,
+                'updated_at': datetime.now(),
+                'doc_id': existing['doc_id'],
+            })
+        else:
+            now = datetime.now()
+            session.execute(text("""
+                INSERT INTO principal_documents (
+                    doc_id, platform_code, used_company, account_user, principal_name,
+                    business_license_filename, authorization_filename, authorization_expires_on,
+                    created_at, updated_at
+                ) VALUES (
+                    :doc_id, :platform_code, :used_company, :account_user, :principal_name,
+                    :business_license_filename, :authorization_filename, :authorization_expires_on,
+                    :created_at, :updated_at
+                )
+            """), {
+                'doc_id': uuid4().hex[:12],
+                'platform_code': platform_code,
+                'used_company': normalized_company,
+                'account_user': account_user,
+                'principal_name': normalized_principal,
+                'business_license_filename': business_license_filename,
+                'authorization_filename': authorization_filename,
+                'authorization_expires_on': authorization_expires_on,
+                'created_at': now,
+                'updated_at': now,
+            })
+        session.commit()
+
+
 def serialize_complaint_numbers(value):
     if value is None:
         return json.dumps([])
@@ -1084,22 +1203,64 @@ def principals_list():
     return jsonify({'success': True, 'data': results})
 
 
+@app.route('/api/principals/document', methods=['GET'])
+def principal_document_detail():
+    platform_code = request.args.get('platform_code', '').strip()
+    used_company = request.args.get('used_company', '').strip()
+    principal_name = request.args.get('principal_name', '').strip()
+    if not platform_code or not used_company or not principal_name:
+        return jsonify({'success': True, 'data': None})
+
+    record = get_principal_document_record(platform_code, used_company, principal_name)
+    if not record:
+        return jsonify({'success': True, 'data': None})
+
+    data = {
+        'principal_name': record['principal_name'],
+        'used_company': record['used_company'],
+        'authorization_expires_on': record['authorization_expires_on'],
+        'business_license_locked': record['business_license_locked'],
+        'authorization_locked': record['authorization_locked'],
+        'business_license_filename': record['business_license_filename'],
+        'authorization_filename': record['authorization_filename'],
+        'business_license_path': f"营业执照/{record['business_license_filename']}" if record['business_license_filename'] else None,
+        'authorization_path': f"授权委托书/{record['authorization_filename']}" if record['authorization_filename'] else None,
+    }
+    return jsonify({'success': True, 'data': data})
+
+
 @app.route('/api/principals/add', methods=['POST'])
 def principals_add():
     """添加被代理人信息，按 (platform_code + account_user) 分组"""
-    data = request.get_json()
-    platform_code = data.get('platform_code', '').strip()
-    account_user = data.get('account_user', '').strip()
-    principal_name = data.get('principal_name', '').strip()
+    if request.is_json:
+        data = request.get_json()
+        platform_code = data.get('platform_code', '').strip()
+        account_user = data.get('account_user', '').strip()
+        principal_name = data.get('principal_name', '').strip()
+        used_company = ''
+        business_license_file = None
+        authorization_file = None
+        authorization_expires_on = ''
+    else:
+        platform_code = request.form.get('platform_code', '').strip()
+        account_user = request.form.get('account_user', '').strip()
+        principal_name = request.form.get('principal_name', '').strip()
+        used_company = request.form.get('used_company', '').strip()
+        business_license_file = request.files.get('business_license_file')
+        authorization_file = request.files.get('authorization_file')
+        authorization_expires_on = request.form.get('authorization_expires_on', '').strip()
 
     if not platform_code or not account_user or not principal_name:
         return jsonify({'success': False, 'error': '平台名称、投诉账号、被代理人信息都不能为空'}), 400
     if platform_code not in PLATFORM_MAP:
         return jsonify({'success': False, 'error': '平台编码无效'}), 400
 
+    normalized_principal_name = normalize_company_name(principal_name)
+    normalized_used_company = normalize_company_name(used_company)
+
     with get_db_session() as session:
         account_exists = session.execute(text("""
-            SELECT platform_name FROM accounts
+            SELECT platform_name, used_company FROM accounts
             WHERE platform_code = :platform_code AND account_user = :account_user
             LIMIT 1
         """), {
@@ -1108,6 +1269,27 @@ def principals_add():
         }).mappings().first()
         if not account_exists:
             return jsonify({'success': False, 'error': '投诉账号不存在'}), 400
+
+        if not request.is_json:
+            if not normalized_used_company:
+                return jsonify({'success': False, 'error': '使用的公司不能为空'}), 400
+            if account_exists.get('used_company') != normalized_used_company:
+                return jsonify({'success': False, 'error': '所选投诉账号与使用的公司不匹配'}), 400
+
+            existing_docs = get_principal_document_record(platform_code, normalized_used_company, normalized_principal_name)
+            if not existing_docs or not existing_docs.get('business_license_locked'):
+                if not business_license_file or not business_license_file.filename:
+                    return jsonify({'success': False, 'error': '请上传被代理人营业执照'}), 400
+            else:
+                business_license_file = None
+
+            if not existing_docs or not existing_docs.get('authorization_locked'):
+                if not authorization_file or not authorization_file.filename:
+                    return jsonify({'success': False, 'error': '请上传授权委托书'}), 400
+                if not authorization_expires_on:
+                    return jsonify({'success': False, 'error': '请填写授权期限截止日期'}), 400
+            else:
+                authorization_file = None
 
         group = session.execute(text("""
             SELECT group_id, platform_name
@@ -1145,7 +1327,7 @@ def principals_add():
             LIMIT 1
         """), {
             'group_id': group_id,
-            'principal_name': principal_name,
+            'principal_name': normalized_principal_name,
         }).first()
         if exists:
             return jsonify({'success': False, 'error': '该被代理人信息已存在'}), 400
@@ -1159,7 +1341,7 @@ def principals_add():
         """), {
             'item_id': uuid4().hex[:12],
             'group_id': group_id,
-            'principal_name': principal_name,
+            'principal_name': normalized_principal_name,
             'created_at': datetime.now(),
         })
         session.execute(text("""
@@ -1172,11 +1354,37 @@ def principals_add():
         })
         session.commit()
 
+    if not request.is_json:
+        business_license_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '营业执照')
+        auth_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '授权委托书')
+        ensure_dir(business_license_dir)
+        ensure_dir(auth_dir)
+        existing_docs = get_principal_document_record(platform_code, normalized_used_company, normalized_principal_name) or {}
+        expires_yyyymmdd = authorization_expires_on.replace('-', '') if authorization_expires_on else None
+        business_license_filename = existing_docs.get('business_license_filename')
+        authorization_filename = existing_docs.get('authorization_filename')
+        authorization_expires_value = existing_docs.get('authorization_expires_on')
+        if business_license_file:
+            business_license_filename = save_named_upload(business_license_file, business_license_dir, f'营业执照_{normalized_principal_name}')
+        if authorization_file:
+            authorization_filename = save_named_upload(authorization_file, auth_dir, f'授权委托书_{normalized_principal_name}_{normalized_used_company}_截止日期{expires_yyyymmdd}')
+            authorization_expires_value = authorization_expires_on
+        upsert_principal_documents(
+            platform_code,
+            normalized_used_company,
+            account_user,
+            normalized_principal_name,
+            business_license_filename,
+            authorization_filename,
+            authorization_expires_value,
+        )
+
     return jsonify({'success': True, 'data': {
         'platform_code': platform_code,
         'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
+        'used_company': account_exists.get('used_company', normalized_used_company),
         'account_user': account_user,
-        'principal_name': principal_name,
+        'principal_name': normalized_principal_name,
     }})
 
 
@@ -1524,7 +1732,7 @@ def download_custom_template():
             ['上传Excel后，系统会根据以下规则自动匹配证明文件：'],
             [''],
             ['证明文件', '根据「作品名称」在 static/imgs/剧名/作品名称/ 目录下查找「证明文件_*」文件'],
-            ['其他证明[1]', '根据「被代理人」在 static/imgs/授权委托书/ 目录下查找「授权委托书_被代理人」文件'],
+            ['其他证明[1]', '根据「被代理人」和「使用的公司」在 static/imgs/授权委托书/ 目录下查找「授权委托书_被代理人_使用的公司_截止日期YYYYMMDD」文件'],
             ['其他证明[2]', '根据「被代理人」在 static/imgs/营业执照/ 目录下查找「营业执照_被代理人」文件'],
             ['其他证明[3]', '根据「代理人」在 static/imgs/营业执照/ 目录下查找「营业执照_代理人」文件'],
             [''],
@@ -1777,7 +1985,7 @@ def upload_custom_template():
         if not proof_file:
             missing_proofs.append('证明文件（侵权证明）')
         if not proxy_file:
-            missing_proofs.append('授权委托书（授权委托书_被代理人）')
+            missing_proofs.append('授权委托书（授权委托书_被代理人_使用的公司_截止日期YYYYMMDD）')
         if not biz_license_principal:
             missing_proofs.append('营业执照（被代理人）')
         if not biz_license_agent:

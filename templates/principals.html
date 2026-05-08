@@ -65,27 +65,44 @@
             <div class="modal-body">
                 <div class="mb-3">
                     <label class="form-label">使用的公司</label>
-                    <select class="form-select" id="inputUsedCompany" onchange="onPlatformChange()">
+                    <select class="form-select" id="inputUsedCompany" onchange="onPrincipalFormSelectionChange()">
                         <option value="和晞科技">和晞科技</option>
                         <option value="柏蒙文化">柏蒙文化</option>
                     </select>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">平台名称</label>
-                    <select class="form-select" id="inputPlatform" onchange="onPlatformChange()">
+                    <select class="form-select" id="inputPlatform" onchange="onPrincipalFormSelectionChange()">
                         <option value="uc">UC</option>
                         <option value="quark">夸克</option>
                     </select>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">投诉账号</label>
-                    <select class="form-select" id="inputAccount">
+                    <select class="form-select" id="inputAccount" onchange="loadPrincipalDocumentRecord()">
                         <option value="">请先选择平台</option>
                     </select>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">被代理人信息</label>
-                    <input type="text" class="form-control" id="inputPrincipal" placeholder="请输入被代理人信息，如：腾讯科技（北京）有限公司" onblur="this.value = this.value.trim()">
+                    <input type="text" class="form-control" id="inputPrincipal" placeholder="请输入被代理人信息，如：腾讯科技（北京）有限公司" onblur="this.value = this.value.trim(); loadPrincipalDocumentRecord();">
+                </div>
+                <div id="principalDocsExisting" class="mb-3" style="display:none;"></div>
+                <div id="principalBusinessLicenseSection">
+                    <div class="mb-3">
+                        <label class="form-label">上传被代理人营业执照</label>
+                        <input type="file" class="form-control" id="inputBusinessLicense" accept=".png,.jpg,.jpeg,.bmp,.pdf">
+                    </div>
+                </div>
+                <div id="principalAuthorizationSection">
+                    <div class="mb-3">
+                        <label class="form-label">上传授权委托书</label>
+                        <input type="file" class="form-control" id="inputAuthorization" accept=".png,.jpg,.jpeg,.bmp,.pdf">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">授权期限截止日期</label>
+                        <input type="date" class="form-control" id="inputAuthorizationExpiresOn">
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -102,6 +119,63 @@ let allPrincipals = [];
 let allAccounts = [];
 let debounceTimer = null;
 let addModal = null;
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text ?? '';
+    return div.innerHTML;
+}
+
+function getPrincipalDocViewHtml(data) {
+    const businessLicenseLink = data.business_license_path
+        ? `<div class="mb-2"><strong>被代理人营业执照：</strong><a href="/api/proof_file/${encodeURIComponent(data.business_license_path)}" target="_blank">${escapeHtml(data.business_license_filename)}</a></div>`
+        : `<div class="mb-2 text-muted"><strong>被代理人营业执照：</strong>暂无</div>`;
+    const authorizationLink = data.authorization_path
+        ? `<div class="mb-2"><strong>授权委托书：</strong><a href="/api/proof_file/${encodeURIComponent(data.authorization_path)}" target="_blank">${escapeHtml(data.authorization_filename)}</a></div>`
+        : `<div class="mb-2 text-muted"><strong>授权委托书：</strong>暂无</div>`;
+    const expiresOn = data.authorization_expires_on
+        ? `<div><strong>授权期限截止日期：</strong>${escapeHtml(data.authorization_expires_on)}</div>`
+        : `<div class="text-muted"><strong>授权期限截止日期：</strong>暂无</div>`;
+    return `<div class="alert alert-info mb-0"><div class="fw-bold mb-2">已存在资料，已有部分仅展示，不允许在此处覆盖上传；缺失部分可继续补充。</div>${businessLicenseLink}${authorizationLink}${expiresOn}</div>`;
+}
+
+async function loadPrincipalDocumentRecord() {
+    const platformCode = document.getElementById('inputPlatform').value;
+    const usedCompany = document.getElementById('inputUsedCompany').value;
+    const accountUser = document.getElementById('inputAccount').value.trim();
+    const principalName = document.getElementById('inputPrincipal').value.trim();
+    const existingBox = document.getElementById('principalDocsExisting');
+    const businessLicenseSection = document.getElementById('principalBusinessLicenseSection');
+    const authorizationSection = document.getElementById('principalAuthorizationSection');
+
+    existingBox.style.display = 'none';
+    existingBox.innerHTML = '';
+    businessLicenseSection.style.display = '';
+    authorizationSection.style.display = '';
+
+    if (!platformCode || !usedCompany || !accountUser || !principalName) {
+        return;
+    }
+
+    const query = new URLSearchParams({
+        platform_code: platformCode,
+        used_company: usedCompany,
+        principal_name: principalName,
+    });
+
+    try {
+        const res = await fetch(`/api/principals/document?${query.toString()}`);
+        const data = await res.json();
+        if (data.success && data.data) {
+            existingBox.innerHTML = getPrincipalDocViewHtml(data.data);
+            existingBox.style.display = '';
+            businessLicenseSection.style.display = data.data.business_license_locked ? 'none' : '';
+            authorizationSection.style.display = data.data.authorization_locked ? 'none' : '';
+        }
+    } catch (e) {
+        console.error('加载被代理人资料失败', e);
+    }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
     addModal = new bootstrap.Modal(document.getElementById('addModal'));
@@ -131,6 +205,14 @@ function onPlatformChange() {
     if (filtered.length === 0) {
         accountSelect.innerHTML += '<option value="" disabled>暂无符合条件的投诉账号，请先到账号管理中添加</option>';
     }
+    document.getElementById('principalDocsExisting').style.display = 'none';
+    document.getElementById('principalDocsExisting').innerHTML = '';
+    document.getElementById('principalBusinessLicenseSection').style.display = '';
+    document.getElementById('principalAuthorizationSection').style.display = '';
+}
+
+function onPrincipalFormSelectionChange() {
+    onPlatformChange();
 }
 
 async function loadPrincipals() {
@@ -214,29 +296,58 @@ function openAddModal() {
     document.getElementById('inputUsedCompany').value = '和晞科技';
     document.getElementById('inputPlatform').value = 'uc';
     document.getElementById('inputPrincipal').value = '';
+    document.getElementById('inputBusinessLicense').value = '';
+    document.getElementById('inputAuthorization').value = '';
+    document.getElementById('inputAuthorizationExpiresOn').value = '';
+    document.getElementById('principalDocsExisting').style.display = 'none';
+    document.getElementById('principalDocsExisting').innerHTML = '';
+    document.getElementById('principalBusinessLicenseSection').style.display = '';
+    document.getElementById('principalAuthorizationSection').style.display = '';
     onPlatformChange();
     addModal.show();
 }
 
 async function submitAddPrincipal() {
+    const used_company = document.getElementById('inputUsedCompany').value;
     const platform_code = document.getElementById('inputPlatform').value;
     const account_user = document.getElementById('inputAccount').value.trim();
     const principal_name = document.getElementById('inputPrincipal').value.trim();
+    const business_license_file = document.getElementById('inputBusinessLicense').files[0];
+    const authorization_file = document.getElementById('inputAuthorization').files[0];
+    const authorization_expires_on = document.getElementById('inputAuthorizationExpiresOn').value;
+    const businessLicenseVisible = document.getElementById('principalBusinessLicenseSection').style.display !== 'none';
+    const authorizationVisible = document.getElementById('principalAuthorizationSection').style.display !== 'none';
 
-    if (!platform_code || !account_user || !principal_name) {
+    if (!used_company || !platform_code || !account_user || !principal_name) {
         showToast('请填写所有必填项', true);
         return;
     }
+    if (businessLicenseVisible && !business_license_file) {
+        showToast('请上传被代理人营业执照', true);
+        return;
+    }
+    if (authorizationVisible && (!authorization_file || !authorization_expires_on)) {
+        showToast('请补全授权委托书和授权期限截止日期', true);
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('used_company', used_company);
+    formData.append('platform_code', platform_code);
+    formData.append('account_user', account_user);
+    formData.append('principal_name', principal_name);
+    if (business_license_file) formData.append('business_license_file', business_license_file);
+    if (authorization_file) formData.append('authorization_file', authorization_file);
+    if (authorization_expires_on) formData.append('authorization_expires_on', authorization_expires_on);
 
     const res = await fetch('/api/principals/add', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({platform_code, account_user, principal_name})
+        body: formData
     });
     const data = await res.json();
 
     if (!data.success) {
-    showToast('添加失败：' + data.error, true);
+        showToast('添加失败：' + data.error, true);
         return;
     }
 
