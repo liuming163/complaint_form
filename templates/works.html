@@ -7,6 +7,7 @@
     <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdn.bootcdn.net/ajax/libs/fuse.js/7.0.0/fuse.min.js"></script>
+<script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
 </head>
 <body>
 <header class="main-header shadow-sm">
@@ -18,12 +19,33 @@
 
 <div class="form-page-wrap">
     <div class="form-card">
-        <div class="section-title"><i class="fas fa-search"></i> 搜索作品</div>
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div class="section-title mb-0"><i class="fas fa-images"></i> 作品覆盖列表</div>
+            <button class="btn btn-primary" onclick="openAddWorkModal()">
+                <i class="fas fa-plus"></i> 新增作品
+            </button>
+        </div>
         <div class="mb-3">
-            <input type="text" id="searchInput" class="form-control" placeholder="输入作品名称进行搜索..." autocomplete="off">
+            <input type="text" id="searchInput" class="form-control" placeholder="输入剧名、所属公司、内容类型或投诉类型进行搜索..." autocomplete="off">
         </div>
         <div id="resultCount" class="form-text mb-3"></div>
-        <div id="worksGrid" class="works-grid"></div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle" id="worksTable">
+                <thead>
+                    <tr>
+                        <th>剧名</th>
+                        <th>所属公司</th>
+                        <th>内容类型</th>
+                        <th>投诉类型</th>
+                        <th>作品权属文件</th>
+                        <th>其他证明数量</th>
+                    </tr>
+                </thead>
+                <tbody id="worksTableBody">
+                    <tr><td colspan="6" class="text-center text-muted py-4">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
         <div id="emptyState" class="text-center text-muted py-5" style="display:none">
             <i class="fas fa-folder-open fa-3x mb-3"></i>
             <div>暂无作品</div>
@@ -37,37 +59,63 @@
     </div>
 </div>
 
+<!-- 新增作品弹窗 -->
+<div class="modal fade" id="addWorkModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fas fa-plus me-2"></i>新增作品</div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">请输入剧名</label>
+                    <input type="text" class="form-control" id="inputWorkName" placeholder="请输入剧名" onblur="this.value = this.value.trim()">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">所属公司</label>
+                    <select class="form-select" id="inputUsedCompany">
+                        <option value="和晞科技">和晞科技</option>
+                        <option value="柏蒙文化">柏蒙文化</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">内容类型</label>
+                    <select class="form-select" id="inputContentType">
+                        <option value="">请选择内容类型</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">投诉类型</label>
+                    <select class="form-select" id="inputComplaintType">
+                        <option value="">请选择投诉类型</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">请上传作品权属</label>
+                    <input type="file" class="form-control" id="inputProofFile" accept=".png,.jpg,.jpeg,.bmp,.pdf">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">是否还有其他证明文件（最多2个）</label>
+                    <input type="file" class="form-control" id="inputOtherProofFiles" accept=".png,.jpg,.jpeg,.bmp,.pdf" multiple>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="submitAddWork()">提交</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <style>
 .works-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 12px;
+    display: none;
 }
-.work-item {
-    background: #f8f9fa;
-    border: 1px solid #e9ecef;
-    border-radius: 8px;
-    padding: 16px;
-    text-align: center;
-    font-size: 14px;
-    color: #333;
-    transition: all 0.2s;
-    cursor: default;
+.table td, .table th {
+    white-space: nowrap;
+    vertical-align: middle;
 }
-.work-item:hover {
-    background: #e9ecef;
-    border-color: #ced4da;
-}
-.work-item .work-name {
-    font-weight: 600;
-    word-break: break-all;
-}
-.work-item .work-count {
-    font-size: 12px;
-    color: #888;
-    margin-top: 4px;
-}
-
 .copy-tooltip {
     position: fixed;
     top: 20px;
@@ -92,51 +140,82 @@
 let allWorks = [];
 let fuse = null;
 let debounceTimer = null;
+let addWorkModal = null;
+
+async function loadWorkDictionaries() {
+    const [contentRes, complaintRes] = await Promise.all([
+        fetch('/api/works/content_types').then(r => r.json()),
+        fetch('/api/works/complaint_types').then(r => r.json())
+    ]);
+    const contentSelect = document.getElementById('inputContentType');
+    const complaintSelect = document.getElementById('inputComplaintType');
+    if (contentRes.success) {
+        contentRes.data.forEach(item => {
+            const opt = document.createElement('option');
+            opt.value = item.id;
+            opt.textContent = item.name;
+            contentSelect.appendChild(opt);
+        });
+    }
+    if (complaintRes.success) {
+        complaintRes.data.forEach(item => {
+            const opt = document.createElement('option');
+            opt.value = item.id;
+            opt.textContent = item.name;
+            complaintSelect.appendChild(opt);
+        });
+    }
+}
 
 async function loadWorks() {
     const res = await fetch('/api/works/list');
     const data = await res.json();
     if (!data.success) {
-        document.getElementById('worksGrid').innerHTML = '<div class="text-danger">加载失败</div>';
+        document.getElementById('worksTableBody').innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">加载失败</td></tr>';
         return;
     }
     allWorks = data.data;
     fuse = new Fuse(allWorks, {
-        threshold: 0.4,
-        ignoreLocation: true
+        threshold: 0.3,
+        ignoreLocation: true,
+        keys: ['work_name', 'used_company', 'content_type', 'complaint_type']
     });
     renderWorks(allWorks);
 }
 
 function renderWorks(works) {
-    const grid = document.getElementById('worksGrid');
+    const tbody = document.getElementById('worksTableBody');
+    const table = document.getElementById('worksTable');
     const emptyState = document.getElementById('emptyState');
     const searchEmpty = document.getElementById('searchEmpty');
     const countEl = document.getElementById('resultCount');
     const searchValue = document.getElementById('searchInput').value.trim();
 
-    grid.innerHTML = '';
-
+    tbody.innerHTML = '';
     if (works.length === 0) {
-        grid.style.display = 'none';
+        table.style.display = 'none';
         emptyState.style.display = searchValue ? 'none' : 'flex';
         searchEmpty.style.display = searchValue ? 'flex' : 'none';
         countEl.textContent = '';
         return;
     }
 
-    grid.style.display = 'grid';
+    table.style.display = '';
     emptyState.style.display = 'none';
     searchEmpty.style.display = 'none';
     countEl.textContent = `共 ${works.length} 个作品`;
 
-    works.forEach(name => {
-        const item = document.createElement('div');
-        item.className = 'work-item';
-        item.innerHTML = `<div class="work-name">${escapeHtml(name)}</div>`;
-        item.style.cursor = 'pointer';
-        item.addEventListener('click', () => copyToClipboard(name));
-        grid.appendChild(item);
+    works.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${escapeHtml(item.work_name)}</td>
+            <td>${escapeHtml(item.used_company)}</td>
+            <td>${escapeHtml(item.content_type)}</td>
+            <td>${escapeHtml(item.complaint_type)}</td>
+            <td>${escapeHtml(item.proof_file || '-')}</td>
+            <td>${escapeHtml(String(item.other_proof_count ?? 0))}</td>
+        `;
+        tbody.appendChild(tr);
     });
 }
 
@@ -146,33 +225,49 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function copyToClipboard(text) {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(() => {
-            showCopyTooltip();
-        }).catch(() => {
-            fallbackCopyText(text);
-        });
-    } else {
-        fallbackCopyText(text);
+function openAddWorkModal() {
+    document.getElementById('inputWorkName').value = '';
+    document.getElementById('inputUsedCompany').value = '和晞科技';
+    document.getElementById('inputContentType').value = '';
+    document.getElementById('inputComplaintType').value = '';
+    document.getElementById('inputProofFile').value = '';
+    document.getElementById('inputOtherProofFiles').value = '';
+    addWorkModal.show();
+}
+
+async function submitAddWork() {
+    const workName = document.getElementById('inputWorkName').value.trim();
+    const usedCompany = document.getElementById('inputUsedCompany').value;
+    const contentTypeId = document.getElementById('inputContentType').value;
+    const complaintTypeId = document.getElementById('inputComplaintType').value;
+    const proofFile = document.getElementById('inputProofFile').files[0];
+    const otherFiles = Array.from(document.getElementById('inputOtherProofFiles').files || []);
+
+    if (!workName || !usedCompany || !contentTypeId || !complaintTypeId || !proofFile) {
+        alert('请填写所有必填项并上传作品权属文件');
+        return;
     }
-}
+    if (otherFiles.length > 2) {
+        alert('其他证明文件最多上传2个');
+        return;
+    }
 
-function fallbackCopyText(text) {
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.style.position = 'fixed';
-    textarea.style.opacity = '0';
-    document.body.appendChild(textarea);
-    textarea.select();
-    try { document.execCommand('copy'); showCopyTooltip(); } catch (e) {}
-    document.body.removeChild(textarea);
-}
+    const formData = new FormData();
+    formData.append('work_name', workName);
+    formData.append('used_company', usedCompany);
+    formData.append('content_type_id', contentTypeId);
+    formData.append('complaint_type_id', complaintTypeId);
+    formData.append('proof_file', proofFile);
+    otherFiles.forEach(file => formData.append('other_proof_file', file));
 
-function showCopyTooltip() {
-    const tooltip = document.getElementById('copyTooltip');
-    tooltip.classList.add('show');
-    setTimeout(() => tooltip.classList.remove('show'), 1500);
+    const res = await fetch('/api/works/add', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!data.success) {
+        alert('新增失败：' + data.error);
+        return;
+    }
+    addWorkModal.hide();
+    await loadWorks();
 }
 
 document.getElementById('searchInput').addEventListener('input', function(e) {
@@ -188,7 +283,11 @@ document.getElementById('searchInput').addEventListener('input', function(e) {
     }, 300);
 });
 
-document.addEventListener('DOMContentLoaded', loadWorks);
+document.addEventListener('DOMContentLoaded', () => {
+    addWorkModal = new bootstrap.Modal(document.getElementById('addWorkModal'));
+    loadWorkDictionaries();
+    loadWorks();
+});
 </script>
 </body>
 </html>

@@ -1210,6 +1210,7 @@ function handleCustomTemplateUpload(input) {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('current_principal', document.getElementById('currentPrincipalSelect')?.value.trim() || '');
+    formData.append('collect_account', document.getElementById('collectAccountSelect')?.value.trim() || '');
 
     fetch('/api/upload_custom_template', {
         method: 'POST',
@@ -1224,7 +1225,8 @@ function handleCustomTemplateUpload(input) {
             applyCustomTemplateData(res);
             // 应用模板后锁定所有非账号信息字段
             lockAllFieldsExceptAccount();
-            alert('自定义模版加载成功');
+            const hint = res.matched_work_hint ? `\n\n${res.matched_work_hint}` : '';
+            alert('自定义模版加载成功' + hint);
         } else {
             alert('加载失败：' + res.error);
             input.value = '';
