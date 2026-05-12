@@ -627,6 +627,124 @@ def upsert_principal_documents(platform_code, used_company, account_user, princi
         session.commit()
 
 
+def get_work_content_types():
+    with get_db_session() as session:
+        rows = session.execute(text("SELECT id, name FROM work_content_types ORDER BY sort ASC, id ASC")).mappings().all()
+        return [dict(row) for row in rows]
+
+
+def get_work_complaint_types():
+    with get_db_session() as session:
+        rows = session.execute(text("SELECT id, name FROM work_complaint_types ORDER BY sort ASC, id ASC")).mappings().all()
+        return [dict(row) for row in rows]
+
+
+def normalize_work_path_part(value):
+    return (value or '').strip().replace('/', '_').replace('\\', '_')
+
+
+def save_work_asset_file(file_storage, target_dir, filename_prefix):
+    if not file_storage or not file_storage.filename:
+        return None, None
+    original_name = Path(file_storage.filename).name
+    suffix = Path(original_name).suffix.lower()
+    safe_stem = secure_filename(Path(original_name).stem) or 'file'
+    filename = f"{filename_prefix}_{safe_stem}{suffix}" if filename_prefix != '证明文件' else f"证明文件_{safe_stem}{suffix}"
+    save_path = os.path.join(target_dir, filename)
+    file_storage.save(save_path)
+    return filename, save_path
+
+
+def create_work_with_assets(work_name, used_company, content_type_id, complaint_type_id, proof_file, other_proof_files):
+    normalized_work_name = normalize_work_path_part(work_name)
+    with get_db_session() as session:
+        exists = session.execute(text("""
+            SELECT 1 FROM works
+            WHERE work_name = :work_name
+              AND used_company = :used_company
+              AND content_type_id = :content_type_id
+              AND complaint_type_id = :complaint_type_id
+            LIMIT 1
+        """), {
+            'work_name': work_name,
+            'used_company': used_company,
+            'content_type_id': content_type_id,
+            'complaint_type_id': complaint_type_id,
+        }).first()
+        if exists:
+            return None, '该作品在当前所属公司、所属类型和投诉类型下已存在'
+
+        content_type = session.execute(text("SELECT name FROM work_content_types WHERE id = :id LIMIT 1"), {'id': content_type_id}).mappings().first()
+        complaint_type = session.execute(text("SELECT name FROM work_complaint_types WHERE id = :id LIMIT 1"), {'id': complaint_type_id}).mappings().first()
+        if not content_type or not complaint_type:
+            return None, '内容类型或投诉类型无效'
+
+        content_type_name = normalize_work_path_part(content_type['name'])
+        complaint_type_name = normalize_work_path_part(complaint_type['name'])
+        work_dir_name = f"{normalized_work_name}_{normalize_work_path_part(used_company)}_{content_type_name}_{complaint_type_name}"
+        work_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '剧名', work_dir_name)
+        ensure_dir(work_dir)
+
+        proof_filename, proof_path = save_work_asset_file(proof_file, work_dir, f'证明文件_{normalized_work_name}')
+        if not proof_filename:
+            return None, '请上传作品权属文件'
+
+        other_saved = []
+        for idx, file_storage in enumerate(other_proof_files[:2], start=1):
+            saved_name, saved_path = save_work_asset_file(file_storage, work_dir, f'其他证明_{idx}')
+            if saved_name:
+                other_saved.append((saved_name, saved_path))
+
+        now = datetime.now()
+        session.execute(text("""
+            INSERT INTO works (
+                work_name, used_company, content_type_id, complaint_type_id, created_at, updated_at
+            ) VALUES (
+                :work_name, :used_company, :content_type_id, :complaint_type_id, :created_at, :updated_at
+            )
+        """), {
+            'work_name': work_name,
+            'used_company': used_company,
+            'content_type_id': content_type_id,
+            'complaint_type_id': complaint_type_id,
+            'created_at': now,
+            'updated_at': now,
+        })
+        work_id = session.execute(text('SELECT LAST_INSERT_ID()')).scalar_one()
+
+        session.execute(text("""
+            INSERT INTO work_assets (work_id, asset_type, file_name, local_path, created_at)
+            VALUES (:work_id, :asset_type, :file_name, :local_path, :created_at)
+        """), {
+            'work_id': work_id,
+            'asset_type': 'proof_file',
+            'file_name': proof_filename,
+            'local_path': proof_path,
+            'created_at': now,
+        })
+        for saved_name, saved_path in other_saved:
+            session.execute(text("""
+                INSERT INTO work_assets (work_id, asset_type, file_name, local_path, created_at)
+                VALUES (:work_id, :asset_type, :file_name, :local_path, :created_at)
+            """), {
+                'work_id': work_id,
+                'asset_type': 'other_proof_file',
+                'file_name': saved_name,
+                'local_path': saved_path,
+                'created_at': now,
+            })
+        session.commit()
+        return {
+            'work_id': work_id,
+            'work_name': work_name,
+            'used_company': used_company,
+            'content_type': content_type['name'],
+            'complaint_type': complaint_type['name'],
+            'proof_file': proof_filename,
+            'other_proof_count': len(other_saved),
+        }, None
+
+
 def serialize_complaint_numbers(value):
     if value is None:
         return json.dumps([])
@@ -1388,14 +1506,75 @@ def principals_add():
     }})
 
 
+@app.route('/api/works/content_types')
+def works_content_types():
+    return jsonify({'success': True, 'data': get_work_content_types()})
+
+
+@app.route('/api/works/complaint_types')
+def works_complaint_types():
+    return jsonify({'success': True, 'data': get_work_complaint_types()})
+
+
 @app.route('/api/works/list')
 def works_list():
-    """返回 static/imgs/剧名/ 下的所有文件夹名称"""
-    drama_base = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '剧名')
-    if not os.path.isdir(drama_base):
-        return jsonify({'success': True, 'data': []})
-    folders = sorted([d for d in os.listdir(drama_base) if os.path.isdir(os.path.join(drama_base, d)) and not d.startswith('.')])
-    return jsonify({'success': True, 'data': folders})
+    with get_db_session() as session:
+        rows = session.execute(text("""
+            SELECT w.id, w.work_name, w.used_company, ct.name AS content_type, cpt.name AS complaint_type
+            FROM works w
+            JOIN work_content_types ct ON ct.id = w.content_type_id
+            JOIN work_complaint_types cpt ON cpt.id = w.complaint_type_id
+            ORDER BY w.updated_at DESC, w.id DESC
+        """)).mappings().all()
+        results = []
+        for row in rows:
+            assets = session.execute(text("""
+                SELECT asset_type, file_name
+                FROM work_assets
+                WHERE work_id = :work_id
+                ORDER BY id ASC
+            """), {'work_id': row['id']}).mappings().all()
+            proof_file = next((a['file_name'] for a in assets if a['asset_type'] == 'proof_file'), None)
+            other_count = sum(1 for a in assets if a['asset_type'] == 'other_proof_file')
+            results.append({
+                'id': row['id'],
+                'work_name': row['work_name'],
+                'used_company': row['used_company'],
+                'content_type': row['content_type'],
+                'complaint_type': row['complaint_type'],
+                'proof_file': proof_file,
+                'other_proof_count': other_count,
+            })
+    return jsonify({'success': True, 'data': results})
+
+
+@app.route('/api/works/add', methods=['POST'])
+def works_add():
+    work_name = request.form.get('work_name', '').strip()
+    used_company = request.form.get('used_company', '').strip()
+    content_type_id = request.form.get('content_type_id', '').strip()
+    complaint_type_id = request.form.get('complaint_type_id', '').strip()
+    proof_file = request.files.get('proof_file')
+    other_files = [f for f in request.files.getlist('other_proof_file') if f and f.filename]
+
+    if not work_name or not used_company or not content_type_id or not complaint_type_id:
+        return jsonify({'success': False, 'error': '剧名、所属公司、内容类型、投诉类型都不能为空'}), 400
+    if not proof_file or not proof_file.filename:
+        return jsonify({'success': False, 'error': '请上传作品权属文件'}), 400
+    if len(other_files) > 2:
+        return jsonify({'success': False, 'error': '其他证明文件最多上传2个'}), 400
+
+    data, error = create_work_with_assets(
+        work_name,
+        used_company,
+        int(content_type_id),
+        int(complaint_type_id),
+        proof_file,
+        other_files,
+    )
+    if error:
+        return jsonify({'success': False, 'error': error}), 400
+    return jsonify({'success': True, 'data': data})
 
 
 @app.route('/kuake')
@@ -1731,7 +1910,7 @@ def download_custom_template():
             [''],
             ['上传Excel后，系统会根据以下规则自动匹配证明文件：'],
             [''],
-            ['证明文件', '根据「作品名称」在 static/imgs/剧名/作品名称/ 目录下查找「证明文件_*」文件'],
+            ['证明文件', '根据「作品名称」在 static/imgs/剧名/ 下查找以“剧名_所属公司_内容类型_投诉类型”命名的目录，并在该目录内匹配「证明文件_*」文件'],
             ['其他证明[1]', '根据「被代理人」和「使用的公司」在 static/imgs/授权委托书/ 目录下查找「授权委托书_被代理人_使用的公司_截止日期YYYYMMDD」文件'],
             ['其他证明[2]', '根据「被代理人」在 static/imgs/营业执照/ 目录下查找「营业执照_被代理人」文件'],
             ['其他证明[3]', '根据「代理人」在 static/imgs/营业执照/ 目录下查找「营业执照_代理人」文件'],
@@ -1739,7 +1918,7 @@ def download_custom_template():
             ['注意事项'],
             [''],
             ['1. 上传自定义模板时，只需上传Excel文件（.xlsx或.xls）'],
-            ['2. 作品名称必须与 static/imgs/剧名/ 下的文件夹名称完全一致'],
+            ['2. 作品名称必须与 static/imgs/剧名/ 下的目录名中的剧名部分一致，目录规则为：剧名_所属公司_内容类型_投诉类型'],
             ['3. 文件格式支持：jpg、png、jpeg、bmp、pdf'],
         ]
         df_sheet3 = pd.DataFrame(sheet3_lines)
@@ -1774,6 +1953,7 @@ def upload_custom_template():
     import glob
 
     selected_current_principal = request.form.get('current_principal', '').strip()
+    collect_account = request.form.get('collect_account', '').strip()
 
     if 'file' not in request.files:
         return jsonify({'success': False, 'error': '未上传文件'}), 400
@@ -1824,6 +2004,36 @@ def upload_custom_template():
 
         def normalize_principal_value(s):
             return normalize_paren((s or '').strip())
+
+        def parse_work_folder_name(folder_name):
+            parts = folder_name.split('_')
+            if len(parts) < 4:
+                return None
+            work_name = '_'.join(parts[:-3]).strip()
+            used_company = parts[-3].strip()
+            content_type = parts[-2].strip()
+            complaint_type = parts[-1].strip()
+            return {
+                'folder_name': folder_name,
+                'work_name': work_name,
+                'used_company': used_company,
+                'content_type': content_type,
+                'complaint_type': complaint_type,
+            }
+
+        def map_agent_to_used_company(agent_name):
+            mapping = {
+                '北京和晞科技有限公司': '和晞科技',
+                '北京柏蒙文化传媒有限公司': '柏蒙文化',
+            }
+            return mapping.get((agent_name or '').strip(), '')
+
+        def normalize_template_complaint_type(value):
+            mapping = {
+                '著作权（含视频、图文、图集等）': '著作权',
+            }
+            normalized = (value or '').strip()
+            return mapping.get(normalized, normalized)
 
         # 辅助函数：检查公司名是否匹配（支持括号中英文模糊匹配）
         def company_match(principal, filename):
@@ -1914,28 +2124,85 @@ def upload_custom_template():
         # 定义静态文件目录
         static_imgs_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs')
 
-        # 1. 查找证明文件: static/imgs/剧名/[作品名称]/证明文件_*
-        # 优先从Sheet1的"作品名称"字段获取，其次从Sheet2第一行的作品名称
-        proof_file = None
+        # 优先从模板中的代理人/权利人反查所属公司，匹配不到时再回退到当前账号
+        used_company = map_agent_to_used_company(form_data.get('代理人/权利人', ''))
+        if not used_company and collect_account:
+            with get_db_session() as session:
+                account_row = session.execute(text("""
+                    SELECT used_company FROM accounts
+                    WHERE platform_code = 'uc' AND account_user = :account_user
+                    LIMIT 1
+                """), {'account_user': collect_account}).mappings().first()
+                if account_row:
+                    used_company = account_row.get('used_company', '').strip()
+
+        # 1. 查找证明文件: static/imgs/剧名/<剧名>_<所属公司>_<内容类型>_<投诉类型>/证明文件_*
         work_name = form_data.get('作品名称', '')
         if not work_name and excel_rows:
             work_name = excel_rows[0].get('作品名称', '')
-        # 校验作品名称目录是否存在
-        drama_dir = os.path.join(static_imgs_dir, '剧名', work_name)
-        if not os.path.isdir(drama_dir):
+        content_type_name = form_data.get('内容类型', '').strip()
+        complaint_type_name = normalize_template_complaint_type(form_data.get('投诉类型', '').strip())
+
+        works_base_dir = os.path.join(static_imgs_dir, '剧名')
+        if not os.path.isdir(works_base_dir):
             shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': f'「{work_name}」作品没有匹配到，请检查剧名是否正确'}), 400
+            return jsonify({'success': False, 'error': '作品资料库目录不存在，请先建立作品资料'}), 400
+
+        candidate_dirs = []
+        for folder in os.listdir(works_base_dir):
+            folder_path = os.path.join(works_base_dir, folder)
+            if not os.path.isdir(folder_path) or folder.startswith('.'):
+                continue
+            parsed = parse_work_folder_name(folder)
+            if not parsed:
+                continue
+            if parsed['work_name'] == work_name:
+                candidate_dirs.append(parsed)
+
+        if not candidate_dirs:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'「{work_name}」作品在作品资料库中没有匹配到，请检查作品是否已建立'}), 400
+
+        if len(candidate_dirs) > 1 and not used_company:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'「{work_name}」匹配到多个同名作品目录，但无法从模板中的代理人/权利人识别所属公司，请检查模板内容或作品库资料'}), 400
+
+        narrowed_dirs = [d for d in candidate_dirs if d['used_company'] == used_company]
+        matched_hint = ''
+        if len(narrowed_dirs) == 1:
+            pass
+        else:
+            if not narrowed_dirs:
+                shutil.rmtree(template_dir, ignore_errors=True)
+                return jsonify({'success': False, 'error': f'「{work_name}」作品在当前所属公司下没有匹配到，请检查作品库资料是否已建立'}), 400
+            narrowed_dirs = [d for d in narrowed_dirs if d['content_type'] == content_type_name]
+            if not narrowed_dirs:
+                shutil.rmtree(template_dir, ignore_errors=True)
+                return jsonify({'success': False, 'error': f'「{work_name}」在当前所属公司下匹配到多个同名作品目录，但没有找到内容类型匹配的目录，请检查作品库资料是否已建立'}), 400
+            if len(narrowed_dirs) > 1:
+                narrowed_dirs = [d for d in narrowed_dirs if d['complaint_type'] == complaint_type_name]
+            if not narrowed_dirs:
+                shutil.rmtree(template_dir, ignore_errors=True)
+                return jsonify({'success': False, 'error': f'「{work_name}」在当前所属公司下匹配到多个同名作品目录，但没有找到投诉类型匹配的目录，请检查作品库资料是否已建立'}), 400
+            if len(narrowed_dirs) > 1:
+                shutil.rmtree(template_dir, ignore_errors=True)
+                return jsonify({'success': False, 'error': f'「{work_name}」在当前所属公司下仍匹配到多个作品目录，请检查作品库命名或数据是否重复'}), 400
+            matched_hint = f'已按上传类型选择最相符目录：{narrowed_dirs[0]["folder_name"]}，请注意确认信息'
+
+        work_dir_name = narrowed_dirs[0]['folder_name']
+        drama_dir = os.path.join(works_base_dir, work_dir_name)
+        work_rel_dir = os.path.join('剧名', work_dir_name)
         other_proof_files = []
         # 查找以"证明文件_"开头的文件
         for f in os.listdir(drama_dir):
             if f.startswith('证明文件_') and not f.startswith('._'):
-                proof_file = os.path.join('剧名', work_name, f)
+                proof_file = os.path.join(work_rel_dir, f)
                 break
 
         # 查找以"其他证明_"开头的文件
         for f in os.listdir(drama_dir):
             if f.startswith('其他证明_') and not f.startswith('._'):
-                other_proof_files.append(os.path.join('剧名', work_name, f))
+                other_proof_files.append(os.path.join(work_rel_dir, f))
 
         # 2.1 授权委托书: static/imgs/授权委托书/授权委托书_[被代理人].*
         proxy_file = None
@@ -2004,7 +2271,8 @@ def upload_custom_template():
             'files': {
                 'proof_file': proof_file,
                 'other_proof_files': other_proof_files
-            }
+            },
+            'matched_work_hint': matched_hint
         }
 
         return jsonify(result)
