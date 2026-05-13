@@ -70,6 +70,7 @@ def run_redis_worker():
                 task_payload['module'],
                 task_payload['content_type'],
                 task_payload['batch_metadata'],
+                task_payload.get('work_name', ''),
             )
     finally:
         stop_event.set()

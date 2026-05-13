@@ -10,8 +10,10 @@ import random
 import re
 import time
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
 from playwright.sync_api import sync_playwright
 
 
@@ -205,6 +207,89 @@ def read_latest_complaint_numbers(page, count):
 
     print(f"✅ 已读取投诉单号: {complaint_numbers}")
     return complaint_numbers
+
+
+# ========== 通过接口精确匹配投诉单号 ==========
+UC_COMPLAIN_LIST_API = "https://ipp.uc.cn/api/complain/accuse"
+
+
+def extract_xtstk_from_cookie(cookie_str):
+    m = re.search(r'cmptstk=([^;]+)', cookie_str or '')
+    if not m:
+        raise RuntimeError("cookie 中找不到 cmptstk，无法构造 xtstk 请求头")
+    return m.group(1).strip()
+
+
+def fetch_complaints_via_api(cookie_str, page_size=100, page_no=1):
+    xtstk = extract_xtstk_from_cookie(cookie_str)
+    headers = {
+        "accept": "*/*",
+        "accept-language": "zh-CN,zh;q=0.9",
+        "referer": "https://ipp.uc.cn/",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        "xtstk": xtstk,
+        "cookie": cookie_str,
+    }
+    resp = requests.get(
+        UC_COMPLAIN_LIST_API,
+        params={"pageNo": page_no, "pageSize": page_size, "platform": "uc"},
+        headers=headers,
+        timeout=15,
+    )
+    resp.raise_for_status()
+    body = resp.json()
+    if body.get("code") != 200:
+        raise RuntimeError(f"投诉列表接口返回异常：{body}")
+    return body.get("data", []) or []
+
+
+def _parse_gmt_create(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        try:
+            return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+
+def match_complaints(records, expected_title, task_started_utc, batch_count):
+    expected = normalize_company_name(expected_title)
+    matched = []
+    for r in records:
+        created = _parse_gmt_create(r.get("gmt_create"))
+        if not created or created < task_started_utc:
+            continue
+        evs = r.get("evidence_contents") or []
+        if not evs:
+            continue
+        title = ((evs[0].get("work") or {}).get("url") or "").strip()
+        if normalize_company_name(title) != expected:
+            continue
+        cid = r.get("complain_id")
+        if cid:
+            matched.append((created, cid))
+
+    matched.sort(key=lambda x: x[0])
+    return [cid for _, cid in matched[:batch_count]]
+
+
+def resolve_complaint_numbers(cookie, work_name, task_started_utc, batch_count):
+    """纯接口方式匹配；失败直接抛出，调用方转为任务失败。"""
+    if not work_name:
+        raise RuntimeError("缺少作品名称，无法通过接口匹配投诉单号")
+
+    records = fetch_complaints_via_api(cookie, page_size=max(100, batch_count * 5))
+    numbers = match_complaints(records, work_name, task_started_utc, batch_count)
+    if len(numbers) != batch_count:
+        raise RuntimeError(
+            f"接口仅匹配到 {len(numbers)} 个投诉单号（剧名 '{work_name}'，"
+            f"提交时间 ≥ {task_started_utc.isoformat()}），预期 {batch_count} 个，请人工核对"
+        )
+    return numbers
 
 
 def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copyright_type,
@@ -583,6 +668,7 @@ def main(args):
     content_type = args.content_type
     excel_files = json.loads(args.excel_files) if args.excel_files else []
     batch_metadata = json.loads(args.batch_metadata) if args.batch_metadata else []
+    work_name = (args.work_name or '').strip()
 
     result = {
         "task_id": task_id,
@@ -656,6 +742,7 @@ def main(args):
     print(f"🚀 开始执行UC投诉任务: {task_id}")
     print(f"📦 批次数量: {len(excel_files)}")
     current_step = "初始化浏览器"
+    task_started_utc = datetime.now(timezone.utc)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -726,13 +813,15 @@ def main(args):
                     click_list_in_success_dialog(page)
                     update_batch_result(result, index, "completed")
 
-                current_step = f"第{index}批读取投诉单号"
-                complaint_numbers = read_latest_complaint_numbers(page, len(excel_files))
-                result["complaint_numbers"] = complaint_numbers
-                result["complaint_number"] = complaint_numbers[0] if complaint_numbers else None
-                result["status"] = "completed"
-                if len(complaint_numbers) != len(excel_files):
-                    result["error"] = f"投诉已提交，但仅获取到 {len(complaint_numbers)} 个投诉单号"
+                    current_step = "通过接口匹配投诉单号"
+                    # 等几秒让平台入库
+                    human_delay(2000, 3000)
+                    complaint_numbers = resolve_complaint_numbers(
+                        cookie, work_name, task_started_utc, len(excel_files)
+                    )
+                    result["complaint_numbers"] = complaint_numbers
+                    result["complaint_number"] = complaint_numbers[0] if complaint_numbers else None
+                    result["status"] = "completed"
                 # === 以上步骤暂时注释，待测试后再放开 ===
 
         except Exception as e:
@@ -765,6 +854,7 @@ if __name__ == "__main__":
     parser.add_argument("--copyright-type", type=str, help="著作权类型")
     parser.add_argument("--module", type=str, required=True, help="功能模块")
     parser.add_argument("--content-type", type=str, required=True, help="内容类型")
+    parser.add_argument("--work-name", type=str, default='', help="作品名称（用于接口匹配投诉单号）")
 
     args = parser.parse_args()
     try:

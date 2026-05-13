@@ -1794,6 +1794,7 @@ def submit_uc_form():
             'copyright_type': copyright_type,
             'module': payload['form']['module'],
             'content_type': payload['form']['content_type'],
+            'work_name': payload['form'].get('作品名称') or '',
             'batch_metadata': payload['batches'],
         }
 
@@ -2319,7 +2320,7 @@ def serve_custom_template_file(template_id, filename):
 
 def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_files, description,
                          identity, agent, rights_holder, complaint_category, copyright_type, module, content_type,
-                         batch_metadata):
+                         batch_metadata, work_name=''):
     """在后台线程中执行UC投诉自动化脚本"""
     import sys
 
@@ -2340,6 +2341,7 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_f
         '--content-type', content_type,
         '--cookie', cookie,
         '--batch-metadata', json.dumps(batch_metadata, ensure_ascii=False),
+        '--work-name', work_name or '',
     ]
 
     if other_proof_files:
