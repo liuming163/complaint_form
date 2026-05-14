@@ -5,6 +5,7 @@ import json
 import math
 import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -566,6 +567,27 @@ def save_named_upload(file_storage, target_dir, target_name_without_ext):
     return filename
 
 
+def validate_principal_upload_filenames(principal_name, used_company, authorization_expires_on,
+                                        business_license_file=None, authorization_file=None):
+    normalized_principal = normalize_company_name(principal_name)
+    normalized_used_company = normalize_company_name(used_company)
+    expires_yyyymmdd = (authorization_expires_on or '').replace('-', '')
+
+    if business_license_file and business_license_file.filename:
+        business_stem = normalize_company_name(Path(business_license_file.filename).stem)
+        expected_business_stem = f'营业执照_{normalized_principal}'
+        if business_stem != expected_business_stem:
+            return f'被代理人营业执照文件名不符合要求，请上传命名为“{expected_business_stem}.文件后缀”的文件'
+
+    if authorization_file and authorization_file.filename:
+        authorization_stem = normalize_company_name(Path(authorization_file.filename).stem)
+        expected_authorization_stem = f'授权委托书_{normalized_principal}_{normalized_used_company}_截止日期{expires_yyyymmdd}'
+        if authorization_stem != expected_authorization_stem:
+            return f'授权委托书文件名不符合要求，请上传命名为“{expected_authorization_stem}.文件后缀”的文件'
+
+    return None
+
+
 def upsert_principal_documents(platform_code, used_company, account_user, principal_name,
                               business_license_filename, authorization_filename, authorization_expires_on):
     normalized_company = normalize_company_name(used_company)
@@ -640,6 +662,26 @@ def get_principal_options_by_used_company(used_company):
             ORDER BY principal_name ASC
         """), {'used_company': used_company}).mappings().all()
     return [row['principal_name'] for row in rows]
+
+
+def validate_work_asset_filenames(work_name, proof_file=None, other_proof_files=None):
+    normalized_work_name = normalize_company_name(work_name)
+
+    if proof_file and proof_file.filename:
+        proof_stem = normalize_company_name(Path(proof_file.filename).stem)
+        expected_prefix = f'证明文件_{normalized_work_name}'
+        if not proof_stem.startswith(expected_prefix):
+            return f'作品权属文件名不符合要求，请上传以“{expected_prefix}”开头的文件'
+
+    for file_storage in (other_proof_files or []):
+        if not file_storage or not file_storage.filename:
+            continue
+        other_stem = normalize_company_name(Path(file_storage.filename).stem)
+        pattern = re.compile(rf'^其他证明_{re.escape(normalized_work_name)}_[0-9]+$')
+        if not pattern.match(other_stem):
+            return f'其他证明文件名不符合要求，请上传命名为“其他证明_{normalized_work_name}_序号.文件后缀”的文件'
+
+    return None
 
 
 def migrate_works_principal_name_if_needed():
@@ -1327,6 +1369,7 @@ def principals_list():
         count = len(principals) if principals else 1
         if principals:
             for i, name in enumerate(principals):
+                doc_record = get_principal_document_record(acc['platform_code'], acc.get('used_company', ''), name)
                 results.append({
                     'platform_code': acc['platform_code'],
                     'platform_name': acc.get('platform_name', ''),
@@ -1334,6 +1377,8 @@ def principals_list():
                     'account_user': acc['user'],
                     'account_purpose': acc.get('account_purpose', ''),
                     'principal_name': name,
+                    'business_license_filename': doc_record.get('business_license_filename') if doc_record else None,
+                    'authorization_filename': doc_record.get('authorization_filename') if doc_record else None,
                     'rowspan': count if i == 0 else 0,
                 })
         else:
@@ -1344,6 +1389,8 @@ def principals_list():
                 'account_user': acc['user'],
                 'account_purpose': acc.get('account_purpose', ''),
                 'principal_name': '-',
+                'business_license_filename': None,
+                'authorization_filename': None,
                 'rowspan': 1,
             })
     return jsonify({'success': True, 'data': results})
@@ -1436,6 +1483,16 @@ def principals_add():
                     return jsonify({'success': False, 'error': '请填写授权期限截止日期'}), 400
             else:
                 authorization_file = None
+
+            filename_error = validate_principal_upload_filenames(
+                normalized_principal_name,
+                normalized_used_company,
+                authorization_expires_on,
+                business_license_file=business_license_file,
+                authorization_file=authorization_file,
+            )
+            if filename_error:
+                return jsonify({'success': False, 'error': filename_error}), 400
 
         group = session.execute(text("""
             SELECT group_id, platform_name
@@ -1600,6 +1657,10 @@ def works_add():
         return jsonify({'success': False, 'error': '请上传作品权属文件'}), 400
     if len(other_files) > 2:
         return jsonify({'success': False, 'error': '其他证明文件最多上传2个'}), 400
+
+    filename_error = validate_work_asset_filenames(work_name, proof_file=proof_file, other_proof_files=other_files)
+    if filename_error:
+        return jsonify({'success': False, 'error': filename_error}), 400
 
     data, error = create_work_with_assets(
         work_name,

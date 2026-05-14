@@ -36,10 +36,12 @@
                         <th>投诉账号</th>
                         <th>账号用途</th>
                         <th>被代理人信息</th>
+                        <th>被代理人营业执照</th>
+                        <th>授权委托书</th>
                     </tr>
                 </thead>
                 <tbody id="principalsTableBody">
-                    <tr><td colspan="5" class="text-center text-muted py-4">加载中...</td></tr>
+                    <tr><td colspan="7" class="text-center text-muted py-4">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -92,12 +94,16 @@
                     <div class="mb-3">
                         <label class="form-label">上传被代理人营业执照</label>
                         <input type="file" class="form-control" id="inputBusinessLicense" accept=".png,.jpg,.jpeg,.bmp,.pdf">
+                        <div class="form-text">上传文件原始名称需符合：营业执照_被代理人信息.xxx</div>
+                        <div class="invalid-feedback d-block" id="businessLicenseFilenameError" style="display:none !important;"></div>
                     </div>
                 </div>
                 <div id="principalAuthorizationSection">
                     <div class="mb-3">
                         <label class="form-label">上传授权委托书</label>
                         <input type="file" class="form-control" id="inputAuthorization" accept=".png,.jpg,.jpeg,.bmp,.pdf">
+                        <div class="form-text">上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx</div>
+                        <div class="invalid-feedback d-block" id="authorizationFilenameError" style="display:none !important;"></div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">授权期限截止日期</label>
@@ -124,6 +130,91 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text ?? '';
     return div.innerHTML;
+}
+
+function normalizePrincipalFilenamePart(value) {
+    return (value || '').trim().replace(/（/g, '(').replace(/）/g, ')');
+}
+
+function validatePrincipalUploadFilenames(principalName, usedCompany, authorizationExpiresOn, businessLicenseFile, authorizationFile) {
+    const normalizedPrincipal = normalizePrincipalFilenamePart(principalName);
+    const normalizedUsedCompany = normalizePrincipalFilenamePart(usedCompany);
+    const expires = (authorizationExpiresOn || '').replaceAll('-', '');
+
+    if (businessLicenseFile) {
+        const filename = businessLicenseFile.name;
+        const dot = filename.lastIndexOf('.');
+        const stem = normalizePrincipalFilenamePart(dot >= 0 ? filename.slice(0, dot) : filename);
+        const expected = `营业执照_${normalizedPrincipal}`;
+        if (stem !== expected) {
+            return `被代理人营业执照文件名不符合要求，请上传命名为“${expected}.文件后缀”的文件`;
+        }
+    }
+
+    if (authorizationFile) {
+        const filename = authorizationFile.name;
+        const dot = filename.lastIndexOf('.');
+        const stem = normalizePrincipalFilenamePart(dot >= 0 ? filename.slice(0, dot) : filename);
+        const expected = `授权委托书_${normalizedPrincipal}_${normalizedUsedCompany}_截止日期${expires}`;
+        if (stem !== expected) {
+            return `授权委托书文件名不符合要求，请上传命名为“${expected}.文件后缀”的文件`;
+        }
+    }
+
+    return '';
+}
+
+function showFileNameError(inputId, errorId, message) {
+    const input = document.getElementById(inputId);
+    const errorEl = document.getElementById(errorId);
+    if (input) input.classList.add('is-invalid');
+    if (errorEl) {
+        errorEl.textContent = message;
+        errorEl.style.display = 'block';
+    }
+}
+
+function clearFileNameError(inputId, errorId) {
+    const input = document.getElementById(inputId);
+    const errorEl = document.getElementById(errorId);
+    if (input) input.classList.remove('is-invalid');
+    if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.style.display = 'none';
+    }
+}
+
+function validateBusinessLicenseFileImmediately() {
+    const principalName = document.getElementById('inputPrincipal').value.trim();
+    const usedCompany = document.getElementById('inputUsedCompany').value;
+    const file = document.getElementById('inputBusinessLicense').files[0];
+    clearFileNameError('inputBusinessLicense', 'businessLicenseFilenameError');
+    if (!file || !principalName) return true;
+    const msg = validatePrincipalUploadFilenames(principalName, usedCompany, '', file, null);
+    if (msg) {
+        showFileNameError('inputBusinessLicense', 'businessLicenseFilenameError', msg);
+        return false;
+    }
+    return true;
+}
+
+function validateAuthorizationFileImmediately() {
+    const principalName = document.getElementById('inputPrincipal').value.trim();
+    const usedCompany = document.getElementById('inputUsedCompany').value;
+    const expires = document.getElementById('inputAuthorizationExpiresOn').value;
+    const file = document.getElementById('inputAuthorization').files[0];
+    clearFileNameError('inputAuthorization', 'authorizationFilenameError');
+    if (!file || !principalName || !usedCompany || !expires) return true;
+    const msg = validatePrincipalUploadFilenames(principalName, usedCompany, expires, null, file);
+    if (msg) {
+        showFileNameError('inputAuthorization', 'authorizationFilenameError', msg);
+        return false;
+    }
+    return true;
+}
+
+function buildPrincipalAssetUrl(folder, fileName) {
+    return `/api/proof_file/${encodeURIComponent(`${folder}/${fileName}`)}`;
 }
 
 function getPrincipalDocViewHtml(data) {
@@ -219,7 +310,7 @@ async function loadPrincipals() {
     const res = await fetch('/api/principals/list');
     const data = await res.json();
     if (!data.success) {
-        document.getElementById('principalsTableBody').innerHTML = '<tr><td colspan="3" class="text-center text-danger py-4">加载失败</td></tr>';
+        document.getElementById('principalsTableBody').innerHTML = '<tr><td colspan="7" class="text-center text-danger py-4">加载失败</td></tr>';
         return;
     }
     allPrincipals = data.data;
@@ -255,7 +346,15 @@ function renderTable(principals) {
             html += `<td rowspan="${item.rowspan}" style="font-weight:bold;vertical-align:middle;">${escapeHtml(item.account_user)}</td>`;
             html += `<td rowspan="${item.rowspan}" style="font-weight:bold;vertical-align:middle;">${escapeHtml(item.account_purpose || '-')}</td>`;
         }
+        const businessLicenseCell = item.business_license_filename
+            ? `<a href="${buildPrincipalAssetUrl('营业执照', item.business_license_filename)}" target="_blank">${escapeHtml(item.business_license_filename)}</a>`
+            : '<span class="text-muted">-</span>';
+        const authorizationCell = item.authorization_filename
+            ? `<a href="${buildPrincipalAssetUrl('授权委托书', item.authorization_filename)}" target="_blank">${escapeHtml(item.authorization_filename)}</a>`
+            : '<span class="text-muted">-</span>';
         html += `<td>${escapeHtml(item.principal_name)}</td>`;
+        html += `<td>${businessLicenseCell}</td>`;
+        html += `<td>${authorizationCell}</td>`;
         tr.innerHTML = html;
         tbody.appendChild(tr);
     });
@@ -299,6 +398,8 @@ function openAddModal() {
     document.getElementById('inputBusinessLicense').value = '';
     document.getElementById('inputAuthorization').value = '';
     document.getElementById('inputAuthorizationExpiresOn').value = '';
+    clearFileNameError('inputBusinessLicense', 'businessLicenseFilenameError');
+    clearFileNameError('inputAuthorization', 'authorizationFilenameError');
     document.getElementById('principalDocsExisting').style.display = 'none';
     document.getElementById('principalDocsExisting').innerHTML = '';
     document.getElementById('principalBusinessLicenseSection').style.display = '';
@@ -331,6 +432,22 @@ async function submitAddPrincipal() {
         return;
     }
 
+    if (!validateBusinessLicenseFileImmediately() || !validateAuthorizationFileImmediately()) {
+        return;
+    }
+
+    const filenameError = validatePrincipalUploadFilenames(
+        principal_name,
+        used_company,
+        authorization_expires_on,
+        businessLicenseVisible ? business_license_file : null,
+        authorizationVisible ? authorization_file : null,
+    );
+    if (filenameError) {
+        showToast(filenameError, true);
+        return;
+    }
+
     const formData = new FormData();
     formData.append('used_company', used_company);
     formData.append('platform_code', platform_code);
@@ -358,6 +475,15 @@ async function submitAddPrincipal() {
 document.getElementById('addModal').addEventListener('hidden.bs.modal', () => {
     loadPrincipals();
 });
+
+document.getElementById('inputBusinessLicense').addEventListener('change', validateBusinessLicenseFileImmediately);
+document.getElementById('inputAuthorization').addEventListener('change', validateAuthorizationFileImmediately);
+document.getElementById('inputPrincipal').addEventListener('blur', () => {
+    validateBusinessLicenseFileImmediately();
+    validateAuthorizationFileImmediately();
+});
+document.getElementById('inputUsedCompany').addEventListener('change', validateAuthorizationFileImmediately);
+document.getElementById('inputAuthorizationExpiresOn').addEventListener('change', validateAuthorizationFileImmediately);
 
 document.getElementById('searchInput').addEventListener('input', function(e) {
     clearTimeout(debounceTimer);

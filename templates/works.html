@@ -119,10 +119,14 @@
                 <div class="mb-3">
                     <label class="form-label">请上传作品权属（此处上传的文件用于投诉时的证明文件） </label>
                     <input type="file" class="form-control" id="inputProofFile" accept=".png,.jpg,.jpeg,.bmp,.pdf">
+                    <div class="form-text">上传文件原始名称需以：证明文件_作品名称 开头，例如：证明文件_铳火.png、证明文件_铳火_file.jpg</div>
+                    <div class="invalid-feedback d-block" id="proofFileNameError" style="display:none !important;"></div>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">是否还有其他证明文件（最多2个，此处上传的文件用于投诉时的其他证明，除两执照一委托外）</label>
                     <input type="file" class="form-control" id="inputOtherProofFiles" accept=".png,.jpg,.jpeg,.bmp,.pdf" multiple>
+                    <div class="form-text">上传文件原始名称需符合：其他证明_作品名称_序号.xxx，例如：其他证明_铳火_1.png</div>
+                    <div class="invalid-feedback d-block" id="otherProofFilesNameError" style="display:none !important;"></div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -167,6 +171,79 @@ let fuse = null;
 let debounceTimer = null;
 let addWorkModal = null;
 let otherProofModal = null;
+
+function normalizeWorkFilenamePart(value) {
+    return (value || '').trim().replace(/（/g, '(').replace(/）/g, ')');
+}
+
+function showWorkFileNameError(inputId, errorId, message) {
+    const input = document.getElementById(inputId);
+    const errorEl = document.getElementById(errorId);
+    if (input) input.classList.add('is-invalid');
+    if (errorEl) {
+        errorEl.textContent = message;
+        errorEl.style.display = 'block';
+    }
+}
+
+function clearWorkFileNameError(inputId, errorId) {
+    const input = document.getElementById(inputId);
+    const errorEl = document.getElementById(errorId);
+    if (input) input.classList.remove('is-invalid');
+    if (errorEl) {
+        errorEl.textContent = '';
+        errorEl.style.display = 'none';
+    }
+}
+
+function validateWorkAssetFilenames(workName, proofFile, otherFiles) {
+    const normalizedWorkName = normalizeWorkFilenamePart(workName);
+    if (proofFile) {
+        const dot = proofFile.name.lastIndexOf('.');
+        const stem = normalizeWorkFilenamePart(dot >= 0 ? proofFile.name.slice(0, dot) : proofFile.name);
+        const expectedPrefix = `证明文件_${normalizedWorkName}`;
+        if (!stem.startsWith(expectedPrefix)) {
+            return `作品权属文件名不符合要求，请上传以“${expectedPrefix}”开头的文件`;
+        }
+    }
+
+    for (const file of (otherFiles || [])) {
+        const dot = file.name.lastIndexOf('.');
+        const stem = normalizeWorkFilenamePart(dot >= 0 ? file.name.slice(0, dot) : file.name);
+        const pattern = new RegExp(`^其他证明_${normalizedWorkName}_[0-9]+$`);
+        if (!pattern.test(stem)) {
+            return `其他证明文件名不符合要求，请上传命名为“其他证明_${normalizedWorkName}_序号.文件后缀”的文件`;
+        }
+    }
+
+    return '';
+}
+
+function validateProofFileImmediately() {
+    const workName = document.getElementById('inputWorkName').value.trim();
+    const proofFile = document.getElementById('inputProofFile').files[0];
+    clearWorkFileNameError('inputProofFile', 'proofFileNameError');
+    if (!proofFile || !workName) return true;
+    const msg = validateWorkAssetFilenames(workName, proofFile, []);
+    if (msg) {
+        showWorkFileNameError('inputProofFile', 'proofFileNameError', msg);
+        return false;
+    }
+    return true;
+}
+
+function validateOtherProofFilesImmediately() {
+    const workName = document.getElementById('inputWorkName').value.trim();
+    const otherFiles = Array.from(document.getElementById('inputOtherProofFiles').files || []);
+    clearWorkFileNameError('inputOtherProofFiles', 'otherProofFilesNameError');
+    if (!otherFiles.length || !workName) return true;
+    const msg = validateWorkAssetFilenames(workName, null, otherFiles);
+    if (msg) {
+        showWorkFileNameError('inputOtherProofFiles', 'otherProofFilesNameError', msg);
+        return false;
+    }
+    return true;
+}
 
 function buildWorkDirName(item) {
     return `${item.work_name}_${item.used_company}_${item.content_type}_${item.complaint_type}`;
@@ -313,6 +390,8 @@ function openAddWorkModal() {
     document.getElementById('inputComplaintType').value = '';
     document.getElementById('inputProofFile').value = '';
     document.getElementById('inputOtherProofFiles').value = '';
+    clearWorkFileNameError('inputProofFile', 'proofFileNameError');
+    clearWorkFileNameError('inputOtherProofFiles', 'otherProofFilesNameError');
     loadPrincipalOptionsForWork();
     addWorkModal.show();
 }
@@ -332,6 +411,9 @@ async function submitAddWork() {
     }
     if (otherFiles.length > 2) {
         alert('其他证明文件最多上传2个');
+        return;
+    }
+    if (!validateProofFileImmediately() || !validateOtherProofFilesImmediately()) {
         return;
     }
 
@@ -373,6 +455,13 @@ document.addEventListener('DOMContentLoaded', () => {
     loadWorkDictionaries();
     loadPrincipalOptionsForWork();
     loadWorks();
+
+    document.getElementById('inputProofFile').addEventListener('change', validateProofFileImmediately);
+    document.getElementById('inputOtherProofFiles').addEventListener('change', validateOtherProofFilesImmediately);
+    document.getElementById('inputWorkName').addEventListener('blur', () => {
+        validateProofFileImmediately();
+        validateOtherProofFilesImmediately();
+    });
 });
 </script>
 </body>
