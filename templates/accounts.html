@@ -184,7 +184,7 @@ function renderTable(accounts) {
             <td>${escapeHtml(acc.used_company || '-')}</td>
             <td>${escapeHtml(acc.user)}</td>
             <td>${escapeHtml(acc.account_purpose || '-')}</td>
-            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(acc.cookie)}</td>
+            <td title="${escapeHtml(acc.cookie)}" style="min-width:220px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(summarizeCookie(acc.cookie))}</td>
             <td>
                 <button class="btn btn-sm btn-outline-primary" onclick="openUpdateModal('${acc.id}')">
                     <i class="fas fa-edit"></i> 更新Cookie
@@ -199,6 +199,12 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function summarizeCookie(cookie) {
+    const value = cookie || '';
+    if (value.length <= 24) return value;
+    return `${value.slice(0, 10)}...${value.slice(-10)}`;
 }
 
 function openAddModal() {
@@ -290,5 +296,12 @@ document.getElementById('searchInput').addEventListener('input', function(e) {
     }, 300);
 });
 </script>
+<style>
+#accountsTable th,
+#accountsTable td {
+    white-space: nowrap;
+    vertical-align: middle;
+}
+</style>
 </body>
 </html>

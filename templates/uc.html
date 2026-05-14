@@ -373,7 +373,7 @@ function hideHoverPreview() {
 }
 
 // 悬浮预览：boxEl -> { file, isPdf } 映射
-const hoverPreviewMap = new WeakMap();
+const hoverPreviewMap = new Map();
 
 function setupHoverPreview(boxEl, file) {
     const ext = file.name.split('.').pop().toLowerCase();
