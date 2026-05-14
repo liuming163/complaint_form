@@ -627,6 +627,29 @@ def upsert_principal_documents(platform_code, used_company, account_user, princi
         session.commit()
 
 
+def get_principal_options_by_used_company(used_company):
+    if not used_company:
+        return []
+    with get_db_session() as session:
+        rows = session.execute(text("""
+            SELECT DISTINCT principal_name
+            FROM principal_documents
+            WHERE used_company = :used_company
+              AND principal_name IS NOT NULL
+              AND principal_name <> ''
+            ORDER BY principal_name ASC
+        """), {'used_company': used_company}).mappings().all()
+    return [row['principal_name'] for row in rows]
+
+
+def migrate_works_principal_name_if_needed():
+    with get_db_session() as session:
+        columns = {row[0] for row in session.execute(text("SHOW COLUMNS FROM works")).all()}
+        if 'principal_name' not in columns:
+            session.execute(text("ALTER TABLE works ADD COLUMN principal_name varchar(255) NULL AFTER used_company"))
+            session.commit()
+
+
 def get_work_content_types():
     with get_db_session() as session:
         rows = session.execute(text("SELECT id, name FROM work_content_types ORDER BY sort ASC, id ASC")).mappings().all()
@@ -655,24 +678,26 @@ def save_work_asset_file(file_storage, target_dir, filename_prefix):
     return filename, save_path
 
 
-def create_work_with_assets(work_name, used_company, content_type_id, complaint_type_id, proof_file, other_proof_files):
+def create_work_with_assets(work_name, used_company, principal_name, content_type_id, complaint_type_id, proof_file, other_proof_files):
     normalized_work_name = normalize_work_path_part(work_name)
     with get_db_session() as session:
         exists = session.execute(text("""
             SELECT 1 FROM works
             WHERE work_name = :work_name
               AND used_company = :used_company
+              AND principal_name = :principal_name
               AND content_type_id = :content_type_id
               AND complaint_type_id = :complaint_type_id
             LIMIT 1
         """), {
             'work_name': work_name,
             'used_company': used_company,
+            'principal_name': principal_name,
             'content_type_id': content_type_id,
             'complaint_type_id': complaint_type_id,
         }).first()
         if exists:
-            return None, '该作品在当前所属公司、所属类型和投诉类型下已存在'
+            return None, '该作品在当前代理主体、被代理人、所属类型和投诉类型下已存在'
 
         content_type = session.execute(text("SELECT name FROM work_content_types WHERE id = :id LIMIT 1"), {'id': content_type_id}).mappings().first()
         complaint_type = session.execute(text("SELECT name FROM work_complaint_types WHERE id = :id LIMIT 1"), {'id': complaint_type_id}).mappings().first()
@@ -698,13 +723,14 @@ def create_work_with_assets(work_name, used_company, content_type_id, complaint_
         now = datetime.now()
         session.execute(text("""
             INSERT INTO works (
-                work_name, used_company, content_type_id, complaint_type_id, created_at, updated_at
+                work_name, used_company, principal_name, content_type_id, complaint_type_id, created_at, updated_at
             ) VALUES (
-                :work_name, :used_company, :content_type_id, :complaint_type_id, :created_at, :updated_at
+                :work_name, :used_company, :principal_name, :content_type_id, :complaint_type_id, :created_at, :updated_at
             )
         """), {
             'work_name': work_name,
             'used_company': used_company,
+            'principal_name': principal_name,
             'content_type_id': content_type_id,
             'complaint_type_id': complaint_type_id,
             'created_at': now,
@@ -738,6 +764,7 @@ def create_work_with_assets(work_name, used_company, content_type_id, complaint_
             'work_id': work_id,
             'work_name': work_name,
             'used_company': used_company,
+            'principal_name': principal_name,
             'content_type': content_type['name'],
             'complaint_type': complaint_type['name'],
             'proof_file': proof_filename,
@@ -1166,6 +1193,7 @@ def migrate_json_seed_data_if_needed():
 
 
 migrate_json_seed_data_if_needed()
+migrate_works_principal_name_if_needed()
 migrate_submission_and_task_data_if_needed()
 migrate_submission_file_assets_if_needed()
 cleanup_old_task_logs()
@@ -1511,6 +1539,12 @@ def works_content_types():
     return jsonify({'success': True, 'data': get_work_content_types()})
 
 
+@app.route('/api/works/principal_options')
+def works_principal_options():
+    used_company = request.args.get('used_company', '').strip()
+    return jsonify({'success': True, 'data': get_principal_options_by_used_company(used_company)})
+
+
 @app.route('/api/works/complaint_types')
 def works_complaint_types():
     return jsonify({'success': True, 'data': get_work_complaint_types()})
@@ -1520,7 +1554,7 @@ def works_complaint_types():
 def works_list():
     with get_db_session() as session:
         rows = session.execute(text("""
-            SELECT w.id, w.work_name, w.used_company, ct.name AS content_type, cpt.name AS complaint_type
+            SELECT w.id, w.work_name, w.used_company, w.principal_name, ct.name AS content_type, cpt.name AS complaint_type
             FROM works w
             JOIN work_content_types ct ON ct.id = w.content_type_id
             JOIN work_complaint_types cpt ON cpt.id = w.complaint_type_id
@@ -1535,15 +1569,17 @@ def works_list():
                 ORDER BY id ASC
             """), {'work_id': row['id']}).mappings().all()
             proof_file = next((a['file_name'] for a in assets if a['asset_type'] == 'proof_file'), None)
-            other_count = sum(1 for a in assets if a['asset_type'] == 'other_proof_file')
+            other_files = [a['file_name'] for a in assets if a['asset_type'] == 'other_proof_file']
             results.append({
                 'id': row['id'],
                 'work_name': row['work_name'],
                 'used_company': row['used_company'],
+                'principal_name': row.get('principal_name') or '',
                 'content_type': row['content_type'],
                 'complaint_type': row['complaint_type'],
                 'proof_file': proof_file,
-                'other_proof_count': other_count,
+                'other_proof_files': other_files,
+                'other_proof_count': len(other_files),
             })
     return jsonify({'success': True, 'data': results})
 
@@ -1552,13 +1588,14 @@ def works_list():
 def works_add():
     work_name = request.form.get('work_name', '').strip()
     used_company = request.form.get('used_company', '').strip()
+    principal_name = request.form.get('principal_name', '').strip()
     content_type_id = request.form.get('content_type_id', '').strip()
     complaint_type_id = request.form.get('complaint_type_id', '').strip()
     proof_file = request.files.get('proof_file')
     other_files = [f for f in request.files.getlist('other_proof_file') if f and f.filename]
 
-    if not work_name or not used_company or not content_type_id or not complaint_type_id:
-        return jsonify({'success': False, 'error': '剧名、所属公司、内容类型、投诉类型都不能为空'}), 400
+    if not work_name or not used_company or not principal_name or not content_type_id or not complaint_type_id:
+        return jsonify({'success': False, 'error': '剧名、代理主体(司内)、被代理人信息、内容类型、投诉类型都不能为空'}), 400
     if not proof_file or not proof_file.filename:
         return jsonify({'success': False, 'error': '请上传作品权属文件'}), 400
     if len(other_files) > 2:
@@ -1567,6 +1604,7 @@ def works_add():
     data, error = create_work_with_assets(
         work_name,
         used_company,
+        principal_name,
         int(content_type_id),
         int(complaint_type_id),
         proof_file,
@@ -2137,7 +2175,7 @@ def upload_custom_template():
                 if account_row:
                     used_company = account_row.get('used_company', '').strip()
 
-        # 1. 查找证明文件: static/imgs/剧名/<剧名>_<所属公司>_<内容类型>_<投诉类型>/证明文件_*
+        # 1. 根据作品名称 + 被代理人信息 + 代理主体 + 类型信息匹配作品资料
         work_name = form_data.get('作品名称', '')
         if not work_name and excel_rows:
             work_name = excel_rows[0].get('作品名称', '')
@@ -2149,58 +2187,57 @@ def upload_custom_template():
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': '作品资料库目录不存在，请先建立作品资料'}), 400
 
-        candidate_dirs = []
-        for folder in os.listdir(works_base_dir):
-            folder_path = os.path.join(works_base_dir, folder)
-            if not os.path.isdir(folder_path) or folder.startswith('.'):
-                continue
-            parsed = parse_work_folder_name(folder)
-            if not parsed:
-                continue
-            if parsed['work_name'] == work_name:
-                candidate_dirs.append(parsed)
+        with get_db_session() as session:
+            work_rows = session.execute(text("""
+                SELECT w.id, w.work_name, w.used_company, w.principal_name, ct.name AS content_type, cpt.name AS complaint_type
+                FROM works w
+                JOIN work_content_types ct ON ct.id = w.content_type_id
+                JOIN work_complaint_types cpt ON cpt.id = w.complaint_type_id
+                WHERE w.work_name = :work_name
+            """), {'work_name': work_name}).mappings().all()
 
-        if not candidate_dirs:
+        if not work_rows:
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': f'「{work_name}」作品在作品资料库中没有匹配到，请检查作品是否已建立'}), 400
 
-        if len(candidate_dirs) > 1 and not used_company:
+        principal_matched_rows = [row for row in work_rows if normalize_company_name(row.get('principal_name') or '') == principal]
+        if not principal_matched_rows:
             shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': f'「{work_name}」匹配到多个同名作品目录，但无法从模板中的代理人/权利人识别所属公司，请检查模板内容或作品库资料'}), 400
+            return jsonify({'success': False, 'error': f'「{work_name}」作品已存在，但与模板中的被代理人信息「{principal}」不一致，请检查作品覆盖列表中的被代理人信息'}), 400
 
-        narrowed_dirs = [d for d in candidate_dirs if d['used_company'] == used_company]
+        candidate_rows = [row for row in principal_matched_rows if row.get('used_company') == used_company]
         matched_hint = ''
-        if len(narrowed_dirs) == 1:
-            pass
-        else:
-            if not narrowed_dirs:
-                shutil.rmtree(template_dir, ignore_errors=True)
-                return jsonify({'success': False, 'error': f'「{work_name}」作品在当前所属公司下没有匹配到，请检查作品库资料是否已建立'}), 400
-            narrowed_dirs = [d for d in narrowed_dirs if d['content_type'] == content_type_name]
-            if not narrowed_dirs:
-                shutil.rmtree(template_dir, ignore_errors=True)
-                return jsonify({'success': False, 'error': f'「{work_name}」在当前所属公司下匹配到多个同名作品目录，但没有找到内容类型匹配的目录，请检查作品库资料是否已建立'}), 400
-            if len(narrowed_dirs) > 1:
-                narrowed_dirs = [d for d in narrowed_dirs if d['complaint_type'] == complaint_type_name]
-            if not narrowed_dirs:
-                shutil.rmtree(template_dir, ignore_errors=True)
-                return jsonify({'success': False, 'error': f'「{work_name}」在当前所属公司下匹配到多个同名作品目录，但没有找到投诉类型匹配的目录，请检查作品库资料是否已建立'}), 400
-            if len(narrowed_dirs) > 1:
-                shutil.rmtree(template_dir, ignore_errors=True)
-                return jsonify({'success': False, 'error': f'「{work_name}」在当前所属公司下仍匹配到多个作品目录，请检查作品库命名或数据是否重复'}), 400
-            matched_hint = f'已按上传类型选择最相符目录：{narrowed_dirs[0]["folder_name"]}，请注意确认信息'
+        if not candidate_rows:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'「{work_name}」作品在当前代理主体(司内)及被代理人信息下没有匹配到，请检查作品覆盖列表资料'}), 400
 
-        work_dir_name = narrowed_dirs[0]['folder_name']
+        narrowed_rows = [row for row in candidate_rows if row.get('content_type') == content_type_name]
+        if not narrowed_rows:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'「{work_name}」作品在当前代理主体(司内)及被代理人信息下没有找到内容类型匹配的记录，请检查作品覆盖列表资料'}), 400
+
+        if len(narrowed_rows) > 1:
+            narrowed_rows = [row for row in narrowed_rows if row.get('complaint_type') == complaint_type_name]
+        if not narrowed_rows:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'「{work_name}」作品在当前代理主体(司内)及被代理人信息下没有找到投诉类型匹配的记录，请检查作品覆盖列表资料'}), 400
+        if len(narrowed_rows) > 1:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'「{work_name}」作品在当前代理主体(司内)、被代理人信息和类型条件下仍匹配到多条记录，请检查作品覆盖列表是否重复'}), 400
+
+        work_dir_name = f"{normalize_work_path_part(narrowed_rows[0]['work_name'])}_{normalize_work_path_part(narrowed_rows[0]['used_company'])}_{normalize_work_path_part(narrowed_rows[0]['content_type'])}_{normalize_work_path_part(narrowed_rows[0]['complaint_type'])}"
         drama_dir = os.path.join(works_base_dir, work_dir_name)
+        if not os.path.isdir(drama_dir):
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': f'作品覆盖记录已存在，但作品目录「{work_dir_name}」不存在，请检查作品资料文件'}), 400
         work_rel_dir = os.path.join('剧名', work_dir_name)
         other_proof_files = []
-        # 查找以"证明文件_"开头的文件
+        proof_file = None
         for f in os.listdir(drama_dir):
             if f.startswith('证明文件_') and not f.startswith('._'):
                 proof_file = os.path.join(work_rel_dir, f)
                 break
 
-        # 查找以"其他证明_"开头的文件
         for f in os.listdir(drama_dir):
             if f.startswith('其他证明_') and not f.startswith('._'):
                 other_proof_files.append(os.path.join(work_rel_dir, f))

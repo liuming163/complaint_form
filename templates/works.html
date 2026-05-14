@@ -26,7 +26,7 @@
             </button>
         </div>
         <div class="mb-3">
-            <input type="text" id="searchInput" class="form-control" placeholder="输入剧名、代理主体(司内)、内容类型或投诉类型进行搜索..." autocomplete="off">
+            <input type="text" id="searchInput" class="form-control" placeholder="输入剧名、代理主体(司内)、被代理人信息、内容类型或投诉类型进行搜索..." autocomplete="off">
         </div>
         <div id="resultCount" class="form-text mb-3"></div>
         <div class="table-responsive">
@@ -35,14 +35,15 @@
                     <tr>
                         <th>剧名</th>
                         <th>代理主体(司内)</th>
+                        <th>被代理人信息</th>
                         <th>内容类型</th>
                         <th>投诉类型</th>
                         <th>作品权属文件</th>
-                        <th>其他证明数量</th>
+                        <th>其他证明</th>
                     </tr>
                 </thead>
                 <tbody id="worksTableBody">
-                    <tr><td colspan="6" class="text-center text-muted py-4">加载中...</td></tr>
+                    <tr><td colspan="7" class="text-center text-muted py-4">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -56,6 +57,24 @@
         </div>
 
         <div id="copyTooltip" class="copy-tooltip">复制成功</div>
+    </div>
+</div>
+
+<!-- 其他证明弹窗 -->
+<div class="modal fade" id="otherProofModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fas fa-paperclip me-2"></i><span id="otherProofModalTitle">其他证明</span></div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+                <div id="otherProofModalBody"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -74,9 +93,15 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">代理主体(司内)</label>
-                    <select class="form-select" id="inputUsedCompany">
+                    <select class="form-select" id="inputUsedCompany" onchange="loadPrincipalOptionsForWork()">
                         <option value="和晞科技">和晞科技</option>
                         <option value="柏蒙文化">柏蒙文化</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">被代理人信息</label>
+                    <select class="form-select" id="inputPrincipalName">
+                        <option value="">请先选择被代理人信息</option>
                     </select>
                 </div>
                 <div class="mb-3">
@@ -92,11 +117,11 @@
                     </select>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">请上传作品权属</label>
+                    <label class="form-label">请上传作品权属（此处上传的文件用于投诉时的证明文件） </label>
                     <input type="file" class="form-control" id="inputProofFile" accept=".png,.jpg,.jpeg,.bmp,.pdf">
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">是否还有其他证明文件（最多2个）</label>
+                    <label class="form-label">是否还有其他证明文件（最多2个，此处上传的文件用于投诉时的其他证明，除两执照一委托外）</label>
                     <input type="file" class="form-control" id="inputOtherProofFiles" accept=".png,.jpg,.jpeg,.bmp,.pdf" multiple>
                 </div>
             </div>
@@ -141,6 +166,37 @@ let allWorks = [];
 let fuse = null;
 let debounceTimer = null;
 let addWorkModal = null;
+let otherProofModal = null;
+
+function buildWorkDirName(item) {
+    return `${item.work_name}_${item.used_company}_${item.content_type}_${item.complaint_type}`;
+}
+
+function buildWorkAssetUrl(item, fileName) {
+    return `/api/proof_file/${encodeURIComponent(`剧名/${buildWorkDirName(item)}/${fileName}`)}`;
+}
+
+function openOtherProofModal(workId) {
+    const item = allWorks.find(w => String(w.id) === String(workId));
+    if (!item) return;
+
+    document.getElementById('otherProofModalTitle').textContent = `其他证明 - ${item.work_name}`;
+    const body = document.getElementById('otherProofModalBody');
+    const files = item.other_proof_files || [];
+
+    if (files.length === 0) {
+        body.innerHTML = '<div class="text-muted">暂无其他证明文件</div>';
+    } else {
+        body.innerHTML = files.map((file, index) => `
+            <div class="d-flex justify-content-between align-items-center border rounded px-3 py-2 mb-2">
+                <div><i class="fas fa-file me-2 text-primary"></i>${escapeHtml(file)}</div>
+                <a href="${buildWorkAssetUrl(item, file)}" target="_blank" class="btn btn-sm btn-outline-primary">打开</a>
+            </div>
+        `).join('');
+    }
+
+    otherProofModal.show();
+}
 
 async function loadWorkDictionaries() {
     const [contentRes, complaintRes] = await Promise.all([
@@ -167,18 +223,34 @@ async function loadWorkDictionaries() {
     }
 }
 
+async function loadPrincipalOptionsForWork() {
+    const usedCompany = document.getElementById('inputUsedCompany').value;
+    const principalSelect = document.getElementById('inputPrincipalName');
+    principalSelect.innerHTML = '<option value="">请先选择被代理人信息</option>';
+    if (!usedCompany) return;
+    const res = await fetch(`/api/works/principal_options?used_company=${encodeURIComponent(usedCompany)}`);
+    const data = await res.json();
+    if (!data.success) return;
+    data.data.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        principalSelect.appendChild(opt);
+    });
+}
+
 async function loadWorks() {
     const res = await fetch('/api/works/list');
     const data = await res.json();
     if (!data.success) {
-        document.getElementById('worksTableBody').innerHTML = '<tr><td colspan="6" class="text-danger text-center py-4">加载失败</td></tr>';
+        document.getElementById('worksTableBody').innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">加载失败</td></tr>';
         return;
     }
     allWorks = data.data;
     fuse = new Fuse(allWorks, {
         threshold: 0.3,
         ignoreLocation: true,
-        keys: ['work_name', 'used_company', 'content_type', 'complaint_type']
+        keys: ['work_name', 'used_company', 'principal_name', 'content_type', 'complaint_type']
     });
     renderWorks(allWorks);
 }
@@ -207,13 +279,21 @@ function renderWorks(works) {
 
     works.forEach(item => {
         const tr = document.createElement('tr');
+        const proofCell = item.proof_file
+            ? `<a href="${buildWorkAssetUrl(item, item.proof_file)}" target="_blank"><i class="fas fa-file-alt me-1"></i>${escapeHtml(item.proof_file)}</a>`
+            : '-';
+        const otherCount = item.other_proof_count ?? (item.other_proof_files || []).length;
+        const otherCell = otherCount > 0
+            ? `<button type="button" class="btn btn-sm btn-outline-primary" onclick="openOtherProofModal('${item.id}')"><i class="fas fa-eye me-1"></i>查看(${otherCount})</button>`
+            : '0';
         tr.innerHTML = `
             <td>${escapeHtml(item.work_name)}</td>
             <td>${escapeHtml(item.used_company)}</td>
+            <td>${escapeHtml(item.principal_name || '-')}</td>
             <td>${escapeHtml(item.content_type)}</td>
             <td>${escapeHtml(item.complaint_type)}</td>
-            <td>${escapeHtml(item.proof_file || '-')}</td>
-            <td>${escapeHtml(String(item.other_proof_count ?? 0))}</td>
+            <td>${proofCell}</td>
+            <td>${otherCell}</td>
         `;
         tbody.appendChild(tr);
     });
@@ -228,22 +308,25 @@ function escapeHtml(text) {
 function openAddWorkModal() {
     document.getElementById('inputWorkName').value = '';
     document.getElementById('inputUsedCompany').value = '和晞科技';
+    document.getElementById('inputPrincipalName').innerHTML = '<option value="">请先选择被代理人信息</option>';
     document.getElementById('inputContentType').value = '';
     document.getElementById('inputComplaintType').value = '';
     document.getElementById('inputProofFile').value = '';
     document.getElementById('inputOtherProofFiles').value = '';
+    loadPrincipalOptionsForWork();
     addWorkModal.show();
 }
 
 async function submitAddWork() {
     const workName = document.getElementById('inputWorkName').value.trim();
     const usedCompany = document.getElementById('inputUsedCompany').value;
+    const principalName = document.getElementById('inputPrincipalName').value.trim();
     const contentTypeId = document.getElementById('inputContentType').value;
     const complaintTypeId = document.getElementById('inputComplaintType').value;
     const proofFile = document.getElementById('inputProofFile').files[0];
     const otherFiles = Array.from(document.getElementById('inputOtherProofFiles').files || []);
 
-    if (!workName || !usedCompany || !contentTypeId || !complaintTypeId || !proofFile) {
+    if (!workName || !usedCompany || !principalName || !contentTypeId || !complaintTypeId || !proofFile) {
         alert('请填写所有必填项并上传作品权属文件');
         return;
     }
@@ -255,6 +338,7 @@ async function submitAddWork() {
     const formData = new FormData();
     formData.append('work_name', workName);
     formData.append('used_company', usedCompany);
+    formData.append('principal_name', principalName);
     formData.append('content_type_id', contentTypeId);
     formData.append('complaint_type_id', complaintTypeId);
     formData.append('proof_file', proofFile);
@@ -285,7 +369,9 @@ document.getElementById('searchInput').addEventListener('input', function(e) {
 
 document.addEventListener('DOMContentLoaded', () => {
     addWorkModal = new bootstrap.Modal(document.getElementById('addWorkModal'));
+    otherProofModal = new bootstrap.Modal(document.getElementById('otherProofModal'));
     loadWorkDictionaries();
+    loadPrincipalOptionsForWork();
     loadWorks();
 });
 </script>
