@@ -292,12 +292,6 @@ def works():
     return render_template('works.html')
 
 
-# 投诉账号管理数据文件
-ACCOUNTS_FILE = os.path.join(os.path.dirname(__file__), 'task_results', 'accounts.json')
-
-# 被代理人信息数据文件
-PRINCIPALS_FILE = os.path.join(os.path.dirname(__file__), 'task_results', 'principals.json')
-
 # 平台映射
 PLATFORM_MAP = {
     'uc': {'platform_name': 'UC', 'pingtai': 'UC'},
@@ -1162,79 +1156,6 @@ def migrate_submission_and_task_data_if_needed():
         session.commit()
 
 
-def migrate_json_seed_data_if_needed():
-    with get_db_session() as session:
-        account_count = session.execute(text("SELECT COUNT(*) FROM accounts")).scalar_one()
-        group_count = session.execute(text("SELECT COUNT(*) FROM principal_groups")).scalar_one()
-
-        if account_count == 0 and os.path.exists(ACCOUNTS_FILE):
-            with open(ACCOUNTS_FILE, 'r', encoding='utf-8') as f:
-                accounts_data = json.load(f)
-            for item in accounts_data:
-                created_at = datetime.fromisoformat(item['created_at']) if item.get('created_at') else datetime.now()
-                updated_at = datetime.fromisoformat(item['updated_at']) if item.get('updated_at') else created_at
-                session.execute(text("""
-                    INSERT INTO accounts (
-                        account_id, platform_code, platform_name, platform_label,
-                        account_user, cookie_text, account_purpose, status,
-                        created_at, updated_at
-                    ) VALUES (
-                        :account_id, :platform_code, :platform_name, :platform_label,
-                        :account_user, :cookie_text, :account_purpose, :status,
-                        :created_at, :updated_at
-                    )
-                """), {
-                    'account_id': item['id'],
-                    'platform_code': item['platform_code'],
-                    'platform_name': item.get('platform_name') or PLATFORM_MAP.get(item['platform_code'], {}).get('platform_name', item['platform_code']),
-                    'platform_label': item.get('pingtai') or item.get('platform_name'),
-                    'account_user': item['user'],
-                    'cookie_text': item['cookie'],
-                    'account_purpose': item.get('account_purpose') or None,
-                    'status': 'active' if item.get('status') in {'0', 0, 'active', None, ''} else str(item.get('status')),
-                    'created_at': created_at,
-                    'updated_at': updated_at,
-                })
-
-        if group_count == 0 and os.path.exists(PRINCIPALS_FILE):
-            with open(PRINCIPALS_FILE, 'r', encoding='utf-8') as f:
-                principals_data = json.load(f)
-            for key, item in principals_data.items():
-                group_id = uuid4().hex[:12]
-                created_at = datetime.fromisoformat(item['created_at']) if item.get('created_at') else datetime.now()
-                updated_at = datetime.fromisoformat(item['updated_at']) if item.get('updated_at') else created_at
-                session.execute(text("""
-                    INSERT INTO principal_groups (
-                        group_id, platform_code, platform_name, account_user, created_at, updated_at
-                    ) VALUES (
-                        :group_id, :platform_code, :platform_name, :account_user, :created_at, :updated_at
-                    )
-                """), {
-                    'group_id': group_id,
-                    'platform_code': item['platform_code'],
-                    'platform_name': item.get('platform_name') or PLATFORM_MAP.get(item['platform_code'], {}).get('platform_name', item['platform_code']),
-                    'account_user': item['account_user'],
-                    'created_at': created_at,
-                    'updated_at': updated_at,
-                })
-                for principal_name in item.get('principals', []):
-                    session.execute(text("""
-                        INSERT INTO principal_items (
-                            item_id, group_id, principal_name, created_at
-                        ) VALUES (
-                            :item_id, :group_id, :principal_name, :created_at
-                        )
-                    """), {
-                        'item_id': uuid4().hex[:12],
-                        'group_id': group_id,
-                        'principal_name': principal_name,
-                        'created_at': created_at,
-                    })
-
-        session.commit()
-
-
-migrate_json_seed_data_if_needed()
 migrate_works_principal_name_if_needed()
 migrate_submission_and_task_data_if_needed()
 migrate_submission_file_assets_if_needed()

@@ -1,4 +1,6 @@
 .idea/
 __pycache__/
+.pytest_cache/
 uploads/
+task_results/
 .DS_Store
