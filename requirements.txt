@@ -1,0 +1,17 @@
+# 运行时依赖
+# 安装：pip install -r requirements.txt
+# Playwright 还需要安装浏览器：playwright install chromium
+
+flask>=2.3
+sqlalchemy>=2.0
+pymysql>=1.0
+redis>=4.5
+requests>=2.25
+pandas>=2.0
+openpyxl>=3.1
+playwright>=1.40
+python-dotenv>=1.0
+werkzeug>=2.3
+
+# 监控/调试用，可选
+psutil>=5.9
