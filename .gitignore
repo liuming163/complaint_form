@@ -3,4 +3,5 @@ __pycache__/
 .pytest_cache/
 uploads/
 task_results/
+.env
 .DS_Store

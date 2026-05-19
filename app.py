@@ -34,7 +34,7 @@ if load_dotenv:
     load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'complaint-form-secret'
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', os.urandom(32).hex())
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), 'uploads')
 app.config['UC_SUBMISSION_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'uc_submissions')
 app.config['TASK_RESULT_FOLDER'] = os.path.join(os.path.dirname(__file__), 'task_results')
@@ -2682,4 +2682,4 @@ def verify_cookie():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=5001, debug=False)

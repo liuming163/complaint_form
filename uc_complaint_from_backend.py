@@ -77,7 +77,7 @@ def normalize_company_name(value):
 
 # ========== 保存任务结果 ==========
 def save_task_result(task_id, result):
-    result_dir = Path("/Users/jan/Desktop/pj/complaint_form/task_results")
+    result_dir = Path(__file__).resolve().parent / "task_results"
     result_dir.mkdir(parents=True, exist_ok=True)
     result_file = result_dir / f"{task_id}.json"
 
@@ -746,7 +746,7 @@ def main(args):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=False,
+            headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
