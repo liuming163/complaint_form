@@ -658,6 +658,29 @@ def get_principal_options_by_used_company(used_company):
     return [row['principal_name'] for row in rows]
 
 
+def validate_work_name_format(work_name):
+    if not work_name:
+        return None
+
+    trimmed = work_name.strip()
+    if not trimmed:
+        return None
+
+    if re.search(r'\s', trimmed):
+        return '剧名中间不允许有空格'
+
+    season_unit_match = re.search(r'第([^第季部篇卷]{1,6}?)(部|篇|卷)', trimmed)
+    if season_unit_match:
+        return '为使格式统一，命名必须为“第*季”，比如：斗罗大陆第2季'
+
+    for match in re.finditer(r'第([^第季]{1,6}?)季', trimmed):
+        inner = match.group(1)
+        if not re.fullmatch(r'[1-9][0-9]*', inner):
+            return '“第*季”中的*必须为阿拉伯数字（不含前导0），比如：斗罗大陆第2季'
+
+    return None
+
+
 def validate_work_asset_filenames(work_name, proof_file=None, other_proof_files=None):
     normalized_work_name = normalize_company_name(work_name)
 
@@ -1572,8 +1595,16 @@ def works_add():
     proof_file = request.files.get('proof_file')
     other_files = [f for f in request.files.getlist('other_proof_file') if f and f.filename]
 
-    if not work_name or not used_company or not principal_name or not content_type_id or not complaint_type_id:
+    if not work_name:
         return jsonify({'success': False, 'error': '剧名、代理主体(司内)、被代理人信息、内容类型、投诉类型都不能为空'}), 400
+
+    work_name_error = validate_work_name_format(work_name)
+    if work_name_error:
+        return jsonify({'success': False, 'error': work_name_error}), 400
+
+    if not used_company or not principal_name or not content_type_id or not complaint_type_id:
+        return jsonify({'success': False, 'error': '剧名、代理主体(司内)、被代理人信息、内容类型、投诉类型都不能为空'}), 400
+
     if not proof_file or not proof_file.filename:
         return jsonify({'success': False, 'error': '请上传作品权属文件'}), 400
     if len(other_files) > 2:
