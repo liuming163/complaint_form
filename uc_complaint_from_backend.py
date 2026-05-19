@@ -745,15 +745,20 @@ def main(args):
     task_started_utc = datetime.now(timezone.utc)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
+        chromium_path = os.getenv('PLAYWRIGHT_CHROMIUM_PATH', '').strip()
+        launch_kwargs = {
+            'headless': True,
+            'args': [
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--lang=zh-CN,en-US",
             ],
-        )
+        }
+        if chromium_path:
+            launch_kwargs['executable_path'] = chromium_path
+
+        browser = p.chromium.launch(**launch_kwargs)
         context = browser.new_context(
             user_agent=random.choice([
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
