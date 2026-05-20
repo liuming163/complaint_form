@@ -5,3 +5,4 @@ uploads/
 task_results/
 .env
 .DS_Store
+deploy_update.sh
