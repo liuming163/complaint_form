@@ -19,6 +19,7 @@ from openpyxl import load_workbook
 from uuid import uuid4
 
 import pandas as pd
+import requests
 from flask import Flask, render_template, request, jsonify, send_file
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -53,6 +54,7 @@ REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
 UC_QUEUE_NAME = os.getenv('UC_QUEUE_NAME', 'uc_complaint_queue')
 UC_WORKER_LOCK_KEY = os.getenv('UC_WORKER_LOCK_KEY', 'uc_complaint_worker_lock')
 UC_WORKER_LOCK_TTL = int(os.getenv('UC_WORKER_LOCK_TTL', '15'))
+UC_COMPLAIN_LIST_API = 'https://ipp.uc.cn/api/complain/accuse'
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
@@ -72,6 +74,13 @@ os.makedirs(app.config['TASK_RESULT_FOLDER'], exist_ok=True)
 
 def ensure_dir(path):
     os.makedirs(path, exist_ok=True)
+
+
+def extract_xtstk_from_cookie(cookie_str):
+    m = re.search(r'cmptstk=([^;]+)', cookie_str or '')
+    if not m:
+        raise RuntimeError('cookie 中找不到 cmptstk，无法构造 xtstk 请求头')
+    return m.group(1).strip()
 
 
 def save_uploaded_file(file_storage, target_dir, prefix=None):
@@ -2662,7 +2671,60 @@ def verify_cookie():
 
     from playwright.sync_api import sync_playwright
 
+    def cookie_to_context(context, cookie_value):
+        if cookie_value.startswith('[') or cookie_value.startswith('{'):
+            cookies = json.loads(cookie_value) if isinstance(cookie_value, str) else cookie_value
+            context.add_cookies(cookies)
+            return
+
+        for pair in cookie_value.split(';'):
+            pair = pair.strip()
+            if '=' in pair:
+                key, value = pair.split('=', 1)
+                context.add_cookies([{
+                    'name': key,
+                    'value': value,
+                    'domain': '.uc.cn',
+                    'path': '/'
+                }])
+
+    def verify_cookie_by_api(cookie_value):
+        xtstk = extract_xtstk_from_cookie(cookie_value)
+        headers = {
+            'accept': '*/*',
+            'accept-language': 'zh-CN,zh;q=0.9',
+            'referer': 'https://ipp.uc.cn/',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'xtstk': xtstk,
+            'cookie': cookie_value,
+        }
+        resp = requests.get(
+            UC_COMPLAIN_LIST_API,
+            params={'pageNo': 1, 'pageSize': 1, 'platform': 'uc'},
+            headers=headers,
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return False, f'接口返回状态码 {resp.status_code}'
+
+        body = resp.json()
+        if body.get('code') != 200:
+            return False, f'接口返回异常：{body}'
+
+        return True, 'Cookie有效（接口校验通过）'
+
     try:
+        api_valid = False
+        api_message = ''
+        try:
+            api_valid, api_message = verify_cookie_by_api(cookie)
+        except Exception as api_error:
+            api_message = str(api_error)
+
+        if api_valid:
+            return jsonify({'success': True, 'message': api_message})
+
         with sync_playwright() as p:
             chromium_path = os.getenv('PLAYWRIGHT_CHROMIUM_PATH', '').strip()
             launch_kwargs = {
@@ -2683,38 +2745,23 @@ def verify_cookie():
                 viewport={"width": 1920, "height": 1080},
             )
 
-            # 设置Cookie
-            if cookie.startswith('[') or cookie.startswith('{'):
-                cookies = json.loads(cookie) if isinstance(cookie, str) else cookie
-                context.add_cookies(cookies)
-            else:
-                for pair in cookie.split(';'):
-                    pair = pair.strip()
-                    if '=' in pair:
-                        key, value = pair.split('=', 1)
-                        context.add_cookies([{
-                            "name": key,
-                            "value": value,
-                            "domain": ".uc.cn",
-                            "path": "/"
-                        }])
+            cookie_to_context(context, cookie)
 
-            # 访问UC投诉平台检查登录状态
             page = context.new_page()
             page.goto("https://ipp.uc.cn/#/home", wait_until="load", timeout=15000)
             page.wait_for_timeout(2000)
 
-            # 检查是否出现登录对话框
             login_dialog = page.locator("text=UC账号登录").first
             if login_dialog.count() > 0 and login_dialog.is_visible():
                 browser.close()
-                return jsonify({'success': False, 'error': 'Cookie已过期，请重新登录'}), 401
+                return jsonify({'success': False, 'error': f'Cookie已过期，请重新登录（接口校验提示：{api_message or "未通过"}）'}), 401
 
             browser.close()
-            return jsonify({'success': True, 'message': 'Cookie有效'})
+            return jsonify({'success': True, 'message': 'Cookie有效（页面兜底校验通过）'})
 
     except Exception as e:
         return jsonify({'success': False, 'error': f'验证失败：{str(e)}'}), 500
+
 
 
 if __name__ == '__main__':
