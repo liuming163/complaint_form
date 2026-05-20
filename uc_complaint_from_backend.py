@@ -160,7 +160,7 @@ def submit_form(page):
 def get_success_dialog(page):
     dialogs = page.locator(
         ".el-message-box:visible, .ant-modal-wrap:visible, .ant-modal:visible, [role='dialog']:visible")
-    dialogs.first.wait_for(state="visible", timeout=15000)
+    dialogs.first.wait_for(state="visible", timeout=30000)
     return dialogs.first
 
 
@@ -835,6 +835,22 @@ def main(args):
             result["status"] = "partial_failed" if result["completed_batches"] > 0 else "failed"
             result["error"] = f"{current_step}失败：{str(e)}"
             print(f"❌ 执行失败（{current_step}）: {e}")
+            try:
+                fail_dir = Path(__file__).resolve().parent / "task_results"
+                fail_dir.mkdir(parents=True, exist_ok=True)
+                screenshot_path = fail_dir / f"{task_id}.fail.png"
+                page.screenshot(path=str(screenshot_path), full_page=True)
+                result["fail_screenshot"] = str(screenshot_path)
+                result["fail_url"] = page.url
+                try:
+                    result["fail_title"] = page.title()
+                except Exception:
+                    result["fail_title"] = ""
+                print(f"🖼️ 失败截图已保存: {screenshot_path}")
+                print(f"🔗 失败时URL: {result['fail_url']}")
+                print(f"📝 失败时标题: {result.get('fail_title', '')}")
+            except Exception as snap_error:
+                print(f"⚠️ 失败截图保存失败: {snap_error}")
         finally:
             result["completed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             save_task_result(task_id, result)
