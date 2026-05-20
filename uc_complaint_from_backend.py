@@ -141,8 +141,19 @@ def upload_batch_excel(page, excel_file):
     human_delay(3000, 5000)
 
 
-def submit_form(page):
+def submit_form(page, task_id, batch_no):
     print("📨 提交投诉...")
+    screenshot_dir = Path(__file__).resolve().parent / "task_results"
+    screenshot_dir.mkdir(parents=True, exist_ok=True)
+    before_path = screenshot_dir / f"{task_id}.batch_{batch_no:03d}.before_submit.png"
+    after_path = screenshot_dir / f"{task_id}.batch_{batch_no:03d}.after_submit.png"
+
+    try:
+        page.screenshot(path=str(before_path), full_page=True)
+        print(f"🖼️ 提交前截图已保存: {before_path}")
+    except Exception as e:
+        print(f"⚠️ 提交前截图保存失败: {e}")
+
     scroll_to_bottom(page)
     human_delay(1000, 1500)
 
@@ -156,11 +167,17 @@ def submit_form(page):
     print("✅ 已点击提交")
     human_delay(3000, 5000)
 
+    try:
+        page.screenshot(path=str(after_path), full_page=True)
+        print(f"🖼️ 提交后截图已保存: {after_path}")
+    except Exception as e:
+        print(f"⚠️ 提交后截图保存失败: {e}")
+
 
 def get_success_dialog(page):
     dialogs = page.locator(
         ".el-message-box:visible, .ant-modal-wrap:visible, .ant-modal:visible, [role='dialog']:visible")
-    dialogs.first.wait_for(state="visible", timeout=15000)
+    dialogs.first.wait_for(state="visible", timeout=30000)
     return dialogs.first
 
 
@@ -806,7 +823,7 @@ def main(args):
                 upload_batch_excel(page, excel_file)
                 current_step = f"第{index}批提交投诉"
                 # === 以下步骤暂时注释，待测试后再放开 ===
-                submit_form(page)
+                submit_form(page, task_id, index)
 
                 if index < len(excel_files):
                     current_step = f"第{index}批点击继续"
@@ -835,6 +852,22 @@ def main(args):
             result["status"] = "partial_failed" if result["completed_batches"] > 0 else "failed"
             result["error"] = f"{current_step}失败：{str(e)}"
             print(f"❌ 执行失败（{current_step}）: {e}")
+            try:
+                fail_dir = Path(__file__).resolve().parent / "task_results"
+                fail_dir.mkdir(parents=True, exist_ok=True)
+                screenshot_path = fail_dir / f"{task_id}.fail.png"
+                page.screenshot(path=str(screenshot_path), full_page=True)
+                result["fail_screenshot"] = str(screenshot_path)
+                result["fail_url"] = page.url
+                try:
+                    result["fail_title"] = page.title()
+                except Exception:
+                    result["fail_title"] = ""
+                print(f"🖼️ 失败截图已保存: {screenshot_path}")
+                print(f"🔗 失败时URL: {result['fail_url']}")
+                print(f"📝 失败时标题: {result.get('fail_title', '')}")
+            except Exception as snap_error:
+                print(f"⚠️ 失败截图保存失败: {snap_error}")
         finally:
             result["completed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             save_task_result(task_id, result)
