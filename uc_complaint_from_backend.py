@@ -111,7 +111,7 @@ def upload_batch_excel(page, excel_file):
 
     dialog = page.locator(".el-dialog, .ant-modal, [role='dialog']").first
     dialog.wait_for(state="visible", timeout=10000)
-    print("✅ 弹窗已打开")
+    print("✅ 弹窗打开了")
 
     upload_btn = dialog.get_by_role("button", name="上传文件")
     if upload_btn.count() == 0:
