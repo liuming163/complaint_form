@@ -677,13 +677,24 @@ def log_upload_debug_state(page, task_id, batch_no, label):
 
 
 def verify_file_input_has_file(page, locator, expected_name, label):
-    file_count = locator.evaluate("input => input.files ? input.files.length : -1")
-    if file_count <= 0:
-        raise RuntimeError(f"{label}上传后 file input 仍然没有文件: {expected_name}")
-    file_name = locator.evaluate("input => input.files && input.files.length ? input.files[0].name : ''")
-    if expected_name and file_name and expected_name not in file_name:
-        print(f"⚠️ {label}上传文件名不完全匹配，实际={file_name}，期望包含={expected_name}")
-    print(f"✅ {label} file input 校验通过: {file_name or expected_name}")
+    wrapper = locator.locator("xpath=ancestor::div[contains(@class, 'upload-wrapper')][1]")
+    try:
+        preview = wrapper.locator(".preview-file, .preview").first
+        preview.wait_for(state="visible", timeout=10000)
+    except Exception:
+        wrapper_html = wrapper.evaluate("el => el.outerHTML")
+        wrapper_html = re.sub(r"\s+", " ", wrapper_html)
+        raise RuntimeError(f"{label}上传后未出现成功预览: {expected_name}；wrapper={wrapper_html[:800]}")
+
+    preview_text = ""
+    try:
+        preview_text = preview.text_content().strip()
+    except Exception:
+        preview_text = ""
+
+    if expected_name and preview_text and expected_name[:4] not in preview_text:
+        print(f"⚠️ {label}预览文本与文件名不完全匹配，预览={preview_text}，期望包含={expected_name[:4]}")
+    print(f"✅ {label} UI 预览校验通过: {preview_text or expected_name}")
 
 
 def open_complaint_form(page):
