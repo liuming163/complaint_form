@@ -103,7 +103,7 @@ def upload_batch_excel(page, excel_file):
     if batch_btn.count() == 0:
         batch_btn = page.get_by_role("button", name="批量导入")
     if batch_btn.count() == 0:
-        raise RuntimeError("未找到批量导入按钮")
+        raise RuntimeError("未找到批量导入按钮...")
 
     human_click(page, batch_btn.first)
     print("✅ 已点击批量导入，等待弹窗...")
