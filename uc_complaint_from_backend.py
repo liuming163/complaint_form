@@ -702,6 +702,35 @@ def log_upload_debug_state(page, task_id, batch_no, label):
 
 
 # ========== 主流程 ==========
+def open_complaint_form(page):
+    print("📂 打开UC侵权投诉平台...")
+    page.goto("https://ipp.uc.cn/#/home", wait_until="load")
+    human_delay(2000, 3000)
+
+    print("🔐 检查登录状态...")
+    login_dialog = page.locator("text=UC账号登录").first
+    if login_dialog.count() > 0 and login_dialog.is_visible():
+        raise RuntimeError("Cookie无效，请重新登录")
+
+    natural_scroll(page, "down", 300)
+    human_delay(500, 800)
+    natural_scroll(page, "up", 200)
+    scroll_to_bottom(page)
+    human_delay(1000, 1500)
+
+    btn = page.get_by_text("发起侵权投诉", exact=True)
+    if btn.count() == 0:
+        btn = page.locator("button:has-text('发起侵权投诉')")
+    if btn.count() == 0:
+        btn = page.get_by_role("button", name="发起侵权投诉")
+    if btn.count() == 0:
+        raise RuntimeError("未找到发起侵权投诉按钮")
+
+    btn.first.scroll_into_view_if_needed()
+    human_delay(300, 600)
+    human_click(page, btn.first)
+    human_delay(2000, 3000)
+
 def main(args):
     task_id = args.task_id or f"uc_{int(time.time())}"
     cookie = args.cookie
