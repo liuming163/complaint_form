@@ -559,6 +559,7 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
             print(f"🔎 证明文件大小: {os.path.getsize(proof_file)} bytes")
     if proof_file and os.path.exists(proof_file):
         # 定位到"证明文件："区域的上传框（第一个 upload-wrapper）
+        # //*[@id="evidences"]/div[1]/div/span/div/span/div/div
         proof_section = page.locator("#evidences").locator("h1:has-text('证明文件：')").first
         if proof_section.count() == 0:
             # 备用方案：直接找第一个 upload-wrapper
@@ -570,7 +571,9 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
         if proof_upload_wrapper.count() == 0:
             proof_upload_wrapper = page.locator("#evidences .upload-wrapper").first
 
-        upload_trigger = proof_upload_wrapper.locator("span.ant-upload[role='button'], span.ant-upload").first
+        upload_trigger = page.locator("xpath=//*[@id='evidences']/div[1]/div/span/div/span/div/div").first
+        if upload_trigger.count() == 0:
+            upload_trigger = proof_upload_wrapper.locator("span.ant-upload[role='button'], span.ant-upload").first
         if upload_trigger.count() > 0:
             human_click(page, upload_trigger)
             human_delay(300, 800)
