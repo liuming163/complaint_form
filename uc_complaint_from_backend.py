@@ -571,7 +571,7 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
 
         file_input.set_input_files(proof_file)
         human_delay(1000, 1500)
-        verify_file_input_has_file(file_input, os.path.basename(proof_file), "证明文件")
+        verify_file_input_has_file(page, file_input, os.path.basename(proof_file), "证明文件")
         print(f"✅ 已上传证明文件: {os.path.basename(proof_file)}")
         human_delay(1000, 1500)
         if task_id:
@@ -637,7 +637,7 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
             if os.path.exists(proof_path):
                 file_input.set_input_files(proof_path)
                 human_delay(1000, 1500)
-                verify_file_input_has_file(file_input, os.path.basename(proof_path), f"其他证明#{idx + 1}")
+                verify_file_input_has_file(page, file_input, os.path.basename(proof_path), f"其他证明#{idx + 1}")
                 print(f"✅ 已上传第 {idx + 1} 个文件: {os.path.basename(proof_path)}")
             else:
                 print(f"⚠️ 文件不存在: {proof_path}")
