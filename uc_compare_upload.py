@@ -15,8 +15,8 @@ if load_dotenv:
     load_dotenv(Path(__file__).resolve().parent / '.env')
 
 COOKIE = "cna=cYbqIAD9IRICAd9IJtkd2tCa; isg=BPr6EVNHR0NI7cp6rBImcihOSyYcq36Ftrr46wTzFw1Y95ox7D3-lcFEQ4Mr5_Yd; __itrace_wid=bdf05497-d6ab-45bd-985b-905cca560d42; _UP_A4A_11_=wba2b18a28c64601aa3cb1a24b5658ae; tfstk=gx9IEbspjUpNeTmKyyoafOpHYyXS0ck2pusJm3eU29BdF3LF7w7rx3R_eUQwL_WK-T_RWUVULaWeFFTMSe-e4LOgFnxkLDXrx9xhET3quxu2xHXl6026Up6OXitOvJB-_OFn3Eqnuxk2vq5Iab32TdR1ENsReMC89On1DNIR2UQd6PIfmTQJyUET6gI0JJQdy5n1qNQReTLJXcsPWaBReUKtwcVcVv_BA0LMzCN7mj-F58eJCG3lLH9NjMv1A6_A6NwRAdsCOZKpHHJvKgOvh6Yx7W7pGLLf0ekTdEtJmQC6FP31EhRXPi9KDS_W-hpF6pnziGXkwpW9pVHAs_dWyGAiP7_XwHRDQ1r866dD8IC6Q2wGkCK641OiqW7yigLliLu0KwKJmKAVhvacACKfCgS33Z_EV7Z1i8I1uci_Z7cs7yY54J0nv6IGAGnsfyTl9Gj6Vci_Z7fdjGzjfcaBr; _c_WBKFRo=pe4tVbAuU5rmCPRZhi1zdnOJUV7lAxBimTfT2jN3; _nb_ioWEgULi=; _UP_28A_52_=594; _UP_D_=pc; cmptstk=Suz_jwKMgNIWRdv_CLWNUUsj; EGG_SESS=oXseTBTtPwv75To_tpZhqcrhhow6L20q73JYen7GyrkmUZ2dLKraNp0JJS4Z_1-ZD1oOZc8td-trldfKIKoeCnwof7KKWCcDJ7y1uctnAeinK-eixQms9BRnyg_4UeMw3fKmjoTefcBZ3zbMvx1ubOAjonDBKGxC9eMqIgNt9To89Eb_Xqm56wkHpHiI_TevfVLxGhoVlXmiGvY-XJxoWuVdZFIi8vMauv_SSJYLjDGq8mqsPUVKjdJ0ubmFuGNU62LNBHj23f0sVsIKPwvRTuZbtLhEKsc-pF02LTl_9NbXQ_2Eovb_DHJw88nrajP758MqFFTf0Jd-tOVbrfFNjnQ3OEiUP0aGEl108PlXj_4pOLmGn8lSN3VST-oUhR7QO6Mq5ru3EcOVA0jidfiT0IrgIsRYhs86W-N4NenLS0ZrIo3GwPVgD67S4O3QCWWqj0JCVe986XJGCWiMMpsNg5JF6k0Kx8QT6vzvFlqupV8="
-TARGET_FILE = "/Users/jan/Desktop/pj/complaint_form/static/imgs/营业执照/营业执照_北京和晞科技有限公司.png"
-LABEL = "local"  # local / server
+TARGET_FILE = "/opt/complaint_form/static/imgs/营业执照/营业执照_北京和晞科技有限公司.png"
+LABEL = "server"  # local / server
 MODE = "other"  # proof / other
 
 
