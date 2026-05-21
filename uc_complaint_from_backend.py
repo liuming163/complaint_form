@@ -552,6 +552,11 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
         raise
 
     print("📤 上传证明文件...")
+    if proof_file:
+        print(f"🔎 证明文件路径: {proof_file}")
+        print(f"🔎 证明文件存在: {os.path.exists(proof_file)}")
+        if os.path.exists(proof_file):
+            print(f"🔎 证明文件大小: {os.path.getsize(proof_file)} bytes")
     if proof_file and os.path.exists(proof_file):
         # 定位到"证明文件："区域的上传框（第一个 upload-wrapper）
         proof_section = page.locator("#evidences").locator("h1:has-text('证明文件：')").first
@@ -644,7 +649,10 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
                 print(f"⚠️ 第 {idx + 1} 个上传框未找到文件输入框，跳过")
                 continue
 
+            print(f"📤 第 {idx + 1} 个其他证明路径: {proof_path}")
+            print(f"📤 第 {idx + 1} 个其他证明存在: {os.path.exists(proof_path)}")
             if os.path.exists(proof_path):
+                print(f"📤 第 {idx + 1} 个其他证明大小: {os.path.getsize(proof_path)} bytes")
                 file_input.set_input_files(proof_path)
                 human_delay(1200, 1800)
                 verify_file_input_has_file(page, file_input, os.path.basename(proof_path), f"其他证明#{idx + 1}")
