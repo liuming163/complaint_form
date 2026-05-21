@@ -145,8 +145,9 @@ def submit_form(page, task_id, batch_no):
     print("📨 提交投诉...")
     screenshot_dir = Path(__file__).resolve().parent / "task_results"
     screenshot_dir.mkdir(parents=True, exist_ok=True)
-    before_path = screenshot_dir / f"{task_id}.batch_{batch_no:03d}.before_submit.png"
-    after_path = screenshot_dir / f"{task_id}.batch_{batch_no:03d}.after_submit.png"
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    before_path = screenshot_dir / f"{task_id}.batch_{batch_no:03d}.{ts}.before_submit.png"
+    after_path = screenshot_dir / f"{task_id}.batch_{batch_no:03d}.{ts}.after_submit.png"
 
     try:
         page.screenshot(path=str(before_path), full_page=True)
@@ -310,7 +311,8 @@ def resolve_complaint_numbers(cookie, work_name, task_started_utc, batch_count):
 
 
 def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copyright_type,
-                      module, content_type, description, proof_file, other_proof_files):
+                      module, content_type, description, proof_file, other_proof_files,
+                      task_id=None, batch_no=0):
     print("📝 开始填写投诉表单...")
 
     print("👤 选择身份信息...")
@@ -570,6 +572,8 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
         file_input.set_input_files(proof_file)
         print(f"✅ 已上传证明文件: {os.path.basename(proof_file)}")
         human_delay(2000, 3000)
+        if task_id:
+            log_upload_debug_state(page, task_id, batch_no, "after_proof_upload")
 
     print("📤 上传其他证明文件...")
     if other_proof_files:
@@ -637,9 +641,37 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
             human_delay(1500, 2000)
 
         print("✅ 其他证明文件上传完成")
+        if task_id:
+            log_upload_debug_state(page, task_id, batch_no, "after_other_proof_upload")
 
 
-def open_complaint_form(page):
+def log_upload_debug_state(page, task_id, batch_no, label):
+    try:
+        evidences = page.locator("#evidences").first
+        if evidences.count() == 0:
+            print(f"⚠️ {label}：未找到证明材料区域 #evidences")
+            return
+
+        screenshot_dir = Path(__file__).resolve().parent / "task_results"
+        screenshot_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        shot_path = screenshot_dir / f"{task_id}.batch_{batch_no:03d}.{ts}.{label}.png"
+        evidences.screenshot(path=str(shot_path))
+        print(f"🖼️ {label}区域截图已保存: {shot_path}")
+
+        visible_text = evidences.inner_text().strip()
+        visible_text = re.sub(r"\s+", " ", visible_text)
+        print(f"📝 {label}区域文本: {visible_text[:500]}")
+
+        file_lengths = page.evaluate("""
+            () => Array.from(document.querySelectorAll('#evidences input[type="file"]'))
+              .map((input, index) => ({ index, files: input.files ? input.files.length : -1 }))
+        """)
+        print(f"📎 {label} file inputs: {json.dumps(file_lengths, ensure_ascii=False)}")
+    except Exception as e:
+        print(f"⚠️ {label}调试信息采集失败: {e}")
+
+
     print("📂 打开UC侵权投诉平台...")
     page.goto("https://ipp.uc.cn/#/home", wait_until="load")
     human_delay(2000, 3000)
@@ -813,7 +845,8 @@ def main(args):
             current_step = "填写初始表单"
             fill_initial_form(
                 page, identity, agent, rights_holder, complaint_type, copyright_type,
-                module, content_type, description, proof_file, other_proof_files
+                module, content_type, description, proof_file, other_proof_files,
+                task_id=task_id, batch_no=0
             )
 
             for index, excel_file in enumerate(excel_files, start=1):
