@@ -565,12 +565,17 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
         if proof_upload_wrapper.count() == 0:
             proof_upload_wrapper = page.locator("#evidences .upload-wrapper").first
 
+        upload_trigger = proof_upload_wrapper.locator("span.ant-upload[role='button'], span.ant-upload").first
+        if upload_trigger.count() > 0:
+            human_click(page, upload_trigger)
+            human_delay(300, 800)
+
         file_input = proof_upload_wrapper.locator("input[type='file']")
         if file_input.count() == 0:
             raise RuntimeError("未找到证明文件上传框")
 
         file_input.set_input_files(proof_file)
-        human_delay(1000, 1500)
+        human_delay(1200, 1800)
         verify_file_input_has_file(page, file_input, os.path.basename(proof_file), "证明文件")
         print(f"✅ 已上传证明文件: {os.path.basename(proof_file)}")
         human_delay(1000, 1500)
@@ -629,6 +634,11 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
                 continue
 
             # 找到上传框内的 file input
+            upload_trigger = other_upload_wrappers[idx].locator("span.ant-upload[role='button'], span.ant-upload").first
+            if upload_trigger.count() > 0:
+                human_click(page, upload_trigger)
+                human_delay(300, 800)
+
             file_input = other_upload_wrappers[idx].locator("input[type='file']")
             if file_input.count() == 0:
                 print(f"⚠️ 第 {idx + 1} 个上传框未找到文件输入框，跳过")
@@ -636,7 +646,7 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
 
             if os.path.exists(proof_path):
                 file_input.set_input_files(proof_path)
-                human_delay(1000, 1500)
+                human_delay(1200, 1800)
                 verify_file_input_has_file(page, file_input, os.path.basename(proof_path), f"其他证明#{idx + 1}")
                 print(f"✅ 已上传第 {idx + 1} 个文件: {os.path.basename(proof_path)}")
             else:
