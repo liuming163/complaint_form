@@ -691,7 +691,7 @@ def open_complaint_form(page):
     page.goto("https://ipp.uc.cn/#/home", wait_until="load")
     human_delay(2000, 3000)
 
-    print("🔐 检查登录状态...")
+    print("🔐 检查登录状态......")
     login_dialog = page.locator("text=UC账号登录").first
     if login_dialog.count() > 0 and login_dialog.is_visible():
         raise RuntimeError("Cookie无效，请重新登录")
