@@ -570,8 +570,10 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
             raise RuntimeError("未找到证明文件上传框")
 
         file_input.set_input_files(proof_file)
+        human_delay(1000, 1500)
+        verify_file_input_has_file(file_input, os.path.basename(proof_file), "证明文件")
         print(f"✅ 已上传证明文件: {os.path.basename(proof_file)}")
-        human_delay(2000, 3000)
+        human_delay(1000, 1500)
         if task_id:
             log_upload_debug_state(page, task_id, batch_no, "after_proof_upload")
 
@@ -634,6 +636,8 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
 
             if os.path.exists(proof_path):
                 file_input.set_input_files(proof_path)
+                human_delay(1000, 1500)
+                verify_file_input_has_file(file_input, os.path.basename(proof_path), f"其他证明#{idx + 1}")
                 print(f"✅ 已上传第 {idx + 1} 个文件: {os.path.basename(proof_path)}")
             else:
                 print(f"⚠️ 文件不存在: {proof_path}")
@@ -672,36 +676,16 @@ def log_upload_debug_state(page, task_id, batch_no, label):
         print(f"⚠️ {label}调试信息采集失败: {e}")
 
 
-    print("📂 打开UC侵权投诉平台...")
-    page.goto("https://ipp.uc.cn/#/home", wait_until="load")
-    human_delay(2000, 3000)
-
-    print("🔐 检查登录状态...")
-    login_dialog = page.locator("text=UC账号登录").first
-    if login_dialog.count() > 0 and login_dialog.is_visible():
-        raise RuntimeError("Cookie无效，请重新登录")
-
-    natural_scroll(page, "down", 300)
-    human_delay(500, 800)
-    natural_scroll(page, "up", 200)
-    scroll_to_bottom(page)
-    human_delay(1000, 1500)
-
-    btn = page.get_by_text("发起侵权投诉", exact=True)
-    if btn.count() == 0:
-        btn = page.locator("button:has-text('发起侵权投诉')")
-    if btn.count() == 0:
-        btn = page.get_by_role("button", name="发起侵权投诉")
-    if btn.count() == 0:
-        raise RuntimeError("未找到发起侵权投诉按钮")
-
-    btn.first.scroll_into_view_if_needed()
-    human_delay(300, 600)
-    human_click(page, btn.first)
-    human_delay(2000, 3000)
+def verify_file_input_has_file(page, locator, expected_name, label):
+    file_count = locator.evaluate("input => input.files ? input.files.length : -1")
+    if file_count <= 0:
+        raise RuntimeError(f"{label}上传后 file input 仍然没有文件: {expected_name}")
+    file_name = locator.evaluate("input => input.files && input.files.length ? input.files[0].name : ''")
+    if expected_name and file_name and expected_name not in file_name:
+        print(f"⚠️ {label}上传文件名不完全匹配，实际={file_name}，期望包含={expected_name}")
+    print(f"✅ {label} file input 校验通过: {file_name or expected_name}")
 
 
-# ========== 主流程 ==========
 def open_complaint_form(page):
     print("📂 打开UC侵权投诉平台...")
     page.goto("https://ipp.uc.cn/#/home", wait_until="load")
