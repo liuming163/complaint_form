@@ -100,9 +100,7 @@ def main():
         page.wait_for_timeout(2000)
 
         wrapper = find_upload_wrapper(page, MODE)
-        upload_trigger = page.locator("xpath=//*[@id='evidences']/div[1]/div/span/div/span/div/div").first
-        if upload_trigger.count() == 0:
-            upload_trigger = wrapper.locator("span.ant-upload[role='button'], span.ant-upload").first
+        upload_trigger = wrapper.locator("span.ant-upload[role='button'], span.ant-upload").first
         if upload_trigger.count() > 0:
             log('CLICK_UPLOAD_TRIGGER: yes')
             upload_trigger.click()
