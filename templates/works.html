@@ -211,7 +211,8 @@ function validateWorkAssetFilenames(workName, proofFile, otherFiles) {
     for (const file of (otherFiles || [])) {
         const dot = file.name.lastIndexOf('.');
         const stem = normalizeWorkFilenamePart(dot >= 0 ? file.name.slice(0, dot) : file.name);
-        const pattern = new RegExp(`^其他证明_${normalizedWorkName}_[0-9]+$`);
+        const escapedName = normalizedWorkName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp(`^其他证明_${escapedName}_[0-9]+$`);
         if (!pattern.test(stem)) {
             return `其他证明文件名不符合要求，请上传命名为“其他证明_${normalizedWorkName}_序号.文件后缀”的文件`;
         }
