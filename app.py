@@ -1185,6 +1185,19 @@ migrate_submission_file_assets_if_needed()
 cleanup_old_task_logs()
 
 
+def _schedule_daily_log_cleanup():
+    import time as _time
+    while True:
+        _time.sleep(86400)
+        try:
+            cleanup_old_task_logs()
+        except Exception:
+            pass
+
+
+threading.Thread(target=_schedule_daily_log_cleanup, daemon=True, name='daily-log-cleanup').start()
+
+
 @app.route('/accounts')
 def accounts():
     return render_template('accounts.html')
