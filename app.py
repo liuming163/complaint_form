@@ -730,8 +730,8 @@ def save_work_asset_file(file_storage, target_dir, filename_prefix):
         return None, None
     original_name = Path(file_storage.filename).name
     suffix = Path(original_name).suffix.lower()
-    safe_stem = secure_filename(Path(original_name).stem) or 'file'
-    filename = f"{filename_prefix}_{safe_stem}{suffix}" if filename_prefix != '证明文件' else f"证明文件_{safe_stem}{suffix}"
+    random_suffix = uuid4().hex[:8]
+    filename = f"{filename_prefix}_{random_suffix}{suffix}"
     save_path = os.path.join(target_dir, filename)
     file_storage.save(save_path)
     return filename, save_path
@@ -775,7 +775,7 @@ def create_work_with_assets(work_name, used_company, principal_name, content_typ
 
         other_saved = []
         for idx, file_storage in enumerate(other_proof_files[:2], start=1):
-            saved_name, saved_path = save_work_asset_file(file_storage, work_dir, f'其他证明_{idx}')
+            saved_name, saved_path = save_work_asset_file(file_storage, work_dir, f'其他证明_{normalized_work_name}_{idx}')
             if saved_name:
                 other_saved.append((saved_name, saved_path))
 
