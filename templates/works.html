@@ -89,7 +89,7 @@
             <div class="modal-body">
                 <div class="mb-3">
                     <label class="form-label">请输入剧名</label>
-                    <input type="text" class="form-control" id="inputWorkName" placeholder="请输入剧名" onblur="this.value = this.value.trim()">
+                    <input type="text" class="form-control" id="inputWorkName" placeholder="请输入剧名" onblur="this.value = this.value.trim(); checkWorkNameDuplicate(this.value)">
                     <div class="invalid-feedback d-block" id="workNameError" style="display:none !important;"></div>
                 </div>
                 <div class="mb-3">
@@ -228,6 +228,31 @@ function validateWorkNameFormat(workName) {
         return '剧名中间不允许有空格';
     }
     return '';
+}
+
+function checkWorkNameDuplicate(workName) {
+    if (!workName) return;
+    const exists = allWorks.some(item => item.work_name === workName);
+    if (exists) {
+        showDuplicateWarning('该作品名称已在作品覆盖列表里面存在，请确认是否需要再次新增');
+    }
+}
+
+function showDuplicateWarning(msg) {
+    let el = document.getElementById('workNameDuplicateWarning');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'workNameDuplicateWarning';
+        el.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#fff3cd;color:#856404;border:1px solid #ffc107;padding:10px 24px;border-radius:6px;font-size:14px;z-index:99999;box-shadow:0 2px 8px rgba(0,0,0,0.15);transition:opacity 0.3s;';
+        document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.style.opacity = '1';
+    el.style.display = 'block';
+    setTimeout(() => {
+        el.style.opacity = '0';
+        setTimeout(() => { el.style.display = 'none'; }, 300);
+    }, 5000);
 }
 
 function validateWorkNameImmediately() {
