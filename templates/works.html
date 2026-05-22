@@ -227,16 +227,6 @@ function validateWorkNameFormat(workName) {
     if (/\s/.test(trimmed)) {
         return '剧名中间不允许有空格';
     }
-    if (/第[^第季部篇卷]{1,6}?(部|篇|卷)/.test(trimmed)) {
-        return '为使格式统一，命名必须为“第*季”，比如：斗罗大陆第2季';
-    }
-    const seasonRegex = /第([^第季]{1,6}?)季/g;
-    let match;
-    while ((match = seasonRegex.exec(trimmed)) !== null) {
-        if (!/^[1-9][0-9]*$/.test(match[1])) {
-            return '“第*季”中的*必须为阿拉伯数字（不含前导0），比如：斗罗大陆第2季';
-        }
-    }
     return '';
 }
 

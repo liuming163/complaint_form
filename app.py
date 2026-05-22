@@ -678,15 +678,6 @@ def validate_work_name_format(work_name):
     if re.search(r'\s', trimmed):
         return '剧名中间不允许有空格'
 
-    season_unit_match = re.search(r'第([^第季部篇卷]{1,6}?)(部|篇|卷)', trimmed)
-    if season_unit_match:
-        return '为使格式统一，命名必须为“第*季”，比如：斗罗大陆第2季'
-
-    for match in re.finditer(r'第([^第季]{1,6}?)季', trimmed):
-        inner = match.group(1)
-        if not re.fullmatch(r'[1-9][0-9]*', inner):
-            return '“第*季”中的*必须为阿拉伯数字（不含前导0），比如：斗罗大陆第2季'
-
     return None
 
 
