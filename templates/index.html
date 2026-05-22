@@ -152,7 +152,7 @@ function refreshUcStatus() {
                     let estimatedTimeStr = '-';
                     if ((item.status === '执行中' || item.status === '等待中') && item.submitted_at && item.batch_count) {
                         const startTime = new Date(item.submitted_at);
-                        startTime.setMinutes(startTime.getMinutes() + item.batch_count);
+                        startTime.setMinutes(startTime.getMinutes() + item.batch_count * 2);
                         const pad = n => String(n).padStart(2, '0');
                         estimatedTimeStr = `${startTime.getFullYear()}-${pad(startTime.getMonth() + 1)}-${pad(startTime.getDate())} ${pad(startTime.getHours())}:${pad(startTime.getMinutes())}`;
                     }
