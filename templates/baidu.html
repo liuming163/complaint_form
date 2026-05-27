@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>百度投诉</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+<header class="main-header shadow-sm">
+    <div class="logo-area"><i class="fas fa-cloud"></i> 百度投诉</div>
+    <div>
+        <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i> 返回首页</a>
+    </div>
+</header>
+
+<div class="form-page-wrap">
+
+    <!-- 账号信息 -->
+    <div class="form-card">
+        <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
+        <div class="mb-3">
+            <label class="form-label">采集账号</label>
+            <select class="form-select" id="collectAccountSelect" required onchange="onCollectAccountChange()">
+                <option value="">请选择采集账号</option>
+            </select>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Cookie</label>
+            <textarea class="form-control" id="cookieTextarea" rows="3" placeholder="请从上方选择采集账号，自动填充Cookie" disabled></textarea>
+        </div>
+        <div class="mb-3">
+            <button type="button" class="btn btn-sm btn-outline-success" id="verifyCookieBtn" onclick="verifyCookie()" disabled>
+                <i class="fas fa-check-circle"></i> 验证Cookie
+            </button>
+            <span id="cookieStatus" class="ms-2"></span>
+        </div>
+    </div>
+
+    <!-- 投诉模版 -->
+    <div class="form-card">
+        <div class="section-title"><i class="fas fa-clone"></i> 投诉模版</div>
+        <div class="d-flex gap-3">
+            <button type="button" class="btn btn-outline-primary" onclick="downloadTemplate()">
+                <i class="fas fa-download"></i> 下载自定义模版
+            </button>
+            <button type="button" class="btn btn-outline-success" id="uploadTemplateBtn" onclick="document.getElementById('templateFileInput').click()" disabled>
+                <i class="fas fa-upload"></i> 上传自定义模版
+            </button>
+            <input type="file" id="templateFileInput" accept=".xlsx,.xls" style="display:none" onchange="uploadTemplate(this)">
+        </div>
+        <div id="templateStatus" class="mt-2"></div>
+    </div>
+
+    <!-- 作品预览（模版上传后显示） -->
+    <div class="form-card" id="worksPreviewCard" style="display:none">
+        <div class="section-title"><i class="fas fa-list-alt"></i> 作品预览</div>
+        <div class="mb-2">
+            <span class="badge bg-primary" id="badgeProduct"></span>
+            <span class="badge bg-info" id="badgeWorks"></span>
+            <span class="badge bg-warning text-dark" id="badgeLinks"></span>
+            <span class="badge bg-secondary" id="badgeBatches"></span>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-bordered" id="worksTable">
+                <thead class="table-light">
+                    <tr>
+                        <th>#</th>
+                        <th>作品名称</th>
+                        <th>投诉描述</th>
+                        <th>原版链接</th>
+                        <th>侵权链接数</th>
+                        <th>批次数</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- 提交 -->
+    <div class="form-card" id="submitCard" style="display:none">
+        <div class="section-title"><i class="fas fa-paper-plane"></i> 提交投诉</div>
+        <button type="button" class="btn btn-primary btn-lg" id="submitBtn" onclick="submitComplaint()">
+            <i class="fas fa-paper-plane"></i> 提交投诉
+        </button>
+        <div id="submitStatus" class="mt-3"></div>
+    </div>
+
+</div>
+
+<script>
+let accountsData = [];
+let templateData = null;
+
+// 加载账号列表
+async function loadAccounts() {
+    try {
+        const resp = await fetch('/api/accounts/list?platform_code=baidu');
+        const data = await resp.json();
+        const select = document.getElementById('collectAccountSelect');
+        select.innerHTML = '<option value="">请选择采集账号</option>';
+        if (data.data && data.data.length > 0) {
+            accountsData = data.data;
+            data.data.forEach(acc => {
+                const opt = document.createElement('option');
+                opt.value = acc.id;
+                opt.textContent = `${acc.user} (${acc.used_company}${acc.account_purpose ? ' - ' + acc.account_purpose : ''})`;
+                select.appendChild(opt);
+            });
+        }
+    } catch (e) {
+        console.error('加载账号失败:', e);
+    }
+}
+
+function onCollectAccountChange() {
+    const select = document.getElementById('collectAccountSelect');
+    const cookieEl = document.getElementById('cookieTextarea');
+    const verifyBtn = document.getElementById('verifyCookieBtn');
+    const uploadBtn = document.getElementById('uploadTemplateBtn');
+    const statusEl = document.getElementById('cookieStatus');
+
+    const accId = select.value;
+    if (!accId) {
+        cookieEl.value = '';
+        verifyBtn.disabled = true;
+        uploadBtn.disabled = true;
+        statusEl.innerHTML = '';
+        return;
+    }
+
+    const acc = accountsData.find(a => String(a.id) === String(accId));
+    if (acc) {
+        cookieEl.value = acc.cookie;
+        verifyBtn.disabled = false;
+        statusEl.innerHTML = '';
+    }
+}
+
+async function verifyCookie() {
+    const cookie = document.getElementById('cookieTextarea').value.trim();
+    const statusEl = document.getElementById('cookieStatus');
+    const uploadBtn = document.getElementById('uploadTemplateBtn');
+
+    if (!cookie) {
+        statusEl.innerHTML = '<span class="text-danger">Cookie为空</span>';
+        return;
+    }
+
+    statusEl.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin"></i> 验证中...</span>';
+
+    try {
+        const resp = await fetch('/api/baidu/verify_cookie', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cookie})
+        });
+        const data = await resp.json();
+        if (data.success) {
+            statusEl.innerHTML = `<span class="text-success"><i class="fas fa-check"></i> 验证通过 (${data.user.display_name})</span>`;
+            uploadBtn.disabled = false;
+        } else {
+            statusEl.innerHTML = `<span class="text-danger"><i class="fas fa-times"></i> ${data.error}</span>`;
+            uploadBtn.disabled = true;
+        }
+    } catch (e) {
+        statusEl.innerHTML = `<span class="text-danger">验证失败: ${e.message}</span>`;
+        uploadBtn.disabled = true;
+    }
+}
+
+function downloadTemplate() {
+    const a = document.createElement('a');
+    a.href = '/api/baidu/download_template';
+    a.download = 'baidu_custom_template.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+async function uploadTemplate(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    const cookie = document.getElementById('cookieTextarea').value.trim();
+    if (!cookie) {
+        alert('请先选择账号并验证Cookie');
+        input.value = '';
+        return;
+    }
+
+    const statusEl = document.getElementById('templateStatus');
+    statusEl.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin"></i> 解析模版中...</span>';
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('cookie', cookie);
+
+    try {
+        const resp = await fetch('/api/baidu/upload_template', {method: 'POST', body: formData});
+        const data = await resp.json();
+        if (data.success) {
+            templateData = data;
+            statusEl.innerHTML = `<span class="text-success"><i class="fas fa-check"></i> 模版解析成功</span>`;
+            renderWorksPreview(data);
+        } else {
+            statusEl.innerHTML = `<span class="text-danger"><i class="fas fa-times"></i> ${data.error}</span>`;
+            templateData = null;
+            document.getElementById('worksPreviewCard').style.display = 'none';
+            document.getElementById('submitCard').style.display = 'none';
+        }
+    } catch (e) {
+        statusEl.innerHTML = `<span class="text-danger">上传失败: ${e.message}</span>`;
+    }
+    input.value = '';
+}
+
+function renderWorksPreview(data) {
+    document.getElementById('worksPreviewCard').style.display = '';
+    document.getElementById('submitCard').style.display = '';
+
+    document.getElementById('badgeProduct').textContent = `投诉产品: ${data.complaint_product}`;
+    document.getElementById('badgeWorks').textContent = `作品数: ${data.total_works}`;
+    document.getElementById('badgeLinks').textContent = `总链接数: ${data.total_links}`;
+    document.getElementById('badgeBatches').textContent = `总批次: ${data.total_batches}`;
+
+    const tbody = document.querySelector('#worksTable tbody');
+    tbody.innerHTML = '';
+    data.works.forEach((work, idx) => {
+        const tr = document.createElement('tr');
+        const descShort = work.description.length > 30 ? work.description.substring(0, 30) + '...' : work.description;
+        const urlShort = work.actual_url.length > 40 ? work.actual_url.substring(0, 40) + '...' : work.actual_url;
+        tr.innerHTML = `
+            <td>${idx + 1}</td>
+            <td>${escapeHtml(work.work_name)}</td>
+            <td title="${escapeHtml(work.description)}">${escapeHtml(descShort)}</td>
+            <td title="${escapeHtml(work.actual_url)}">${escapeHtml(work.actual_name)}</td>
+            <td>${work.link_count}</td>
+            <td>${work.batch_count}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+async function submitComplaint() {
+    if (!templateData) {
+        alert('请先上传模版');
+        return;
+    }
+
+    const cookie = document.getElementById('cookieTextarea').value.trim();
+    const select = document.getElementById('collectAccountSelect');
+    const acc = accountsData.find(a => String(a.id) === String(select.value));
+
+    if (!cookie || !acc) {
+        alert('请先选择账号');
+        return;
+    }
+
+    const submitBtn = document.getElementById('submitBtn');
+    const statusEl = document.getElementById('submitStatus');
+
+    submitBtn.disabled = true;
+    statusEl.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin"></i> 提交中...</span>';
+
+    try {
+        const resp = await fetch('/api/baidu/submit', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                cookie: cookie,
+                collect_account: acc.user,
+                complaint_product: templateData.complaint_product,
+                complaint_type_code: templateData.complaint_type_code,
+                works: templateData.works,
+            })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            statusEl.innerHTML = `
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle"></i> 投诉任务已提交成功！<br>
+                    <strong>任务ID:</strong> ${data.task_id}<br>
+                    <strong>作品数:</strong> ${data.total_works} | <strong>总链接:</strong> ${data.total_links} | <strong>总批次:</strong> ${data.total_batches}<br>
+                    <a href="/" class="btn btn-sm btn-outline-primary mt-2">返回首页查看状态</a>
+                </div>`;
+        } else {
+            statusEl.innerHTML = `<div class="alert alert-danger"><i class="fas fa-times-circle"></i> ${data.error}</div>`;
+            submitBtn.disabled = false;
+        }
+    } catch (e) {
+        statusEl.innerHTML = `<div class="alert alert-danger">提交失败: ${e.message}</div>`;
+        submitBtn.disabled = false;
+    }
+}
+
+// 初始化
+loadAccounts();
+</script>
+</body>
+</html>

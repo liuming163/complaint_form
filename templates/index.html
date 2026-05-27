@@ -35,6 +35,11 @@
                     <div class="name">UC投诉</div>
                     <div class="desc">UC平台投诉表单</div>
                 </a>
+                <a href="/baidu" class="platform-card shadow-sm">
+                    <div class="icon"><i class="fas fa-cloud"></i></div>
+                    <div class="name">百度投诉</div>
+                    <div class="desc">百度网盘/搜索版权投诉</div>
+                </a>
             </div>
         </div>
 
@@ -73,6 +78,24 @@
                     </div>
                     <div class="status-card-body">
                         <div id="ucStatusTable" class="status-table-wrap">
+                            <div class="status-loading">
+                                <i class="fas fa-spinner fa-spin"></i> 加载中...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 百度状态查询 -->
+                <div class="status-card shadow-sm">
+                    <div class="status-card-header">
+                        <div class="icon"><i class="fas fa-cloud"></i></div>
+                        <div class="name">百度状态查询</div>
+                        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="refreshBaiduStatus()">
+                            <i class="fas fa-sync-alt"></i> 刷新
+                        </button>
+                    </div>
+                    <div class="status-card-body">
+                        <div id="baiduStatusTable" class="status-table-wrap">
                             <div class="status-loading">
                                 <i class="fas fa-spinner fa-spin"></i> 加载中...
                             </div>
@@ -213,6 +236,94 @@ function refreshUcStatus() {
 
 // 页面加载时自动刷新UC状态
 document.addEventListener('DOMContentLoaded', refreshUcStatus);
+document.addEventListener('DOMContentLoaded', refreshBaiduStatus);
+
+function refreshBaiduStatus() {
+    const container = document.getElementById('baiduStatusTable');
+    const cardHeader = container.closest('.status-card').querySelector('.status-card-header');
+    const refreshBtn = cardHeader ? cardHeader.querySelector('button') : null;
+
+    container.innerHTML = '<div class="status-loading"><i class="fas fa-spinner fa-spin"></i> 刷新中...</div>';
+    if (refreshBtn) refreshBtn.disabled = true;
+
+    fetch('/api/baidu/status_list')
+        .then(res => res.json())
+        .then(data => {
+            if (data.success && data.data.length > 0) {
+                let html = `
+                    <table class="status-table">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>采集账号</th>
+                                <th>作品名称</th>
+                                <th>反馈单号</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                data.data.forEach(item => {
+                    let timeStr = '-';
+                    if (item.submitted_at) {
+                        const d = new Date(item.submitted_at);
+                        const pad = n => String(n).padStart(2, '0');
+                        timeStr = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                    }
+
+                    let complaintStr = '-';
+                    if (item.complaint_numbers && item.complaint_numbers.length > 0) {
+                        complaintStr = item.complaint_numbers.slice(0, 5).join('<br>');
+                        if (item.complaint_numbers.length > 5) complaintStr += `<br>...共${item.complaint_numbers.length}个`;
+                    }
+
+                    let statusClass = 'status-default';
+                    if (item.status === '已完成') statusClass = 'status-success';
+                    else if (item.status === '执行中') statusClass = 'status-running';
+                    else if (item.status === '失败' || item.status === '部分失败') statusClass = 'status-failed';
+
+                    let workNameStr = item.work_name || '-';
+                    if (workNameStr.includes(',')) {
+                        workNameStr = workNameStr.split(',').map(s => s.trim()).join('<br>');
+                    } else if (workNameStr.includes('，')) {
+                        workNameStr = workNameStr.split('，').map(s => s.trim()).join('<br>');
+                    }
+
+                    html += `
+                        <tr>
+                            <td>${timeStr}</td>
+                            <td>${item.collect_account || '-'}</td>
+                            <td title="${item.work_name || ''}" style="white-space:normal">${workNameStr}</td>
+                            <td>${complaintStr}</td>
+                            <td><span class="status-badge ${statusClass}">${item.status}</span></td>
+                        </tr>
+                    `;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } else {
+                container.innerHTML = `
+                    <div class="status-empty">
+                        <i class="fas fa-inbox fa-2x mb-2"></i>
+                        <div>暂无数据</div>
+                    </div>
+                `;
+            }
+        })
+        .catch(err => {
+            container.innerHTML = `
+                <div class="status-error">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    加载失败: ${err}
+                </div>
+            `;
+        })
+        .finally(() => {
+            setTimeout(() => {
+                if (refreshBtn) refreshBtn.disabled = false;
+            }, 2000);
+        });
+}
 </script>
 
 <style>

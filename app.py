@@ -38,6 +38,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', os.urandom(32).hex())
 app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), 'uploads')
 app.config['UC_SUBMISSION_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'uc_submissions')
+app.config['BAIDU_SUBMISSION_FOLDER'] = os.path.join(app.config['UPLOAD_FOLDER'], 'baidu_submissions')
 app.config['TASK_RESULT_FOLDER'] = os.path.join(os.path.dirname(__file__), 'task_results')
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
@@ -56,6 +57,32 @@ UC_WORKER_LOCK_KEY = os.getenv('UC_WORKER_LOCK_KEY', 'uc_complaint_worker_lock')
 UC_WORKER_LOCK_TTL = int(os.getenv('UC_WORKER_LOCK_TTL', '15'))
 UC_COMPLAIN_LIST_API = 'https://ipp.uc.cn/api/complain/accuse'
 
+BAIDU_QUEUE_NAME = os.getenv('BAIDU_QUEUE_NAME', 'baidu_complaint_queue')
+BAIDU_WORKER_LOCK_KEY = os.getenv('BAIDU_WORKER_LOCK_KEY', 'baidu_complaint_worker_lock')
+BAIDU_WORKER_LOCK_TTL = int(os.getenv('BAIDU_WORKER_LOCK_TTL', '15'))
+BAIDU_API_BASE = 'https://newcopyright.baidu.com'
+BAIDU_COMPLAINT_TYPE_MAP = {
+    '百度搜索': 1401,
+    '百度网盘': 1402,
+    '好看视频': 1408,
+    '百家号': 1410,
+    '百度APP': 1407,
+    '百度知道': 1405,
+    '百度文库': 1403,
+    '百度贴吧': 1404,
+    '百度图片': 1406,
+    '度小视': 1409,
+    '百度手机浏览器': 1412,
+}
+BAIDU_WORKS_CATEGORY_MAP = {
+    1: '文字', 2: '图片', 3: '音乐', 4: '软件',
+    5: '视听作品(影视)', 6: '视听作品(综艺)', 7: '视听作品(动漫)',
+    8: '视听作品(其他)', 9: '其他作品', 11: '软件(游戏)',
+    12: '软件(社交)', 13: '软件(工具)', 14: '软件(其它)',
+    15: '视听作品(短剧)',
+}
+BAIDU_OWNER_TYPE_MAP = {1: '权利人', 2: '代理人'}
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
@@ -69,6 +96,7 @@ def no_cache(response):
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['UC_SUBMISSION_FOLDER'], exist_ok=True)
+os.makedirs(app.config['BAIDU_SUBMISSION_FOLDER'], exist_ok=True)
 os.makedirs(app.config['TASK_RESULT_FOLDER'], exist_ok=True)
 
 
@@ -291,6 +319,20 @@ def release_worker_lock(token):
         client.delete(UC_WORKER_LOCK_KEY)
 
 
+def enqueue_baidu_task(task_payload):
+    client = get_redis_client()
+    client.lpush(BAIDU_QUEUE_NAME, json.dumps(task_payload, ensure_ascii=False))
+
+
+def dequeue_baidu_task(timeout=0):
+    client = get_redis_client()
+    item = client.brpop(BAIDU_QUEUE_NAME, timeout=timeout)
+    if not item:
+        return None
+    _, payload = item
+    return json.loads(payload)
+
+
 @app.route('/')
 def index():
     return render_template('index.html', is_index=True)
@@ -305,6 +347,7 @@ def works():
 PLATFORM_MAP = {
     'uc': {'platform_name': 'UC', 'pingtai': 'UC'},
     'quark': {'platform_name': '夸克', 'pingtai': '夸克'},
+    'baidu': {'platform_name': '百度', 'pingtai': '百度'},
 }
 
 
@@ -1183,6 +1226,37 @@ migrate_works_principal_name_if_needed()
 migrate_submission_and_task_data_if_needed()
 migrate_submission_file_assets_if_needed()
 cleanup_old_task_logs()
+
+
+def ensure_baidu_submission_works_table():
+    with get_db_session() as session:
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS baidu_submission_works (
+                id INT AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
+                submission_id VARCHAR(100) NOT NULL COMMENT '关联 complaint_submissions.submission_id',
+                work_index INT NOT NULL DEFAULT 0 COMMENT '作品在本次提交中的序号(从0开始)',
+                work_name VARCHAR(500) NOT NULL COMMENT '作品名称(与百度权属登记中的名称一致)',
+                cp_id VARCHAR(100) DEFAULT '' COMMENT '百度权属ID(执行时从API获取)',
+                owner_type INT DEFAULT 2 COMMENT '权属身份类型: 1=权利人 2=代理人',
+                works_category INT DEFAULT 0 COMMENT '作品类型编号(百度定义: 1=文字 2=图片 5=视听作品(影视) 8=视听作品(其他) 等)',
+                works_category_name VARCHAR(100) DEFAULT '' COMMENT '作品类型中文名称',
+                contact_name VARCHAR(200) DEFAULT '' COMMENT '权利人名称(被授权方公司名)',
+                description TEXT COMMENT '投诉问题描述(每个作品可不同)',
+                actual_name VARCHAR(500) DEFAULT '' COMMENT '原版链接标题',
+                actual_url VARCHAR(1000) DEFAULT '' COMMENT '原版链接地址',
+                link_count INT DEFAULT 0 COMMENT '该作品的侵权链接总数',
+                batch_count INT DEFAULT 0 COMMENT '该作品按200条分片后的批次数',
+                feedback_numbers JSON COMMENT '该作品对应的反馈单号列表(JSON数组)',
+                status VARCHAR(50) DEFAULT 'pending' COMMENT '状态: pending/completed/failed',
+                error_message TEXT COMMENT '失败时的错误信息',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                INDEX idx_submission_id (submission_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='百度投诉-作品维度明细表(每次提交可含多个作品)'
+        """))
+        session.commit()
+
+
+ensure_baidu_submission_works_table()
 
 
 def _schedule_daily_log_cleanup():
@@ -2766,6 +2840,691 @@ def verify_cookie():
     except Exception as e:
         return jsonify({'success': False, 'error': f'验证失败：{str(e)}'}), 500
 
+
+# ============================================================
+# 百度投诉平台路由
+# ============================================================
+
+@app.route('/baidu')
+def baidu_page():
+    return render_template('baidu.html')
+
+
+@app.route('/api/baidu/verify_cookie', methods=['POST'])
+def baidu_verify_cookie():
+    data = request.get_json() or {}
+    cookie = data.get('cookie', '').strip()
+    if not cookie:
+        return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
+    try:
+        resp = requests.get(
+            f'{BAIDU_API_BASE}/login/check',
+            headers={'Cookie': cookie, 'User-Agent': 'Mozilla/5.0'},
+            timeout=10
+        )
+        result = resp.json()
+        if result.get('code') == 200 and result.get('data', {}).get('uid'):
+            return jsonify({'success': True, 'user': result['data']})
+        return jsonify({'success': False, 'error': 'Cookie无效或已过期'}), 401
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'验证失败：{str(e)}'}), 500
+
+
+@app.route('/api/baidu/search_ownership', methods=['POST'])
+def baidu_search_ownership():
+    data = request.get_json() or {}
+    cookie = data.get('cookie', '').strip()
+    key_word = data.get('key_word', '').strip()
+    if not cookie:
+        return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
+    try:
+        resp = requests.post(
+            f'{BAIDU_API_BASE}/ownership/keyword',
+            headers={
+                'Cookie': cookie,
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0',
+            },
+            json={
+                'page': 1,
+                'size': 50,
+                'lastPageNo': 0,
+                'key_word': key_word,
+                'owner_type': 0,
+            },
+            timeout=15
+        )
+        result = resp.json()
+        if result.get('code') == 200:
+            return jsonify({'success': True, 'data': result.get('data', {})})
+        return jsonify({'success': False, 'error': result.get('message', '查询失败')}), 400
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'查询失败：{str(e)}'}), 500
+
+
+@app.route('/api/baidu/download_template', methods=['GET'])
+def baidu_download_template():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill
+
+    wb = Workbook()
+
+    # Sheet1: 投诉配置
+    ws1 = wb.active
+    ws1.title = '投诉配置'
+    ws1.append(['字段', '值', '可选值'])
+    ws1.append(['投诉产品', '百度网盘', '百度网盘 / 百度搜索'])
+    header_font = Font(bold=True)
+    for cell in ws1[1]:
+        cell.font = header_font
+
+    # Sheet2: 作品列表
+    ws2 = wb.create_sheet('作品列表')
+    ws2.append(['作品名称', '投诉问题描述', '原版链接标题', '原版链接地址'])
+    ws2.append(['示例作品名', '链接涉及上传分享传播独家作品存在侵权行为 请尽快处理', '示例作品名', 'https://www.example.com/original'])
+    for cell in ws2[1]:
+        cell.font = header_font
+    ws2.column_dimensions['A'].width = 25
+    ws2.column_dimensions['B'].width = 50
+    ws2.column_dimensions['C'].width = 25
+    ws2.column_dimensions['D'].width = 45
+
+    # Sheet3: 侵权链接
+    ws3 = wb.create_sheet('侵权链接')
+    ws3.append(['序号', '链接名称', '链接地址', '作品名称'])
+    ws3.append([1, '示例作品名', 'https://pan.baidu.com/s/example1', '示例作品名'])
+    ws3.append([2, '示例作品名', 'https://pan.baidu.com/s/example2', '示例作品名'])
+    for cell in ws3[1]:
+        cell.font = header_font
+    ws3.column_dimensions['A'].width = 8
+    ws3.column_dimensions['B'].width = 30
+    ws3.column_dimensions['C'].width = 55
+    ws3.column_dimensions['D'].width = 25
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name='baidu_custom_template.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@app.route('/api/baidu/upload_template', methods=['POST'])
+def baidu_upload_template():
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'error': '未上传文件'}), 400
+    file = request.files['file']
+    if not file.filename:
+        return jsonify({'success': False, 'error': '文件名为空'}), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ('.xlsx', '.xls'):
+        return jsonify({'success': False, 'error': '仅支持 .xlsx / .xls 格式'}), 400
+
+    cookie = request.form.get('cookie', '').strip()
+    if not cookie:
+        return jsonify({'success': False, 'error': '请先选择账号'}), 400
+
+    try:
+        wb = load_workbook(file, data_only=True)
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'文件解析失败：{str(e)}'}), 400
+
+    sheet_names = wb.sheetnames
+    if '投诉配置' not in sheet_names:
+        return jsonify({'success': False, 'error': '缺少"投诉配置"工作表'}), 400
+    if '作品列表' not in sheet_names:
+        return jsonify({'success': False, 'error': '缺少"作品列表"工作表'}), 400
+    if '侵权链接' not in sheet_names:
+        return jsonify({'success': False, 'error': '缺少"侵权链接"工作表'}), 400
+
+    # 解析 Sheet1: 投诉配置
+    ws_config = wb['投诉配置']
+    config = {}
+    for row in ws_config.iter_rows(min_row=2, max_col=2, values_only=True):
+        if row[0] and row[1]:
+            config[str(row[0]).strip()] = str(row[1]).strip()
+
+    complaint_product = config.get('投诉产品', '').strip()
+    if not complaint_product:
+        return jsonify({'success': False, 'error': '投诉配置中"投诉产品"不能为空'}), 400
+    if complaint_product not in BAIDU_COMPLAINT_TYPE_MAP:
+        return jsonify({'success': False, 'error': f'不支持的投诉产品：{complaint_product}，可选：{", ".join(BAIDU_COMPLAINT_TYPE_MAP.keys())}'}), 400
+
+    # 解析 Sheet2: 作品列表
+    ws_works = wb['作品列表']
+    works_list = []
+    for row in ws_works.iter_rows(min_row=2, max_col=4, values_only=True):
+        if not row[0]:
+            continue
+        work_name = str(row[0]).strip()
+        description = str(row[1]).strip() if row[1] else ''
+        actual_name = str(row[2]).strip() if row[2] else ''
+        actual_url = str(row[3]).strip() if row[3] else ''
+        if not description:
+            return jsonify({'success': False, 'error': f'作品"{work_name}"的投诉问题描述不能为空'}), 400
+        if not actual_name or not actual_url:
+            return jsonify({'success': False, 'error': f'作品"{work_name}"的原版链接标题和地址不能为空'}), 400
+        works_list.append({
+            'work_name': work_name,
+            'description': description,
+            'actual_name': actual_name,
+            'actual_url': actual_url,
+        })
+
+    if not works_list:
+        return jsonify({'success': False, 'error': '"作品列表"中没有有效数据'}), 400
+
+    # 解析 Sheet3: 侵权链接
+    ws_links = wb['侵权链接']
+    all_links = []
+    for row in ws_links.iter_rows(min_row=2, max_col=4, values_only=True):
+        if not row[2]:
+            continue
+        link_name = str(row[1]).strip() if row[1] else ''
+        link_url = str(row[2]).strip()
+        work_name = str(row[3]).strip() if row[3] else ''
+        if not link_url.startswith(('http://', 'https://')):
+            return jsonify({'success': False, 'error': f'链接地址格式错误（必须以http://或https://开头）：{link_url}'}), 400
+        if not work_name:
+            return jsonify({'success': False, 'error': f'侵权链接"{link_url}"缺少作品名称'}), 400
+        all_links.append({
+            'link_name': link_name,
+            'link_url': link_url,
+            'work_name': work_name,
+        })
+
+    if not all_links:
+        return jsonify({'success': False, 'error': '"侵权链接"中没有有效数据'}), 400
+
+    # 按作品名称分组链接
+    links_by_work = {}
+    for link in all_links:
+        wn = link['work_name']
+        if wn not in links_by_work:
+            links_by_work[wn] = []
+        links_by_work[wn].append({'link_name': link['link_name'], 'url_address': link['link_url']})
+
+    # 校验：作品列表中的每个作品都必须有对应的侵权链接
+    work_names_in_list = {w['work_name'] for w in works_list}
+    work_names_in_links = set(links_by_work.keys())
+    missing_links = work_names_in_list - work_names_in_links
+    if missing_links:
+        return jsonify({'success': False, 'error': f'以下作品在"侵权链接"中没有对应数据：{", ".join(missing_links)}'}), 400
+    extra_links = work_names_in_links - work_names_in_list
+    if extra_links:
+        return jsonify({'success': False, 'error': f'以下作品在"作品列表"中不存在：{", ".join(extra_links)}'}), 400
+
+    # 构建结果
+    works_config = []
+    total_links = 0
+    total_batches = 0
+    for work in works_list:
+        wn = work['work_name']
+        work_links = links_by_work[wn]
+        link_count = len(work_links)
+        batch_count = math.ceil(link_count / 200)
+        total_links += link_count
+        total_batches += batch_count
+        works_config.append({
+            **work,
+            'links': work_links,
+            'link_count': link_count,
+            'batch_count': batch_count,
+        })
+
+    return jsonify({
+        'success': True,
+        'complaint_product': complaint_product,
+        'complaint_type_code': BAIDU_COMPLAINT_TYPE_MAP[complaint_product],
+        'works': works_config,
+        'total_works': len(works_config),
+        'total_links': total_links,
+        'total_batches': total_batches,
+    })
+
+
+@app.route('/api/baidu/submit', methods=['POST'])
+def baidu_submit():
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': '请求数据为空'}), 400
+
+    cookie = data.get('cookie', '').strip()
+    collect_account = data.get('collect_account', '').strip()
+    complaint_product = data.get('complaint_product', '').strip()
+    complaint_type_code = data.get('complaint_type_code')
+    works_config = data.get('works', [])
+
+    if not cookie:
+        return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
+    if not collect_account:
+        return jsonify({'success': False, 'error': '请选择投诉账号'}), 400
+    if not complaint_product:
+        return jsonify({'success': False, 'error': '投诉产品不能为空'}), 400
+    if not works_config:
+        return jsonify({'success': False, 'error': '作品列表不能为空'}), 400
+
+    # 验证 Cookie
+    try:
+        resp = requests.get(
+            f'{BAIDU_API_BASE}/login/check',
+            headers={'Cookie': cookie, 'User-Agent': 'Mozilla/5.0'},
+            timeout=10
+        )
+        result = resp.json()
+        if result.get('code') != 200 or not result.get('data', {}).get('uid'):
+            return jsonify({'success': False, 'error': 'Cookie已失效，请更新后重试'}), 401
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Cookie验证失败：{str(e)}'}), 500
+
+    # 计算批次
+    total_links = 0
+    total_batches = 0
+    for work in works_config:
+        link_count = len(work.get('links', []))
+        total_links += link_count
+        total_batches += math.ceil(link_count / 200)
+
+    # 创建提交目录
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    submission_id = f"{timestamp}_{uuid4().hex[:8]}"
+    submission_dir = os.path.join(app.config['BAIDU_SUBMISSION_FOLDER'], submission_id)
+    os.makedirs(submission_dir, exist_ok=True)
+
+    # 保存 submission.json
+    submission_data = {
+        'submission_id': submission_id,
+        'platform_code': 'baidu',
+        'collect_account': collect_account,
+        'cookie': cookie,
+        'complaint_product': complaint_product,
+        'complaint_type_code': complaint_type_code,
+        'works_config': works_config,
+        'total_works': len(works_config),
+        'total_links': total_links,
+        'total_batches': total_batches,
+        'submitted_at': datetime.now().isoformat(),
+    }
+    with open(os.path.join(submission_dir, 'submission.json'), 'w', encoding='utf-8') as f:
+        json.dump(submission_data, f, ensure_ascii=False, indent=2)
+
+    task_id = f'baidu_{submission_id}'
+
+    # 写入数据库
+    session = get_db_session()
+    try:
+        work_names = ', '.join(w['work_name'] for w in works_config)
+        session.execute(text("""
+            INSERT INTO complaint_submissions
+            (submission_id, platform_code, collect_account, cookie_snapshot,
+             identity_type, agent_name, principal_name,
+             complaint_category, complaint_type, module_name, content_type,
+             description_text, work_name, excel_rows, batch_size, batch_count, status, submitted_at)
+            VALUES (:sid, 'baidu', :account, :cookie,
+                    :identity_type, :agent_name, '',
+                    :complaint_category, :complaint_type, :module_name, :content_type,
+                    :desc, :work_name, :rows, 200, :batches, 'queued', NOW())
+        """), {
+            'sid': submission_id,
+            'account': collect_account,
+            'cookie': cookie[:100] + '...',
+            'identity_type': '代理人',
+            'agent_name': collect_account,
+            'complaint_category': '知识产权',
+            'complaint_type': complaint_product,
+            'module_name': complaint_product,
+            'content_type': '版权',
+            'desc': complaint_product,
+            'work_name': work_names[:500],
+            'rows': total_links,
+            'batches': total_batches,
+        })
+
+        session.execute(text("""
+            INSERT INTO complaint_tasks
+            (task_id, submission_id, queue_name, status, batch_count, submitted_at)
+            VALUES (:tid, :sid, :queue, 'queued', :batches, NOW())
+        """), {
+            'tid': task_id,
+            'sid': submission_id,
+            'queue': BAIDU_QUEUE_NAME,
+            'batches': total_batches,
+        })
+
+        batch_no = 0
+        for work in works_config:
+            links = work.get('links', [])
+            for chunk_start in range(0, len(links), 200):
+                batch_no += 1
+                chunk_end = min(chunk_start + 200, len(links))
+                session.execute(text("""
+                    INSERT INTO complaint_batches
+                    (batch_id, submission_id, batch_no, batch_filename, start_row, end_row, row_count, status)
+                    VALUES (:bid, :sid, :bno, :fname, :sr, :er, :rc, 'pending')
+                """), {
+                    'bid': uuid4().hex[:12],
+                    'sid': submission_id,
+                    'bno': batch_no,
+                    'fname': f"{work['work_name']}_part{batch_no}",
+                    'sr': chunk_start + 1,
+                    'er': chunk_end,
+                    'rc': chunk_end - chunk_start,
+                })
+
+        # 写入百度作品子表
+        for work_idx, work in enumerate(works_config):
+            work_links = work.get('links', [])
+            session.execute(text("""
+                INSERT INTO baidu_submission_works
+                (submission_id, work_index, work_name, description,
+                 actual_name, actual_url, link_count, batch_count, status)
+                VALUES (:sid, :widx, :wname, :desc,
+                        :aname, :aurl, :lcount, :bcount, 'pending')
+            """), {
+                'sid': submission_id,
+                'widx': work_idx,
+                'wname': work['work_name'],
+                'desc': work.get('description', ''),
+                'aname': work.get('actual_name', ''),
+                'aurl': work.get('actual_url', ''),
+                'lcount': len(work_links),
+                'bcount': math.ceil(len(work_links) / 200),
+            })
+
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        return jsonify({'success': False, 'error': f'数据库写入失败：{str(e)}'}), 500
+    finally:
+        session.close()
+
+    # 入队
+    task_payload = {
+        'task_id': task_id,
+        'submission_id': submission_id,
+        'cookie': cookie,
+        'complaint_product': complaint_product,
+        'complaint_type_code': complaint_type_code,
+        'works_config': works_config,
+        'total_batches': total_batches,
+    }
+    enqueue_baidu_task(task_payload)
+
+    tasks[task_id] = {
+        'status': 'queued',
+        'submitted_at': datetime.now().isoformat(),
+        'total_batches': total_batches,
+    }
+
+    return jsonify({
+        'success': True,
+        'task_id': task_id,
+        'submission_id': submission_id,
+        'total_works': len(works_config),
+        'total_links': total_links,
+        'total_batches': total_batches,
+    })
+
+
+@app.route('/api/baidu/task/<task_id>', methods=['GET'])
+def baidu_task_status(task_id):
+    session = get_db_session()
+    try:
+        row = session.execute(text("""
+            SELECT task_id, submission_id, status, current_batch, batch_count,
+                   completed_batches, failed_batches, complaint_numbers_json,
+                   error_message, submitted_at, started_at, completed_at
+            FROM complaint_tasks WHERE task_id = :tid
+        """), {'tid': task_id}).fetchone()
+        if not row:
+            mem = tasks.get(task_id)
+            if mem:
+                return jsonify({'success': True, 'task': mem})
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
+        return jsonify({
+            'success': True,
+            'task': {
+                'task_id': row.task_id,
+                'submission_id': row.submission_id,
+                'status': row.status,
+                'current_batch': row.current_batch,
+                'batch_count': row.batch_count,
+                'completed_batches': row.completed_batches,
+                'failed_batches': row.failed_batches,
+                'complaint_numbers': json.loads(row.complaint_numbers_json) if row.complaint_numbers_json else [],
+                'error_message': row.error_message,
+                'submitted_at': normalize_datetime(row.submitted_at),
+                'started_at': normalize_datetime(row.started_at),
+                'completed_at': normalize_datetime(row.completed_at),
+            }
+        })
+    finally:
+        session.close()
+
+
+@app.route('/api/baidu/status_list', methods=['GET'])
+def baidu_status_list():
+    session = get_db_session()
+    try:
+        rows = session.execute(text("""
+            SELECT s.submission_id, s.collect_account, s.work_name, s.excel_rows,
+                   s.batch_count, s.submitted_at,
+                   t.task_id, t.status, t.complaint_numbers_json, t.error_message,
+                   t.completed_at
+            FROM complaint_submissions s
+            LEFT JOIN complaint_tasks t ON t.submission_id = s.submission_id
+            WHERE s.platform_code = 'baidu'
+            ORDER BY s.submitted_at DESC
+            LIMIT 50
+        """)).fetchall()
+
+        status_map = {
+            'queued': '等待中',
+            'running': '执行中',
+            'completed': '已完成',
+            'failed': '失败',
+            'partial_failed': '部分失败',
+        }
+
+        result = []
+        for row in rows:
+            complaint_numbers = []
+            if row.complaint_numbers_json:
+                try:
+                    complaint_numbers = json.loads(row.complaint_numbers_json)
+                except:
+                    pass
+            result.append({
+                'submission_id': row.submission_id,
+                'task_id': row.task_id,
+                'collect_account': row.collect_account,
+                'work_name': row.work_name,
+                'total_links': row.excel_rows,
+                'batch_count': row.batch_count,
+                'status': status_map.get(row.status, row.status or '等待中'),
+                'complaint_numbers': complaint_numbers,
+                'error_message': row.error_message,
+                'submitted_at': normalize_datetime(row.submitted_at),
+                'completed_at': normalize_datetime(row.completed_at),
+            })
+
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        session.close()
+
+
+def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_type_code, works_config, total_batches):
+    import sys
+
+    script_path = os.path.join(os.path.dirname(__file__), 'baidu_complaint_backend.py')
+    submission_id = task_id[6:] if task_id.startswith('baidu_') else task_id
+
+    session = get_db_session()
+    try:
+        session.execute(text("""
+            UPDATE complaint_tasks SET status='running', started_at=NOW() WHERE task_id=:tid
+        """), {'tid': task_id})
+        session.commit()
+    except:
+        session.rollback()
+    finally:
+        session.close()
+
+    tasks[task_id] = tasks.get(task_id, {})
+    tasks[task_id]['status'] = 'running'
+    tasks[task_id]['started_at'] = datetime.now().isoformat()
+
+    cmd = [
+        sys.executable, script_path,
+        '--task-id', task_id,
+        '--cookie', cookie,
+        '--complaint-type-code', str(complaint_type_code),
+        '--works-config', json.dumps(works_config, ensure_ascii=False),
+    ]
+
+    timeout_seconds = max(120, total_batches * 30)
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            cwd=os.path.dirname(__file__),
+        )
+
+        stdout = proc.stdout or ''
+        stderr = proc.stderr or ''
+
+        # 保存日志
+        log_dir = app.config['TASK_RESULT_FOLDER']
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, f'{task_id}.log')
+        with open(log_path, 'w', encoding='utf-8') as f:
+            f.write(f"=== STDOUT ===\n{stdout}\n\n=== STDERR ===\n{stderr}\n")
+
+        # 解析 JSON 结果
+        result_data = None
+        if 'JSON_RESULT_START' in stdout and 'JSON_RESULT_END' in stdout:
+            json_str = stdout.split('JSON_RESULT_START')[1].split('JSON_RESULT_END')[0].strip()
+            try:
+                result_data = json.loads(json_str)
+            except:
+                pass
+
+        session = get_db_session()
+        try:
+            if result_data:
+                final_status = result_data.get('status', 'completed')
+                complaint_numbers = result_data.get('feedback_numbers', [])
+                error_msg = result_data.get('error_message', '')
+                completed_batches = result_data.get('completed_batches', 0)
+                failed_batches = result_data.get('failed_batches', 0)
+
+                session.execute(text("""
+                    UPDATE complaint_tasks
+                    SET status=:st, completed_at=NOW(),
+                        complaint_numbers_json=:nums,
+                        completed_batches=:cb, failed_batches=:fb,
+                        error_message=:err
+                    WHERE task_id=:tid
+                """), {
+                    'st': final_status,
+                    'nums': json.dumps(complaint_numbers, ensure_ascii=False) if complaint_numbers else None,
+                    'cb': completed_batches,
+                    'fb': failed_batches,
+                    'err': error_msg or None,
+                    'tid': task_id,
+                })
+
+                # 更新各批次状态
+                batch_results = result_data.get('batch_results', [])
+                for br in batch_results:
+                    session.execute(text("""
+                        UPDATE complaint_batches
+                        SET status=:st, complaint_number=:cn, error_message=:err
+                        WHERE submission_id=:sid AND batch_no=:bno
+                    """), {
+                        'st': br.get('status', 'completed'),
+                        'cn': br.get('feedback_number'),
+                        'err': br.get('error'),
+                        'sid': submission_id,
+                        'bno': br.get('batch_no'),
+                    })
+
+                # 更新百度作品子表（权属详情 + 状态）
+                works_detail = result_data.get('works_detail', [])
+                for wd in works_detail:
+                    works_category_name = BAIDU_WORKS_CATEGORY_MAP.get(wd.get('works_category'), '')
+                    owner_type_name = BAIDU_OWNER_TYPE_MAP.get(wd.get('owner_type'), '')
+                    session.execute(text("""
+                        UPDATE baidu_submission_works
+                        SET cp_id=:cpid, owner_type=:ot, works_category=:wc,
+                            works_category_name=:wcn, contact_name=:cn, status='completed'
+                        WHERE submission_id=:sid AND work_index=:widx
+                    """), {
+                        'cpid': wd.get('cp_id', ''),
+                        'ot': wd.get('owner_type', 2),
+                        'wc': wd.get('works_category', 0),
+                        'wcn': works_category_name,
+                        'cn': wd.get('contact_name', ''),
+                        'sid': submission_id,
+                        'widx': wd.get('work_index', 0),
+                    })
+            else:
+                session.execute(text("""
+                    UPDATE complaint_tasks
+                    SET status='failed', completed_at=NOW(),
+                        error_message=:err
+                    WHERE task_id=:tid
+                """), {
+                    'err': f'脚本执行异常，退出码：{proc.returncode}',
+                    'tid': task_id,
+                })
+
+            session.commit()
+        except:
+            session.rollback()
+        finally:
+            session.close()
+
+        if result_data:
+            tasks[task_id]['status'] = result_data.get('status', 'completed')
+            tasks[task_id]['feedback_numbers'] = result_data.get('feedback_numbers', [])
+        else:
+            tasks[task_id]['status'] = 'failed'
+            tasks[task_id]['error'] = f'退出码：{proc.returncode}'
+
+    except subprocess.TimeoutExpired:
+        session = get_db_session()
+        try:
+            session.execute(text("""
+                UPDATE complaint_tasks SET status='failed', completed_at=NOW(),
+                error_message='脚本执行超时' WHERE task_id=:tid
+            """), {'tid': task_id})
+            session.commit()
+        except:
+            session.rollback()
+        finally:
+            session.close()
+        tasks[task_id]['status'] = 'failed'
+        tasks[task_id]['error'] = '执行超时'
+
+    except Exception as e:
+        session = get_db_session()
+        try:
+            session.execute(text("""
+                UPDATE complaint_tasks SET status='failed', completed_at=NOW(),
+                error_message=:err WHERE task_id=:tid
+            """), {'err': str(e), 'tid': task_id})
+            session.commit()
+        except:
+            session.rollback()
+        finally:
+            session.close()
+        tasks[task_id]['status'] = 'failed'
+        tasks[task_id]['error'] = str(e)
 
 
 if __name__ == '__main__':
