@@ -259,6 +259,7 @@ function refreshBaiduStatus() {
                                 <th>作品名称</th>
                                 <th>反馈单号</th>
                                 <th>状态</th>
+                                <th>操作</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -289,6 +290,11 @@ function refreshBaiduStatus() {
                         workNameStr = workNameStr.split('，').map(s => s.trim()).join('<br>');
                     }
 
+                    let exportCell = '';
+                    if (item.status === '已完成' || item.status === '部分失败') {
+                        exportCell = `<a href="/api/baidu/export_excel/${item.submission_id}" class="log-link">导出Excel</a>`;
+                    }
+
                     html += `
                         <tr>
                             <td>${timeStr}</td>
@@ -296,6 +302,7 @@ function refreshBaiduStatus() {
                             <td title="${item.work_name || ''}" style="white-space:normal">${workNameStr}</td>
                             <td>${complaintStr}</td>
                             <td><span class="status-badge ${statusClass}">${item.status}</span></td>
+                            <td>${exportCell}</td>
                         </tr>
                     `;
                 });

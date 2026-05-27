@@ -225,6 +225,16 @@ def main():
             if not ownership:
                 error_msg = f"作品'{work_name}'未找到已通过审核的权属记录"
                 log(f"  错误: {error_msg}")
+                result['works_detail'].append({
+                    'work_index': work_idx,
+                    'work_name': work_name,
+                    'cp_id': '',
+                    'owner_type': None,
+                    'works_category': None,
+                    'contact_name': '',
+                    'status': 'failed',
+                    'error': error_msg,
+                })
                 for chunk_start in range(0, len(links), MAX_LINKS_PER_SUBMISSION):
                     batch_no += 1
                     result['batch_results'].append({
@@ -301,7 +311,7 @@ def main():
 
             time.sleep(1)
 
-        # 查询反馈单号（通过链接地址精确匹配）
+        # 查询反馈单号（按作品顺序，通过链接地址精确匹配）
         expected_count = result['completed_batches']
         log(f'查询反馈单号（预期{expected_count}个）...')
         time.sleep(3)
@@ -318,12 +328,18 @@ def main():
                     urls.add(url)
             submitted_urls_by_work[wn] = urls
 
-        collected_numbers = []
+        # 记录哪些作品失败了
+        failed_works = set()
+        for wd in result['works_detail']:
+            if wd.get('status') == 'failed':
+                failed_works.add(wd['work_name'])
 
-        def try_match_feedback():
-            matched = []
+        def try_match_feedback_by_work():
+            matched_by_work = {}
             for work in works_config:
                 work_name = work['work_name']
+                if work_name in failed_works:
+                    continue
                 submitted_urls = submitted_urls_by_work.get(work_name, set())
                 if not submitted_urls:
                     continue
@@ -332,10 +348,15 @@ def main():
                 for fb in feedbacks:
                     fn = fb.get('feedback_number')
                     fb_date = fb.get('feedback_date', 0)
-                    if not fn or fn in matched or fb_date < today_start_ts:
+                    if not fn or fb_date < today_start_ts:
+                        continue
+                    # 避免重复匹配
+                    already_matched = set()
+                    for nums in matched_by_work.values():
+                        already_matched.update(nums)
+                    if fn in already_matched:
                         continue
 
-                    # 获取详情，比对链接
                     detail = get_feedback_detail(cookie, fb.get('id'))
                     if not detail:
                         continue
@@ -345,27 +366,42 @@ def main():
                         if url:
                             detail_urls.add(url)
 
-                    # 只要有任意一条链接匹配就认为是本次提交的
                     if detail_urls & submitted_urls:
-                        matched.append(fn)
+                        if work_name not in matched_by_work:
+                            matched_by_work[work_name] = []
+                        matched_by_work[work_name].append(fn)
                         log(f'  匹配到反馈单号: {fn} (作品: {work_name})')
 
                     time.sleep(0.5)
-            return matched
+            return matched_by_work
 
-        collected_numbers = try_match_feedback()
+        matched_by_work = try_match_feedback_by_work()
 
         # 如果数量不足，等待后重试一次
-        if len(collected_numbers) < expected_count:
-            log(f'  当前匹配到{len(collected_numbers)}个，不足{expected_count}个，等待5秒后重试...')
+        total_matched = sum(len(v) for v in matched_by_work.values())
+        if total_matched < expected_count:
+            log(f'  当前匹配到{total_matched}个，不足{expected_count}个，等待5秒后重试...')
             time.sleep(5)
-            collected_numbers = try_match_feedback()
+            matched_by_work = try_match_feedback_by_work()
+            total_matched = sum(len(v) for v in matched_by_work.values())
 
-        result['feedback_numbers'] = collected_numbers
-        if len(collected_numbers) < expected_count:
-            log(f'  警告: 预期{expected_count}个反馈单号，实际匹配到{len(collected_numbers)}个')
+        # 按作品顺序组装反馈单号列表（失败的标记为"投诉失败"）
+        ordered_numbers = []
+        for work in works_config:
+            work_name = work['work_name']
+            if work_name in failed_works:
+                ordered_numbers.append(f"投诉失败:{work_name}")
+            elif work_name in matched_by_work:
+                for fn in matched_by_work[work_name]:
+                    ordered_numbers.append(str(fn))
+            else:
+                ordered_numbers.append(f"未获取到单号:{work_name}")
+
+        result['feedback_numbers'] = ordered_numbers
+        if total_matched < expected_count:
+            log(f'  警告: 预期{expected_count}个反馈单号，实际匹配到{total_matched}个')
         else:
-            log(f'  成功匹配{len(collected_numbers)}个反馈单号')
+            log(f'  成功匹配{total_matched}个反馈单号')
 
         if result['failed_batches'] == 0:
             result['status'] = 'completed'

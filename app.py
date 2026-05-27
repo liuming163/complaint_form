@@ -3174,7 +3174,7 @@ def baidu_submit():
             'module_name': complaint_product,
             'content_type': '版权',
             'desc': complaint_product,
-            'work_name': work_names[:500],
+            'work_name': work_names[:5000],
             'rows': total_links,
             'batches': total_batches,
         })
@@ -3354,6 +3354,73 @@ def baidu_status_list():
         session.close()
 
 
+@app.route('/api/baidu/export_excel/<submission_id>', methods=['GET'])
+def baidu_export_excel(submission_id):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    session = get_db_session()
+    try:
+        # 获取主表信息
+        sub = session.execute(text("""
+            SELECT s.submission_id, s.collect_account, s.submitted_at,
+                   t.complaint_numbers_json
+            FROM complaint_submissions s
+            LEFT JOIN complaint_tasks t ON t.submission_id = s.submission_id
+            WHERE s.submission_id = :sid AND s.platform_code = 'baidu'
+        """), {'sid': submission_id}).fetchone()
+        if not sub:
+            return jsonify({'success': False, 'error': '记录不存在'}), 404
+
+        # 获取作品列表
+        works = session.execute(text("""
+            SELECT work_name FROM baidu_submission_works
+            WHERE submission_id = :sid ORDER BY work_index
+        """), {'sid': submission_id}).fetchall()
+
+        work_names = [w.work_name for w in works]
+        complaint_numbers = []
+        if sub.complaint_numbers_json:
+            try:
+                complaint_numbers = json.loads(sub.complaint_numbers_json)
+            except:
+                pass
+
+        # 提交时间格式化
+        submitted_at = ''
+        if sub.submitted_at:
+            submitted_at = sub.submitted_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(sub.submitted_at, 'strftime') else str(sub.submitted_at)
+
+        # 生成 Excel
+        wb = Workbook()
+        ws = wb.active
+        ws.title = '投诉结果'
+        ws.append(['采集时间', '采集账号', '作品名称', '反馈单号'])
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+
+        # 按作品顺序逐行写入
+        max_rows = max(len(work_names), len(complaint_numbers))
+        for i in range(max_rows):
+            wn = work_names[i] if i < len(work_names) else ''
+            fn = complaint_numbers[i] if i < len(complaint_numbers) else ''
+            ws.append([submitted_at, sub.collect_account, wn, str(fn)])
+
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 18
+        ws.column_dimensions['C'].width = 35
+        ws.column_dimensions['D'].width = 30
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        filename = f'baidu_result_{submission_id}.xlsx'
+        return send_file(buf, as_attachment=True, download_name=filename,
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    finally:
+        session.close()
+
+
 def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_type_code, works_config, total_batches):
     import sys
 
@@ -3456,19 +3523,22 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
                 # 更新百度作品子表（权属详情 + 状态）
                 works_detail = result_data.get('works_detail', [])
                 for wd in works_detail:
+                    wd_status = wd.get('status', 'completed')
                     works_category_name = BAIDU_WORKS_CATEGORY_MAP.get(wd.get('works_category'), '')
-                    owner_type_name = BAIDU_OWNER_TYPE_MAP.get(wd.get('owner_type'), '')
                     session.execute(text("""
                         UPDATE baidu_submission_works
                         SET cp_id=:cpid, owner_type=:ot, works_category=:wc,
-                            works_category_name=:wcn, contact_name=:cn, status='completed'
+                            works_category_name=:wcn, contact_name=:cn,
+                            status=:st, error_message=:err
                         WHERE submission_id=:sid AND work_index=:widx
                     """), {
                         'cpid': wd.get('cp_id', ''),
-                        'ot': wd.get('owner_type', 2),
-                        'wc': wd.get('works_category', 0),
+                        'ot': wd.get('owner_type') or 0,
+                        'wc': wd.get('works_category') or 0,
                         'wcn': works_category_name,
                         'cn': wd.get('contact_name', ''),
+                        'st': wd_status,
+                        'err': wd.get('error'),
                         'sid': submission_id,
                         'widx': wd.get('work_index', 0),
                     })
