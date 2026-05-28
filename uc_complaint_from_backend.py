@@ -745,94 +745,128 @@ def open_complaint_form(page):
     human_click(page, btn.first)
     human_delay(2000, 3000)
 
+def replace_proof_files(page, new_proof_file, new_other_proof_files):
+    """切换作品时替换证明文件和其他证明"""
+    print("🔄 替换证明文件...")
+
+    evidences_section = page.locator("#evidences")
+    all_upload_wrappers = evidences_section.locator(".upload-wrapper").all()
+
+    if not all_upload_wrappers:
+        print("⚠️ 未找到上传区域")
+        return
+
+    # 1. 删除其他证明（从最后一个开始，保留第一个）
+    if len(all_upload_wrappers) > 1:
+        for i in range(len(all_upload_wrappers) - 1, 0, -1):
+            wrapper = all_upload_wrappers[i]
+            remove_btn = wrapper.locator(".remove.anticon")
+            if remove_btn.count() > 0:
+                remove_btn.first.click()
+                human_delay(800, 1200)
+                print(f"  ✅ 删除第 {i + 1} 个其他证明")
+        # 重新获取
+        all_upload_wrappers = evidences_section.locator(".upload-wrapper").all()
+
+    # 2. 替换第一个（证明文件）：点击图片区域触发文件选择
+    if all_upload_wrappers:
+        first_wrapper = all_upload_wrappers[0]
+        file_input = first_wrapper.locator("input[type='file']")
+        if file_input.count() > 0 and os.path.exists(new_proof_file):
+            file_input.set_input_files(new_proof_file)
+            human_delay(1500, 2000)
+            print(f"  ✅ 替换证明文件: {os.path.basename(new_proof_file)}")
+
+    # 3. 上传新的其他证明文件
+    for idx, proof_path in enumerate(new_other_proof_files):
+        if not os.path.exists(proof_path):
+            print(f"  ⚠️ 文件不存在: {proof_path}")
+            continue
+
+        if idx == 0 and len(all_upload_wrappers) > 1:
+            # 第一个其他证明：替换已有的
+            wrapper = evidences_section.locator(".upload-wrapper").all()[1]
+            file_input = wrapper.locator("input[type='file']")
+            if file_input.count() > 0:
+                file_input.set_input_files(proof_path)
+                human_delay(1200, 1800)
+                print(f"  ✅ 替换第1个其他证明: {os.path.basename(proof_path)}")
+        else:
+            # 点击添加按钮
+            add_button = evidences_section.get_by_text("添 加", exact=True)
+            if add_button.count() == 0:
+                add_button = evidences_section.get_by_text("添加", exact=True)
+            if add_button.count() > 0:
+                add_button.first.click()
+                human_delay(1000, 1500)
+
+            # 获取最新的 wrapper 列表，上传到最后一个
+            current_wrappers = evidences_section.locator(".upload-wrapper").all()
+            if current_wrappers:
+                last_wrapper = current_wrappers[-1]
+                file_input = last_wrapper.locator("input[type='file']")
+                if file_input.count() > 0:
+                    file_input.set_input_files(proof_path)
+                    human_delay(1200, 1800)
+                    print(f"  ✅ 上传第{idx + 1}个其他证明: {os.path.basename(proof_path)}")
+
+    print("✅ 证明文件替换完成")
+
+
 def main(args):
     task_id = args.task_id or f"uc_{int(time.time())}"
     cookie = args.cookie
-    proof_file = args.proof_file
-    other_proof_files = args.other_proof_files.split(',') if args.other_proof_files else []
-    description = args.description
     identity = args.identity
     agent = args.agent
     rights_holder = args.rights_holder
-    complaint_type = args.complaint_type
-    copyright_type = args.copyright_type
     module = args.module
     content_type = args.content_type
-    excel_files = json.loads(args.excel_files) if args.excel_files else []
-    batch_metadata = json.loads(args.batch_metadata) if args.batch_metadata else []
-    work_name = (args.work_name or '').strip()
+    description = args.description
+    works_config = json.loads(args.works_config) if args.works_config else []
+    complaint_type = args.complaint_type or ''
+    copyright_type = args.copyright_type or ''
+
+    # 计算总批次
+    total_batches = sum(w.get('batch_count', len(w.get('excel_files', []))) for w in works_config)
 
     result = {
         "task_id": task_id,
         "status": "running",
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "completed_at": None,
-        "complaint_number": None,
         "complaint_numbers": [],
-        "total_batches": len(excel_files),
+        "total_batches": total_batches,
         "completed_batches": 0,
         "failed_batches": 0,
         "current_batch": 0,
-        "batches": [
-            {
-                "batch_no": batch.get("batch_no", index + 1),
-                "rows": batch.get("rows"),
-                "start_row": batch.get("start_row"),
-                "end_row": batch.get("end_row"),
-                "excel_file": excel_files[index] if index < len(excel_files) else batch.get("filename"),
-                "status": "pending",
-                "error": None,
-            }
-            for index, batch in enumerate(batch_metadata)
-        ],
+        "batches": [],
         "error": None,
     }
 
-    if not result["batches"]:
-        result["batches"] = [
-            {
-                "batch_no": index + 1,
-                "rows": None,
-                "start_row": None,
-                "end_row": None,
-                "excel_file": excel_file,
+    # 初始化批次信息
+    batch_no_global = 0
+    for work in works_config:
+        for ef in work.get('excel_files', []):
+            batch_no_global += 1
+            result["batches"].append({
+                "batch_no": batch_no_global,
+                "work_name": work['work_name'],
+                "excel_file": ef,
                 "status": "pending",
                 "error": None,
-            }
-            for index, excel_file in enumerate(excel_files)
-        ]
+            })
 
     if not cookie:
         result["status"] = "failed"
         result["error"] = "缺少Cookie"
         return result
-    if not description:
+    if not works_config:
         result["status"] = "failed"
-        result["error"] = "缺少投诉描述"
-        return result
-    if not identity:
-        result["status"] = "failed"
-        result["error"] = "缺少身份类型"
-        return result
-    if not rights_holder:
-        result["status"] = "failed"
-        result["error"] = "缺少权利人信息"
-        return result
-    if not module:
-        result["status"] = "failed"
-        result["error"] = "缺少功能模块"
-        return result
-    if not content_type:
-        result["status"] = "failed"
-        result["error"] = "缺少内容类型"
-        return result
-    if not excel_files:
-        result["status"] = "failed"
-        result["error"] = "缺少批次Excel文件"
+        result["error"] = "缺少作品配置"
         return result
 
-    print(f"🚀 开始执行UC投诉任务: {task_id}")
-    print(f"📦 批次数量: {len(excel_files)}")
+    print(f"🚀 开始执行UC多作品投诉任务: {task_id}")
+    print(f"📦 作品数: {len(works_config)}，总批次: {total_batches}")
     current_step = "初始化浏览器"
     task_started_utc = datetime.now(timezone.utc)
 
@@ -885,42 +919,76 @@ def main(args):
 
             current_step = "打开投诉表单"
             open_complaint_form(page)
-            current_step = "填写初始表单"
+
+            # 第一个作品：完整填表
+            first_work = works_config[0]
+            current_step = f"填写初始表单（{first_work['work_name']}）"
             fill_initial_form(
                 page, identity, agent, rights_holder, complaint_type, copyright_type,
-                module, content_type, description, proof_file, other_proof_files,
+                module, content_type, description,
+                first_work['proof_file'], first_work.get('other_proof_files', []),
                 task_id=task_id, batch_no=0
             )
 
-            for index, excel_file in enumerate(excel_files, start=1):
-                result["current_batch"] = index
-                print(f"\n===== 开始第 {index}/{len(excel_files)} 批 =====")
-                current_step = f"第{index}批导入Excel"
-                upload_batch_excel(page, excel_file)
-                current_step = f"第{index}批提交投诉"
-                # === 以下步骤暂时注释，待测试后再放开 ===
-                submit_form(page, task_id, index)
+            # 双层循环：作品 → 分片
+            batch_no_global = 0
+            is_first_batch_overall = True
 
-                if index < len(excel_files):
-                    current_step = f"第{index}批点击继续"
-                    click_continue_in_success_dialog(page)
-                    update_batch_result(result, index, "completed")
-                    human_delay(1500, 2500)
-                else:
-                    current_step = f"第{index}批跳转投诉列表"
-                    click_list_in_success_dialog(page)
-                    update_batch_result(result, index, "completed")
+            for work_idx, work in enumerate(works_config):
+                work_name = work['work_name']
+                excel_files = work.get('excel_files', [])
+                print(f"\n===== [{work_idx+1}/{len(works_config)}] 作品: {work_name} ({len(excel_files)}批) =====")
 
-                    current_step = "通过接口匹配投诉单号"
-                    # 等几秒让平台入库
-                    human_delay(2000, 3000)
-                    complaint_numbers = resolve_complaint_numbers(
-                        cookie, work_name, task_started_utc, len(excel_files)
+                # 非第一个作品：替换证明文件
+                if work_idx > 0:
+                    current_step = f"替换证明文件（{work_name}）"
+                    replace_proof_files(page, work['proof_file'], work.get('other_proof_files', []))
+
+                # 该作品的 Excel 分片循环
+                for excel_idx, excel_file in enumerate(excel_files):
+                    batch_no_global += 1
+                    result["current_batch"] = batch_no_global
+                    print(f"\n  --- 批次 {batch_no_global}/{total_batches}: {work_name} 第{excel_idx+1}片 ---")
+
+                    current_step = f"批次{batch_no_global}导入Excel"
+                    upload_batch_excel(page, excel_file)
+
+                    current_step = f"批次{batch_no_global}提交投诉"
+                    submit_form(page, task_id, batch_no_global)
+
+                    is_last_batch_overall = (batch_no_global == total_batches)
+
+                    if not is_last_batch_overall:
+                        current_step = f"批次{batch_no_global}点击继续"
+                        click_continue_in_success_dialog(page)
+                        update_batch_result(result, batch_no_global, "completed")
+                        human_delay(1500, 2500)
+                    else:
+                        current_step = "跳转投诉列表"
+                        click_list_in_success_dialog(page)
+                        update_batch_result(result, batch_no_global, "completed")
+
+            # 查询投诉单号（按作品逐个查询）
+            current_step = "查询投诉单号"
+            human_delay(2000, 3000)
+            all_complaint_numbers = []
+
+            for work in works_config:
+                work_name = work['work_name']
+                work_batch_count = len(work.get('excel_files', []))
+                try:
+                    numbers = resolve_complaint_numbers(
+                        cookie, work_name, task_started_utc, work_batch_count
                     )
-                    result["complaint_numbers"] = complaint_numbers
-                    result["complaint_number"] = complaint_numbers[0] if complaint_numbers else None
-                    result["status"] = "completed"
-                # === 以上步骤暂时注释，待测试后再放开 ===
+                    for n in numbers:
+                        all_complaint_numbers.append(str(n))
+                except Exception as e:
+                    print(f"⚠️ 作品'{work_name}'获取投诉单号失败: {e}")
+                    for _ in range(work_batch_count):
+                        all_complaint_numbers.append(f"未获取到单号:{work_name}")
+
+            result["complaint_numbers"] = all_complaint_numbers
+            result["status"] = "completed"
 
         except Exception as e:
             batch_no = result.get("current_batch") or 1
@@ -935,13 +1003,7 @@ def main(args):
                 page.screenshot(path=str(screenshot_path), full_page=True)
                 result["fail_screenshot"] = str(screenshot_path)
                 result["fail_url"] = page.url
-                try:
-                    result["fail_title"] = page.title()
-                except Exception:
-                    result["fail_title"] = ""
                 print(f"🖼️ 失败截图已保存: {screenshot_path}")
-                print(f"🔗 失败时URL: {result['fail_url']}")
-                print(f"📝 失败时标题: {result.get('fail_title', '')}")
             except Exception as snap_error:
                 print(f"⚠️ 失败截图保存失败: {snap_error}")
         finally:
@@ -953,22 +1015,18 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="UC投诉自动化脚本（后端数据版）")
+    parser = argparse.ArgumentParser(description="UC投诉自动化脚本（多作品版）")
     parser.add_argument("--task-id", type=str, help="任务ID")
     parser.add_argument("--cookie", type=str, required=True, help="Cookie字符串")
-    parser.add_argument("--excel-files", type=str, help="Excel文件路径列表JSON")
-    parser.add_argument("--batch-metadata", type=str, help="批次元数据JSON")
-    parser.add_argument("--proof-file", type=str, help="证明文件路径")
-    parser.add_argument("--other-proof-files", type=str, help="其他证明文件，逗号分隔")
-    parser.add_argument("--description", type=str, required=True, help="投诉描述")
     parser.add_argument("--identity", type=str, required=True, help="身份类型")
     parser.add_argument("--agent", type=str, required=True, help="代理人/权利人")
     parser.add_argument("--rights-holder", type=str, required=True, help="权利人名称")
-    parser.add_argument("--complaint-type", type=str, help="投诉类型")
-    parser.add_argument("--copyright-type", type=str, help="著作权类型")
     parser.add_argument("--module", type=str, required=True, help="功能模块")
     parser.add_argument("--content-type", type=str, required=True, help="内容类型")
-    parser.add_argument("--work-name", type=str, default='', help="作品名称（用于接口匹配投诉单号）")
+    parser.add_argument("--description", type=str, required=True, help="投诉描述")
+    parser.add_argument("--works-config", type=str, required=True, help="作品配置JSON")
+    parser.add_argument("--complaint-type", type=str, default='', help="投诉类型")
+    parser.add_argument("--copyright-type", type=str, default='', help="著作权类型")
 
     args = parser.parse_args()
     try:

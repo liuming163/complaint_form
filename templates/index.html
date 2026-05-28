@@ -142,9 +142,8 @@ function refreshUcStatus() {
                                 <th>采集账号</th>
                                 <th>作品名称</th>
                                 <th>投诉单号</th>
-                                <th>脚本执行状态</th>
-                                <th>预估完成时间</th>
-                                <th>日志</th>
+                                <th>状态</th>
+                                <th>操作</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -158,11 +157,19 @@ function refreshUcStatus() {
                     }
 
                     let accountStr = item.collect_account || '-';
-                    let workNameStr = item.work_name || '-';
 
+                    // 作品名称：按逗号分隔换行
+                    let workNameStr = item.work_name || '-';
+                    if (workNameStr.includes(',')) {
+                        workNameStr = workNameStr.split(',').map(s => s.trim()).join('<br>');
+                    } else if (workNameStr.includes('，')) {
+                        workNameStr = workNameStr.split('，').map(s => s.trim()).join('<br>');
+                    }
+
+                    // 投诉单号：按作品顺序对应显示
                     let complaintStr = '-';
                     if (item.complaint_numbers && item.complaint_numbers.length > 0) {
-                        complaintStr = item.complaint_numbers.slice().reverse().join('<br>');
+                        complaintStr = item.complaint_numbers.join('<br>');
                     } else if (item.batch_count) {
                         complaintStr = `${item.batch_count}批(${item.excel_rows}条)`;
                     }
@@ -170,33 +177,32 @@ function refreshUcStatus() {
                     let statusClass = 'status-default';
                     if (item.status === '已完成') statusClass = 'status-success';
                     else if (item.status === '执行中') statusClass = 'status-running';
-                    else if (item.status === '失败') statusClass = 'status-failed';
+                    else if (item.status === '失败' || item.status === '部分失败') statusClass = 'status-failed';
 
-                    let estimatedTimeStr = '-';
-                    if ((item.status === '执行中' || item.status === '等待中') && item.submitted_at && item.batch_count) {
-                        const startTime = new Date(item.submitted_at);
-                        startTime.setMinutes(startTime.getMinutes() + item.batch_count * 2);
-                        const pad = n => String(n).padStart(2, '0');
-                        estimatedTimeStr = `${startTime.getFullYear()}-${pad(startTime.getMonth() + 1)}-${pad(startTime.getDate())} ${pad(startTime.getHours())}:${pad(startTime.getMinutes())}`;
-                    }
-
+                    // 操作列：查看日志 + 导出单号
                     const logUrl = `/uc/task/uc_${item.submission_id}/log`;
-                    let logCell = `<span class="log-expired">日志已过期</span>`;
+                    let opsCell = '';
                     if (item.status === '等待中') {
-                        logCell = `<span class="log-pending">待生成</span>`;
-                    } else if (item.log_available) {
-                        logCell = `<a href="${logUrl}" target="_blank" class="log-link">查看日志</a>`;
+                        opsCell = '<span class="log-pending">待执行</span>';
+                    } else {
+                        let ops = [];
+                        if (item.log_available) {
+                            ops.push(`<a href="${logUrl}" target="_blank" class="log-link">查看日志</a>`);
+                        }
+                        if (item.status === '已完成' || item.status === '部分失败') {
+                            ops.push(`<a href="/api/uc/export_excel/${item.submission_id}" class="log-link">导出单号</a>`);
+                        }
+                        opsCell = ops.length > 0 ? ops.join(' | ') : '<span class="log-expired">日志已过期</span>';
                     }
 
                     html += `
                         <tr>
                             <td>${timeStr}</td>
                             <td>${accountStr}</td>
-                            <td>${workNameStr}</td>
-                            <td>${complaintStr}</td>
+                            <td style="white-space:normal">${workNameStr}</td>
+                            <td style="white-space:normal">${complaintStr}</td>
                             <td><span class="status-badge ${statusClass}">${item.status}</span></td>
-                            <td>${estimatedTimeStr}</td>
-                            <td>${logCell}</td>
+                            <td>${opsCell}</td>
                         </tr>
                     `;
                 });

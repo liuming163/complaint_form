@@ -1762,6 +1762,10 @@ def check_excel():
 
 @app.route('/api/uc/submit', methods=['POST'])
 def submit_uc_form():
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': '请求数据为空'}), 400
+
     required_fields = {
         'collect_account': '采集账号',
         'cookie': 'Cookie',
@@ -1774,86 +1778,112 @@ def submit_uc_form():
         'description': '投诉内容描述',
     }
 
-    identity = request.form.get('identity', '').strip()
-    missing_fields = [label for key, label in required_fields.items() if not request.form.get(key, '').strip()]
-
-    if identity == '代理人' and not request.form.get('principal', '').strip():
+    missing_fields = [label for key, label in required_fields.items() if not data.get(key, '').strip()]
+    identity = data.get('identity', '').strip()
+    if identity == '代理人' and not data.get('principal', '').strip():
         missing_fields.append('被代理人（权利人）信息')
 
-    if not request.files.get('excel_file') or not request.files['excel_file'].filename:
-        missing_fields.append('Excel批量导入')
-    if not request.files.get('proof_file') or not request.files['proof_file'].filename:
-        missing_fields.append('证明文件')
+    works_config = data.get('works', [])
+    if not works_config:
+        missing_fields.append('作品列表')
 
     if missing_fields:
         return jsonify({'success': False, 'error': '缺少必填项：' + '、'.join(missing_fields)}), 400
 
-    excel_file = request.files['excel_file']
-    excel_name = secure_filename(excel_file.filename)
-    excel_ext = Path(excel_name).suffix.lower()
-    if excel_ext not in {'.xlsx', '.xls'}:
-        return jsonify({'success': False, 'error': 'Excel 文件格式不正确，请上传 .xlsx 或 .xls 文件'}), 400
-
     submission_id, submission_dir = create_submission_dir()
 
     try:
-        excel_filename = save_uploaded_file(excel_file, submission_dir, 'excel')
-        excel_path = os.path.join(submission_dir, excel_filename)
-        df = pd.read_excel(excel_path)
-        rows = len(df)
-        if rows <= 0:
-            return jsonify({'success': False, 'error': 'Excel 文件没有可提交的数据行'}), 400
-        batch_size = 200
-        batch_dir = os.path.join(submission_dir, 'batches')
-        batches = split_excel_into_batches(df, batch_dir, batch_size=batch_size)
+        static_imgs_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs')
 
-        saved_files = {
-            'excel_file': excel_filename,
-            'proof_file': save_uploaded_file(request.files.get('proof_file'), submission_dir, 'proof'),
-            'other_proof_files': []
-        }
+        # 按作品生成 Excel 分片
+        all_batches = []
+        works_payload = []
+        batch_no_global = 0
 
-        if not saved_files['proof_file']:
-            return jsonify({'success': False, 'error': '证明文件保存失败'}), 400
+        for work_idx, work in enumerate(works_config):
+            work_name = work['work_name']
+            work_links = work.get('excel_rows', [])
+            proof_file_rel = work.get('proof_file', '')
+            other_proof_files_rel = work.get('other_proof_files', [])
 
-        for index, file_storage in enumerate(request.files.getlist('other_proof_file')):
-            saved_name = save_uploaded_file(file_storage, submission_dir, f'other_{index + 1}')
-            if saved_name:
-                saved_files['other_proof_files'].append(saved_name)
+            # 将链接转为 DataFrame 并按 200 条分片
+            df_rows = []
+            for link in work_links:
+                df_rows.append({
+                    '侵权链接': link.get('侵权链接', ''),
+                    '对应原创链接/对应访问码': link.get('对应原创链接/对应访问码', ''),
+                    '作品名称': work_name,
+                })
+            df = pd.DataFrame(df_rows)
 
+            batch_dir = os.path.join(submission_dir, 'batches')
+            os.makedirs(batch_dir, exist_ok=True)
+
+            link_count = len(df)
+            work_batch_files = []
+            work_batch_metadata = []
+
+            for chunk_start in range(0, link_count, 200):
+                batch_no_global += 1
+                chunk_end = min(chunk_start + 200, link_count)
+                chunk_df = df.iloc[chunk_start:chunk_end]
+
+                batch_filename = f'part_{batch_no_global:03d}.xlsx'
+                batch_path = os.path.join(batch_dir, batch_filename)
+                chunk_df.to_excel(batch_path, index=False)
+
+                work_batch_files.append(batch_path)
+                batch_meta = {
+                    'batch_no': batch_no_global,
+                    'filename': batch_filename,
+                    'start_row': chunk_start + 1,
+                    'end_row': chunk_end,
+                    'rows': chunk_end - chunk_start,
+                }
+                work_batch_metadata.append(batch_meta)
+                all_batches.append(batch_meta)
+
+            # 解析证明文件绝对路径
+            proof_file_abs = os.path.join(static_imgs_dir, proof_file_rel) if proof_file_rel else ''
+            other_proof_abs = [os.path.join(static_imgs_dir, p) for p in other_proof_files_rel if p]
+
+            works_payload.append({
+                'work_name': work_name,
+                'excel_files': work_batch_files,
+                'proof_file': proof_file_abs,
+                'other_proof_files': other_proof_abs,
+                'batch_count': len(work_batch_files),
+                'link_count': link_count,
+            })
+
+        total_links = sum(w['link_count'] for w in works_payload)
+        total_batches = batch_no_global
+        work_names_str = ', '.join(w['work_name'] for w in works_payload)
+        rights_holder = data.get('principal', '').strip() if identity == '代理人' else data.get('agent', '').strip()
+
+        # 保存 submission.json
         payload = {
             'submission_id': submission_id,
             'submitted_at': datetime.now().isoformat(),
             'form': {
-                'collect_account': request.form.get('collect_account', '').strip(),
-                'cookie': request.form.get('cookie', '').strip(),
-                'identity': request.form.get('identity', '').strip(),
-                'agent': request.form.get('agent', '').strip(),
-                'principal': request.form.get('principal', '').strip(),
-                'complaint_category': request.form.get('complaint_category', '').strip(),
-                'complaint_type': request.form.get('complaint_type', '').strip(),
-                'module': request.form.get('module', '').strip(),
-                'content_type': request.form.get('content_type', '').strip(),
-                'description': request.form.get('description', '').strip(),
-                '作品名称': request.form.get('作品名称', '').strip(),
+                'collect_account': data.get('collect_account', '').strip(),
+                'cookie': data.get('cookie', '').strip(),
+                'identity': identity,
+                'agent': data.get('agent', '').strip(),
+                'principal': data.get('principal', '').strip(),
+                'complaint_category': data.get('complaint_category', '').strip(),
+                'complaint_type': data.get('complaint_type', '').strip(),
+                'module': data.get('module', '').strip(),
+                'content_type': data.get('content_type', '').strip(),
+                'description': data.get('description', '').strip(),
+                '作品名称': work_names_str,
             },
-            'excel_rows': rows,
-            'batch_size': batch_size,
-            'batch_count': len(batches),
-            'batches': [
-                {
-                    'batch_no': batch['batch_no'],
-                    'filename': batch['filename'],
-                    'start_row': batch['start_row'],
-                    'end_row': batch['end_row'],
-                    'rows': batch['rows'],
-                }
-                for batch in batches
-            ],
-            'files': saved_files,
+            'works_config': works_payload,
+            'excel_rows': total_links,
+            'batch_size': 200,
+            'batch_count': total_batches,
+            'batches': all_batches,
         }
-
-        rights_holder = payload['form']['principal'] if identity == '代理人' else payload['form']['agent']
 
         metadata_path = os.path.join(submission_dir, 'submission.json')
         with open(metadata_path, 'w', encoding='utf-8') as f:
@@ -1864,78 +1894,36 @@ def submit_uc_form():
             'status': 'pending',
             'submission_id': submission_id,
             'submitted_at': payload['submitted_at'],
-            'queued_at': payload['submitted_at'],
-            'excel_rows': rows,
-            'batch_count': len(batches),
+            'excel_rows': total_links,
+            'batch_count': total_batches,
             'completed_batches': 0,
             'failed_batches': 0,
             'current_batch': 0,
             'complaint_numbers': [],
-            'batches': [
-                {
-                    'batch_no': batch['batch_no'],
-                    'rows': batch['rows'],
-                    'start_row': batch['start_row'],
-                    'end_row': batch['end_row'],
-                    'filename': batch['filename'],
-                    'status': 'pending',
-                    'error': None,
-                }
-                for batch in batches
-            ],
         }
         tasks[task_id] = task_state
+
         insert_complaint_submission(payload, rights_holder)
-        insert_complaint_task(task_id, submission_id, payload['submitted_at'], len(batches), rows)
-        insert_complaint_batches(submission_id, payload['batches'])
-        register_submission_files(
-            submission_id,
-            submission_dir,
-            saved_files,
-            payload['batches'],
-            {
-                'excel_file': excel_file.filename,
-                'proof_file': request.files.get('proof_file').filename if request.files.get('proof_file') else saved_files['proof_file'],
-                'other_proof_files': [f.filename for f in request.files.getlist('other_proof_file') if f and f.filename],
-            }
-        )
+        insert_complaint_task(task_id, submission_id, payload['submitted_at'], total_batches, total_links)
+        insert_complaint_batches(submission_id, all_batches)
 
-        proof_file_path = os.path.join(submission_dir, saved_files['proof_file'])
-        other_proof_paths = [os.path.join(submission_dir, f) for f in saved_files['other_proof_files']]
-
-        # 追加自定义模板中匹配到的其他证明文件（来自 static/imgs/）
-        static_imgs_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs')
-        template_other_proof = request.form.get('other_proof_files_from_template', '').strip()
-        if template_other_proof:
-            try:
-                template_other_proof_list = json.loads(template_other_proof)
-                for rel_path in template_other_proof_list:
-                    abs_path = os.path.join(static_imgs_dir, rel_path)
-                    if os.path.exists(abs_path):
-                        other_proof_paths.append(abs_path)
-            except json.JSONDecodeError:
-                pass
-
-        complaint_category = payload['form']['complaint_category']
-        complaint_type = payload['form']['complaint_type']
+        complaint_category = data.get('complaint_category', '').strip()
+        complaint_type = data.get('complaint_type', '').strip()
         copyright_type = complaint_type if complaint_category == '知识产权' else ''
-        batch_files = [batch['path'] for batch in batches]
+
         task_payload = {
             'task_id': task_id,
-            'excel_files': batch_files,
-            'cookie': payload['form']['cookie'],
-            'proof_file': proof_file_path,
-            'other_proof_files': other_proof_paths,
-            'description': payload['form']['description'],
-            'identity': payload['form']['identity'],
-            'agent': payload['form']['agent'],
+            'cookie': data.get('cookie', '').strip(),
+            'identity': identity,
+            'agent': data.get('agent', '').strip(),
             'rights_holder': rights_holder,
             'complaint_category': complaint_category,
             'copyright_type': copyright_type,
-            'module': payload['form']['module'],
-            'content_type': payload['form']['content_type'],
-            'work_name': payload['form'].get('作品名称') or '',
-            'batch_metadata': payload['batches'],
+            'module': data.get('module', '').strip(),
+            'content_type': data.get('content_type', '').strip(),
+            'description': data.get('description', '').strip(),
+            'works_config': works_payload,
+            'total_batches': total_batches,
         }
 
         enqueue_uc_task(task_payload)
@@ -1946,8 +1934,9 @@ def submit_uc_form():
             'success': True,
             'task_id': task_id,
             'message': '任务已创建，正在排队执行投诉',
-            'excel_rows': rows,
-            'batch_count': len(batches),
+            'total_works': len(works_payload),
+            'total_links': total_links,
+            'total_batches': total_batches,
         })
     except Exception as e:
         return jsonify({'success': False, 'error': f'提交失败：{str(e)}'}), 500
@@ -1999,11 +1988,11 @@ def download_custom_template():
         sheet1_data = {
             '字段': [
                 '您的身份', '代理人/权利人', '被代理人（权利人）信息', '投诉大类',
-                '投诉类型', '功能模块', '内容类型', '投诉内容描述', '作品名称'
+                '投诉类型', '功能模块', '内容类型', '投诉内容描述'
             ],
             '值': [
                 '代理人', '北京和晞科技有限公司', '', '',
-                '', '', '', '', ''
+                '', '', '', ''
             ],
             '可选值': [
                 '权利人、代理人', '北京和晞科技有限公司',
@@ -2011,8 +2000,7 @@ def download_custom_template():
                 '著作权（含视频、图文、图集等）、商标、专利、其他知识产权',
                 '头条内容、大鱼号账号、UC网盘、神马搜索',
                 '影视剧集、其他视频、小说、漫画、图片、文章、软件/游戏、其他',
-                '',
-                '填写原创作品名称，用于匹配证明文件，例如： 乔家的儿女'
+                ''
             ]
         }
         df_sheet1 = pd.DataFrame(sheet1_data)
@@ -2045,13 +2033,13 @@ def download_custom_template():
             ['字段名', '填写说明'],
             ['侵权链接', '必填，填写需要投诉的侵权内容链接'],
             ['对应原创链接/对应访问码', '必填，填写原创内容链接或访问码'],
-            ['作品名称', '必填，填写原创作品名称，用于自动匹配证明文件'],
+            ['作品名称', '必填，填写原创作品名称，支持多个作品混合填写，系统按作品名称自动分组'],
             [''],
-            ['Sheet3 证明文件说明'],
+            ['证明文件说明'],
             [''],
-            ['上传Excel后，系统会根据以下规则自动匹配证明文件：'],
+            ['上传模版后，系统会根据Sheet2中的作品名称逐个匹配证明文件：'],
             [''],
-            ['证明文件', '根据「作品名称」在 static/imgs/剧名/ 下查找以“剧名_所属公司_内容类型_投诉类型”命名的目录，并在该目录内匹配「证明文件_*」文件'],
+            ['证明文件', '根据「作品名称」在 static/imgs/剧名/ 下查找以”剧名_所属公司_内容类型_投诉类型”命名的目录，并在该目录内匹配「证明文件_*」文件'],
             ['其他证明[1]', '根据「被代理人」和「使用的公司」在 static/imgs/授权委托书/ 目录下查找「授权委托书_被代理人_使用的公司_截止日期YYYYMMDD」文件'],
             ['其他证明[2]', '根据「被代理人」在 static/imgs/营业执照/ 目录下查找「营业执照_被代理人」文件'],
             ['其他证明[3]', '根据「代理人」在 static/imgs/营业执照/ 目录下查找「营业执照_代理人」文件'],
@@ -2059,8 +2047,10 @@ def download_custom_template():
             ['注意事项'],
             [''],
             ['1. 上传自定义模板时，只需上传Excel文件（.xlsx或.xls）'],
-            ['2. 作品名称必须与 static/imgs/剧名/ 下的目录名中的剧名部分一致，目录规则为：剧名_所属公司_内容类型_投诉类型'],
-            ['3. 文件格式支持：jpg、png、jpeg、bmp、pdf'],
+            ['2. Sheet2支持填写多个作品的链接，系统按作品名称自动分组，每个作品独立投诉'],
+            ['3. 每个作品的链接超过200条时，系统自动按200条分片'],
+            ['4. 作品名称必须与 static/imgs/剧名/ 下的目录名中的剧名部分一致'],
+            ['5. 文件格式支持：jpg、png、jpeg、bmp、pdf'],
         ]
         df_sheet3 = pd.DataFrame(sheet3_lines)
 
@@ -2193,7 +2183,7 @@ def upload_custom_template():
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': f'Sheet1解析失败：{str(e)}'}), 400
 
-        # Sheet1 必填字段校验
+        # Sheet1 必填字段校验（去掉了作品名称）
         required_fields_sheet1 = {
             '您的身份': '您的身份',
             '代理人/权利人': '代理人/权利人',
@@ -2203,7 +2193,6 @@ def upload_custom_template():
             '功能模块': '功能模块',
             '内容类型': '内容类型',
             '投诉内容描述': '投诉内容描述',
-            '作品名称': '作品名称',
         }
         missing_fields = [label for field, label in required_fields_sheet1.items() if not form_data.get(field, '').strip()]
         if missing_fields:
@@ -2277,10 +2266,26 @@ def upload_custom_template():
                 if account_row:
                     used_company = account_row.get('used_company', '').strip()
 
-        # 1. 根据作品名称 + 被代理人信息 + 代理主体 + 类型信息匹配作品资料
-        work_name = form_data.get('作品名称', '')
-        if not work_name and excel_rows:
-            work_name = excel_rows[0].get('作品名称', '')
+        # 1. 从 Sheet2 提取所有不重复的作品名称，按出现顺序排列
+        work_names_ordered = []
+        for row in excel_rows:
+            wn = row.get('作品名称', '').strip()
+            if wn and wn not in work_names_ordered:
+                work_names_ordered.append(wn)
+
+        if not work_names_ordered:
+            shutil.rmtree(template_dir, ignore_errors=True)
+            return jsonify({'success': False, 'error': 'Sheet2中没有有效的作品名称'}), 400
+
+        # 按作品名称分组链接
+        links_by_work = {}
+        for row in excel_rows:
+            wn = row.get('作品名称', '').strip()
+            if wn:
+                if wn not in links_by_work:
+                    links_by_work[wn] = []
+                links_by_work[wn].append(row)
+
         content_type_name = form_data.get('内容类型', '').strip()
         complaint_type_name = normalize_template_complaint_type(form_data.get('投诉类型', '').strip())
 
@@ -2289,130 +2294,158 @@ def upload_custom_template():
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': '作品资料库目录不存在，请先建立作品资料'}), 400
 
-        with get_db_session() as session:
-            work_rows = session.execute(text("""
-                SELECT w.id, w.work_name, w.used_company, w.principal_name, ct.name AS content_type, cpt.name AS complaint_type
-                FROM works w
-                JOIN work_content_types ct ON ct.id = w.content_type_id
-                JOIN work_complaint_types cpt ON cpt.id = w.complaint_type_id
-                WHERE w.work_name = :work_name
-            """), {'work_name': work_name}).mappings().all()
+        # 2. 逐个作品匹配证明文件
+        works_config = []
+        match_errors = []
 
-        if not work_rows:
+        for work_name in work_names_ordered:
+            work_links = links_by_work.get(work_name, [])
+            link_count = len(work_links)
+            batch_count = math.ceil(link_count / 200)
+
+            # 查询 works 表
+            with get_db_session() as session:
+                work_rows = session.execute(text("""
+                    SELECT w.id, w.work_name, w.used_company, w.principal_name, ct.name AS content_type, cpt.name AS complaint_type
+                    FROM works w
+                    JOIN work_content_types ct ON ct.id = w.content_type_id
+                    JOIN work_complaint_types cpt ON cpt.id = w.complaint_type_id
+                    WHERE w.work_name = :work_name
+                """), {'work_name': work_name}).mappings().all()
+
+            if not work_rows:
+                match_errors.append(f'「{work_name}」在作品覆盖列表中不存在')
+                continue
+
+            principal_matched_rows = [row for row in work_rows if normalize_company_name(row.get('principal_name') or '') == principal]
+            if not principal_matched_rows:
+                match_errors.append(f'「{work_name}」的被代理人信息与模板不一致')
+                continue
+
+            candidate_rows = [row for row in principal_matched_rows if row.get('used_company') == used_company]
+            if not candidate_rows:
+                match_errors.append(f'「{work_name}」在当前代理主体下没有匹配到')
+                continue
+
+            narrowed_rows = [row for row in candidate_rows if row.get('content_type') == content_type_name]
+            if not narrowed_rows:
+                match_errors.append(f'「{work_name}」内容类型不匹配')
+                continue
+
+            if len(narrowed_rows) > 1:
+                narrowed_rows = [row for row in narrowed_rows if row.get('complaint_type') == complaint_type_name]
+            if not narrowed_rows:
+                match_errors.append(f'「{work_name}」投诉类型不匹配')
+                continue
+
+            matched_row = narrowed_rows[0]
+            work_dir_name = f"{normalize_work_path_part(matched_row['work_name'])}_{normalize_work_path_part(matched_row['used_company'])}_{normalize_work_path_part(matched_row['content_type'])}_{normalize_work_path_part(matched_row['complaint_type'])}"
+            drama_dir = os.path.join(works_base_dir, work_dir_name)
+            if not os.path.isdir(drama_dir):
+                match_errors.append(f'「{work_name}」作品目录不存在')
+                continue
+
+            work_rel_dir = os.path.join('剧名', work_dir_name)
+            proof_file = None
+            work_other_proofs = []
+
+            for f in os.listdir(drama_dir):
+                if f.startswith('证明文件_') and not f.startswith('._'):
+                    proof_file = os.path.join(work_rel_dir, f)
+                    break
+
+            for f in os.listdir(drama_dir):
+                if f.startswith('其他证明_') and not f.startswith('._'):
+                    work_other_proofs.append(os.path.join(work_rel_dir, f))
+
+            # 授权委托书
+            proxy_file = None
+            if principal:
+                auth_dir = os.path.join(static_imgs_dir, '授权委托书')
+                if os.path.isdir(auth_dir):
+                    for f in os.listdir(auth_dir):
+                        if f.startswith('授权委托书_') and not f.startswith('._'):
+                            if company_match(principal, f):
+                                proxy_file = os.path.join('授权委托书', f)
+                                break
+
+            # 营业执照(被代理人)
+            biz_license_principal = None
+            if principal:
+                biz_dir = os.path.join(static_imgs_dir, '营业执照')
+                if os.path.isdir(biz_dir):
+                    for f in os.listdir(biz_dir):
+                        if f.startswith('营业执照_') and not f.startswith('._'):
+                            if company_match(principal, f):
+                                biz_license_principal = os.path.join('营业执照', f)
+                                break
+
+            # 营业执照(代理人)
+            biz_license_agent = None
+            if agent:
+                biz_dir = os.path.join(static_imgs_dir, '营业执照')
+                if os.path.isdir(biz_dir):
+                    for f in os.listdir(biz_dir):
+                        if f.startswith('营业执照_') and not f.startswith('._'):
+                            if company_match(agent, f):
+                                biz_license_agent = os.path.join('营业执照', f)
+                                break
+
+            if proxy_file:
+                work_other_proofs.append(proxy_file)
+            if biz_license_principal:
+                work_other_proofs.append(biz_license_principal)
+            if biz_license_agent:
+                work_other_proofs.append(biz_license_agent)
+
+            # 校验必须匹配到的证明文件
+            missing_proofs = []
+            if not proof_file:
+                missing_proofs.append('证明文件')
+            if not proxy_file:
+                missing_proofs.append('授权委托书')
+            if not biz_license_principal:
+                missing_proofs.append('营业执照(被代理人)')
+            if not biz_license_agent:
+                missing_proofs.append('营业执照(代理人)')
+
+            if missing_proofs:
+                match_errors.append(f'「{work_name}」缺少：{", ".join(missing_proofs)}')
+                continue
+
+            works_config.append({
+                'work_name': work_name,
+                'link_count': link_count,
+                'batch_count': batch_count,
+                'proof_file': proof_file,
+                'other_proof_files': work_other_proofs,
+                'excel_rows': work_links,
+            })
+
+        if match_errors and not works_config:
             shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': f'「{work_name}」作品在作品资料库中没有匹配到，请检查作品是否已建立'}), 400
+            return jsonify({'success': False, 'error': '所有作品匹配失败：\n' + '\n'.join(match_errors)}), 400
 
-        principal_matched_rows = [row for row in work_rows if normalize_company_name(row.get('principal_name') or '') == principal]
-        if not principal_matched_rows:
-            shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': f'「{work_name}」作品已存在，但与模板中的被代理人信息「{principal}」不一致，请检查作品覆盖列表中的被代理人信息'}), 400
-
-        candidate_rows = [row for row in principal_matched_rows if row.get('used_company') == used_company]
-        matched_hint = ''
-        if not candidate_rows:
-            shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': f'「{work_name}」作品在当前代理主体(司内)及被代理人信息下没有匹配到，请检查作品覆盖列表资料'}), 400
-
-        narrowed_rows = [row for row in candidate_rows if row.get('content_type') == content_type_name]
-        if not narrowed_rows:
-            shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': f'「{work_name}」作品在当前代理主体(司内)及被代理人信息下没有找到内容类型匹配的记录，请检查作品覆盖列表资料'}), 400
-
-        if len(narrowed_rows) > 1:
-            narrowed_rows = [row for row in narrowed_rows if row.get('complaint_type') == complaint_type_name]
-        if not narrowed_rows:
-            shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': f'「{work_name}」作品在当前代理主体(司内)及被代理人信息下没有找到投诉类型匹配的记录，请检查作品覆盖列表资料'}), 400
-        if len(narrowed_rows) > 1:
-            shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': f'「{work_name}」作品在当前代理主体(司内)、被代理人信息和类型条件下仍匹配到多条记录，请检查作品覆盖列表是否重复'}), 400
-
-        work_dir_name = f"{normalize_work_path_part(narrowed_rows[0]['work_name'])}_{normalize_work_path_part(narrowed_rows[0]['used_company'])}_{normalize_work_path_part(narrowed_rows[0]['content_type'])}_{normalize_work_path_part(narrowed_rows[0]['complaint_type'])}"
-        drama_dir = os.path.join(works_base_dir, work_dir_name)
-        if not os.path.isdir(drama_dir):
-            shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': f'作品覆盖记录已存在，但作品目录「{work_dir_name}」不存在，请检查作品资料文件'}), 400
-        work_rel_dir = os.path.join('剧名', work_dir_name)
-        other_proof_files = []
-        proof_file = None
-        for f in os.listdir(drama_dir):
-            if f.startswith('证明文件_') and not f.startswith('._'):
-                proof_file = os.path.join(work_rel_dir, f)
-                break
-
-        for f in os.listdir(drama_dir):
-            if f.startswith('其他证明_') and not f.startswith('._'):
-                other_proof_files.append(os.path.join(work_rel_dir, f))
-
-        # 2.1 授权委托书: static/imgs/授权委托书/授权委托书_[被代理人].*
-        proxy_file = None
-        if principal:
-            auth_dir = os.path.join(static_imgs_dir, '授权委托书')
-            if os.path.isdir(auth_dir):
-                # 精确匹配公司名（支持括号中英文模糊匹配）
-                for f in os.listdir(auth_dir):
-                    if f.startswith('授权委托书_') and not f.startswith('._'):
-                        if company_match(principal, f):
-                            proxy_file = os.path.join('授权委托书', f)
-                            break
-
-        # 2.2 营业执照(被代理人): static/imgs/营业执照/营业执照_[被代理人].*
-        biz_license_principal = None
-        if principal:
-            biz_dir = os.path.join(static_imgs_dir, '营业执照')
-            if os.path.isdir(biz_dir):
-                for f in os.listdir(biz_dir):
-                    if f.startswith('营业执照_') and not f.startswith('._'):
-                        if company_match(principal, f):
-                            biz_license_principal = os.path.join('营业执照', f)
-                            break
-
-        # 2.3 营业执照(代理人): static/imgs/营业执照/营业执照_[代理人].*
-        biz_license_agent = None
-        if agent:
-            biz_dir = os.path.join(static_imgs_dir, '营业执照')
-            if os.path.isdir(biz_dir):
-                # 精确匹配代理人公司名（支持括号中英文模糊匹配）
-                for f in os.listdir(biz_dir):
-                    if f.startswith('营业执照_') and not f.startswith('._'):
-                        if company_match(agent, f):
-                            biz_license_agent = os.path.join('营业执照', f)
-                            break
-
-        # 组装其他证明文件列表
-        if proxy_file:
-            other_proof_files.append(proxy_file)
-        if biz_license_principal:
-            other_proof_files.append(biz_license_principal)
-        if biz_license_agent:
-            other_proof_files.append(biz_license_agent)
-
-        # 校验必须匹配到的证明文件
-        missing_proofs = []
-        if not proof_file:
-            missing_proofs.append('证明文件（侵权证明）')
-        if not proxy_file:
-            missing_proofs.append('授权委托书（授权委托书_被代理人_使用的公司_截止日期YYYYMMDD）')
-        if not biz_license_principal:
-            missing_proofs.append('营业执照（被代理人）')
-        if not biz_license_agent:
-            missing_proofs.append('营业执照（代理人）')
-
-        if missing_proofs:
-            shutil.rmtree(template_dir, ignore_errors=True)
-            return jsonify({'success': False, 'error': '以下证明文件未匹配到，请检查被代理人信息或文件是否齐全：' + '、'.join(missing_proofs)}), 400
+        total_links = sum(w['link_count'] for w in works_config)
+        total_batches = sum(w['batch_count'] for w in works_config)
 
         # 准备返回数据
         result = {
             'success': True,
             'template_id': template_id,
             'form_data': form_data,
+            'works': [{
+                'work_name': w['work_name'],
+                'link_count': w['link_count'],
+                'batch_count': w['batch_count'],
+                'proof_file': w['proof_file'],
+                'other_proof_files': w['other_proof_files'],
+            } for w in works_config],
             'excel_rows': excel_rows,
-            'files': {
-                'proof_file': proof_file,
-                'other_proof_files': other_proof_files
-            },
-            'matched_work_hint': matched_hint
+            'total_works': len(works_config),
+            'total_links': total_links,
+            'total_batches': total_batches,
+            'match_errors': match_errors,
         }
 
         return jsonify(result)
@@ -2457,41 +2490,38 @@ def serve_custom_template_file(template_id, filename):
     return send_file(file_path)
 
 
-def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_files, description,
-                         identity, agent, rights_holder, complaint_category, copyright_type, module, content_type,
-                         batch_metadata, work_name=''):
+def run_complaint_script(task_payload):
     """在后台线程中执行UC投诉自动化脚本"""
     import sys
 
+    task_id = task_payload['task_id']
     script_path = os.path.join(os.path.dirname(__file__), 'uc_complaint_from_backend.py')
     submission_id = task_id[3:] if task_id.startswith('uc_') else task_id
+
+    works_config = task_payload.get('works_config', [])
+    total_batches = task_payload.get('total_batches', 0)
 
     cmd = [
         sys.executable,
         script_path,
         '--task-id', task_id,
-        '--excel-files', json.dumps(excel_files, ensure_ascii=False),
-        '--proof-file', proof_file if proof_file else '',
-        '--description', description,
-        '--identity', identity,
-        '--agent', agent,
-        '--rights-holder', rights_holder,
-        '--module', module,
-        '--content-type', content_type,
-        '--cookie', cookie,
-        '--batch-metadata', json.dumps(batch_metadata, ensure_ascii=False),
-        '--work-name', work_name or '',
+        '--cookie', task_payload.get('cookie', ''),
+        '--identity', task_payload.get('identity', ''),
+        '--agent', task_payload.get('agent', ''),
+        '--rights-holder', task_payload.get('rights_holder', ''),
+        '--module', task_payload.get('module', ''),
+        '--content-type', task_payload.get('content_type', ''),
+        '--description', task_payload.get('description', ''),
+        '--works-config', json.dumps(works_config, ensure_ascii=False),
     ]
 
-    if other_proof_files:
-        other_proof_str = ','.join([f for f in other_proof_files if f])
-        cmd.extend(['--other-proof-files', other_proof_str])
-
+    complaint_category = task_payload.get('complaint_category', '')
+    copyright_type = task_payload.get('copyright_type', '')
     if complaint_category == '知识产权' and copyright_type:
         cmd.extend(['--complaint-type', complaint_category, '--copyright-type', copyright_type])
 
-    print(f"[{task_id}] 执行命令: {' '.join(cmd)}")
-    append_task_log(task_id, f"执行命令: {' '.join(cmd)}")
+    print(f"[{task_id}] 执行UC多作品投诉，作品数: {len(works_config)}，总批次: {total_batches}")
+    append_task_log(task_id, f"执行UC多作品投诉，作品数: {len(works_config)}，总批次: {total_batches}")
 
     try:
         started_at = datetime.now().isoformat()
@@ -2505,7 +2535,7 @@ def run_complaint_script(task_id, excel_files, cookie, proof_file, other_proof_f
             cmd,
             capture_output=True,
             text=True,
-            timeout=max(600, len(excel_files) * 300)
+            timeout=max(600, total_batches * 300)
         )
 
         print(f"[{task_id}] stdout: {result.stdout}")
@@ -2738,6 +2768,74 @@ def get_uc_status_list():
             continue
 
     return jsonify({'success': True, 'data': submissions})
+
+
+@app.route('/api/uc/export_excel/<submission_id>', methods=['GET'])
+def uc_export_excel(submission_id):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    session = get_db_session()
+    try:
+        sub = session.execute(text("""
+            SELECT s.submission_id, s.collect_account, s.work_name, s.submitted_at,
+                   t.complaint_numbers_json
+            FROM complaint_submissions s
+            LEFT JOIN complaint_tasks t ON t.submission_id = s.submission_id
+            WHERE s.submission_id = :sid AND s.platform_code = 'uc'
+        """), {'sid': submission_id}).fetchone()
+        if not sub:
+            return jsonify({'success': False, 'error': '记录不存在'}), 404
+
+        # 解析作品名称列表
+        work_name_str = sub.work_name or ''
+        if ',' in work_name_str:
+            work_names = [w.strip() for w in work_name_str.split(',') if w.strip()]
+        elif '，' in work_name_str:
+            work_names = [w.strip() for w in work_name_str.split('，') if w.strip()]
+        else:
+            work_names = [work_name_str] if work_name_str else []
+
+        # 解析投诉单号
+        complaint_numbers = []
+        if sub.complaint_numbers_json:
+            try:
+                complaint_numbers = json.loads(sub.complaint_numbers_json)
+            except:
+                pass
+
+        # 提交时间格式化
+        submitted_at = ''
+        if sub.submitted_at:
+            submitted_at = sub.submitted_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(sub.submitted_at, 'strftime') else str(sub.submitted_at)
+
+        # 生成 Excel
+        wb = Workbook()
+        ws = wb.active
+        ws.title = '投诉结果'
+        ws.append(['采集时间', '采集账号', '作品名称', '投诉单号'])
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+
+        max_rows = max(len(work_names), len(complaint_numbers))
+        for i in range(max_rows):
+            wn = work_names[i] if i < len(work_names) else ''
+            fn = complaint_numbers[i] if i < len(complaint_numbers) else ''
+            ws.append([submitted_at, sub.collect_account, wn, str(fn)])
+
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 18
+        ws.column_dimensions['C'].width = 35
+        ws.column_dimensions['D'].width = 30
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        filename = f'uc_result_{submission_id}.xlsx'
+        return send_file(buf, as_attachment=True, download_name=filename,
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    finally:
+        session.close()
 
 
 @app.route('/api/uc/verify_cookie', methods=['POST'])

@@ -58,23 +58,7 @@ def run_redis_worker():
                 if not refresh_worker_lock(token):
                     print('Worker lock lost before UC task execution. Exiting.')
                     return 1
-                run_complaint_script(
-                    task_payload['task_id'],
-                    task_payload['excel_files'],
-                    task_payload['cookie'],
-                    task_payload['proof_file'],
-                    task_payload.get('other_proof_files', []),
-                    task_payload['description'],
-                    task_payload['identity'],
-                    task_payload['agent'],
-                    task_payload['rights_holder'],
-                    task_payload['complaint_category'],
-                    task_payload.get('copyright_type', ''),
-                    task_payload['module'],
-                    task_payload['content_type'],
-                    task_payload['batch_metadata'],
-                    task_payload.get('work_name', ''),
-                )
+                run_complaint_script(task_payload)
                 continue
 
             # 尝试百度队列
