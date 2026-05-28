@@ -195,7 +195,9 @@ def cleanup_old_task_logs(max_age_days=5):
     task_results_dir = Path(app.config['TASK_RESULT_FOLDER'])
     if not task_results_dir.exists():
         return
-    for path in task_results_dir.glob('uc_*.log'):
+    for path in task_results_dir.iterdir():
+        if not path.is_file():
+            continue
         try:
             if path.stat().st_mtime < cutoff:
                 path.unlink()

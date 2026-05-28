@@ -334,17 +334,19 @@ def main():
             if wd.get('status') == 'failed':
                 failed_works.add(wd['work_name'])
 
-        def try_match_feedback_by_work():
-            matched_by_work = {}
+        def try_match_feedback_by_work(existing_matched=None):
+            matched_by_work = dict(existing_matched) if existing_matched else {}
+            already_found_works = set(matched_by_work.keys())
+
             for work in works_config:
                 work_name = work['work_name']
-                if work_name in failed_works:
+                if work_name in failed_works or work_name in already_found_works:
                     continue
                 submitted_urls = submitted_urls_by_work.get(work_name, set())
                 if not submitted_urls:
                     continue
 
-                feedbacks = query_feedback(cookie, keyword=work_name, page=1, size=50)
+                feedbacks = query_feedback(cookie, keyword=work_name, page=1, size=20)
                 for fb in feedbacks:
                     fn = fb.get('feedback_number')
                     fb_date = fb.get('feedback_date', 0)
@@ -377,12 +379,14 @@ def main():
 
         matched_by_work = try_match_feedback_by_work()
 
-        # 如果数量不足，等待后重试一次
+        # 如果数量不足，等待后重试（最多重试2次，合并结果）
         total_matched = sum(len(v) for v in matched_by_work.values())
-        if total_matched < expected_count:
-            log(f'  当前匹配到{total_matched}个，不足{expected_count}个，等待5秒后重试...')
+        for retry in range(2):
+            if total_matched >= expected_count:
+                break
+            log(f'  当前匹配到{total_matched}个，不足{expected_count}个，等待5秒后第{retry+1}次重试...')
             time.sleep(5)
-            matched_by_work = try_match_feedback_by_work()
+            matched_by_work = try_match_feedback_by_work(existing_matched=matched_by_work)
             total_matched = sum(len(v) for v in matched_by_work.values())
 
         # 按作品顺序组装反馈单号列表（失败的标记为"投诉失败"）
