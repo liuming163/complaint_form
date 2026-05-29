@@ -25,11 +25,6 @@
         <div class="col-md-5 left-panel">
             <div class="section-title mb-3"><i class="fas fa-file-alt"></i> 投诉平台</div>
             <div class="d-flex flex-column gap-3">
-                <a href="javascript:void(0)" class="platform-card shadow-sm" style="opacity:0.5;cursor:not-allowed;" onclick="alert('夸克投诉模块暂未开通')">
-                    <div class="icon"><i class="fas fa-search"></i></div>
-                    <div class="name">夸克投诉</div>
-                    <div class="desc">夸克平台投诉表单</div>
-                </a>
                 <a href="/uc" class="platform-card shadow-sm">
                     <div class="icon"><i class="fas fa-globe"></i></div>
                     <div class="name">UC投诉</div>
@@ -39,6 +34,11 @@
                     <div class="icon"><i class="fas fa-cloud"></i></div>
                     <div class="name">百度投诉</div>
                     <div class="desc">百度网盘/搜索版权投诉</div>
+                </a>
+                <a href="javascript:void(0)" class="platform-card shadow-sm" style="opacity:0.5;cursor:not-allowed;" onclick="alert('夸克投诉模块暂未开通')">
+                    <div class="icon"><i class="fas fa-search"></i></div>
+                    <div class="name">夸克投诉</div>
+                    <div class="desc">夸克平台投诉表单</div>
                 </a>
             </div>
         </div>
@@ -52,20 +52,6 @@
         <div class="col-md-6 right-panel">
             <div class="section-title mb-3"><i class="fas fa-list-alt"></i> 状态查询</div>
             <div class="d-flex flex-column gap-3">
-
-                <!-- 夸克状态查询 -->
-                <div class="status-card shadow-sm">
-                    <div class="status-card-header">
-                        <div class="icon"><i class="fas fa-search"></i></div>
-                        <div class="name">夸克状态查询</div>
-                    </div>
-                    <div class="status-card-body">
-                        <div class="status-empty">
-                            <i class="fas fa-inbox fa-2x mb-2"></i>
-                            <div>暂无数据</div>
-                        </div>
-                    </div>
-                </div>
 
                 <!-- UC状态查询 -->
                 <div class="status-card shadow-sm">
@@ -103,6 +89,20 @@
                     </div>
                 </div>
 
+                <!-- 夸克状态查询 -->
+                <div class="status-card shadow-sm">
+                    <div class="status-card-header">
+                        <div class="icon"><i class="fas fa-search"></i></div>
+                        <div class="name">夸克状态查询</div>
+                    </div>
+                    <div class="status-card-body">
+                        <div class="status-empty">
+                            <i class="fas fa-inbox fa-2x mb-2"></i>
+                            <div>暂无数据</div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -110,25 +110,14 @@
 
 <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
 <script>
-let isRefreshing = false;
 
 function refreshUcStatus() {
-    if (isRefreshing) return;
-    isRefreshing = true;
-
     const container = document.getElementById('ucStatusTable');
-    // 刷新按钮在 .status-card-header 里，不在 container 里
     const cardHeader = container.closest('.status-card').querySelector('.status-card-header');
     const refreshBtn = cardHeader ? cardHeader.querySelector('button') : null;
 
     container.innerHTML = '<div class="status-loading"><i class="fas fa-spinner fa-spin"></i> 刷新中...</div>';
-    if (refreshBtn) {
-        refreshBtn.disabled = true;
-        const icon = refreshBtn.querySelector('i');
-        const text = refreshBtn.childNodes[refreshBtn.childNodes.length - 1];
-        if (icon) icon.classList.add('fa-spin');
-        if (text && text.nodeType === Node.TEXT_NODE) text.textContent = ' 刷新中...';
-    }
+    if (refreshBtn) refreshBtn.disabled = true;
 
     fetch('/api/uc/status_list')
         .then(res => res.json())
@@ -158,18 +147,30 @@ function refreshUcStatus() {
 
                     let accountStr = item.collect_account || '-';
 
-                    // 作品名称：按逗号分隔换行
+                    // 作品名称：按逗号分隔，最多展示2行
                     let workNameStr = item.work_name || '-';
+                    let workNameParts = [];
                     if (workNameStr.includes(',')) {
-                        workNameStr = workNameStr.split(',').map(s => s.trim()).join('<br>');
+                        workNameParts = workNameStr.split(',').map(s => s.trim()).filter(s => s);
                     } else if (workNameStr.includes('，')) {
-                        workNameStr = workNameStr.split('，').map(s => s.trim()).join('<br>');
+                        workNameParts = workNameStr.split('，').map(s => s.trim()).filter(s => s);
+                    } else {
+                        workNameParts = [workNameStr];
+                    }
+                    if (workNameParts.length > 2) {
+                        workNameStr = workNameParts.slice(0, 2).join('<br>') + `<br>...共${workNameParts.length}部`;
+                    } else {
+                        workNameStr = workNameParts.join('<br>');
                     }
 
-                    // 投诉单号：按作品顺序对应显示
+                    // 投诉单号：最多展示2行
                     let complaintStr = '-';
                     if (item.complaint_numbers && item.complaint_numbers.length > 0) {
-                        complaintStr = item.complaint_numbers.join('<br>');
+                        if (item.complaint_numbers.length > 2) {
+                            complaintStr = item.complaint_numbers.slice(0, 2).join('<br>') + `<br>...共${item.complaint_numbers.length}条`;
+                        } else {
+                            complaintStr = item.complaint_numbers.join('<br>');
+                        }
                     } else if (item.batch_count) {
                         complaintStr = `${item.batch_count}批(${item.excel_rows}条)`;
                     }
@@ -226,16 +227,8 @@ function refreshUcStatus() {
             `;
         })
         .finally(() => {
-            // 锁定2秒后释放，防止请求很快完成时用户还能继续点
             setTimeout(() => {
-                isRefreshing = false;
-                if (refreshBtn) {
-                    refreshBtn.disabled = false;
-                    const icon = refreshBtn.querySelector('i');
-                    const text = refreshBtn.childNodes[refreshBtn.childNodes.length - 1];
-                    if (icon) icon.classList.remove('fa-spin');
-                    if (text && text.nodeType === Node.TEXT_NODE) text.textContent = ' 刷新';
-                }
+                if (refreshBtn) refreshBtn.disabled = false;
             }, 2000);
         });
 }
@@ -280,8 +273,11 @@ function refreshBaiduStatus() {
 
                     let complaintStr = '-';
                     if (item.complaint_numbers && item.complaint_numbers.length > 0) {
-                        complaintStr = item.complaint_numbers.slice(0, 5).join('<br>');
-                        if (item.complaint_numbers.length > 5) complaintStr += `<br>...共${item.complaint_numbers.length}个`;
+                        if (item.complaint_numbers.length > 2) {
+                            complaintStr = item.complaint_numbers.slice(0, 2).join('<br>') + `<br>...共${item.complaint_numbers.length}条`;
+                        } else {
+                            complaintStr = item.complaint_numbers.join('<br>');
+                        }
                     }
 
                     let statusClass = 'status-default';
@@ -290,10 +286,18 @@ function refreshBaiduStatus() {
                     else if (item.status === '失败' || item.status === '部分失败') statusClass = 'status-failed';
 
                     let workNameStr = item.work_name || '-';
+                    let baiduWorkParts = [];
                     if (workNameStr.includes(',')) {
-                        workNameStr = workNameStr.split(',').map(s => s.trim()).join('<br>');
+                        baiduWorkParts = workNameStr.split(',').map(s => s.trim()).filter(s => s);
                     } else if (workNameStr.includes('，')) {
-                        workNameStr = workNameStr.split('，').map(s => s.trim()).join('<br>');
+                        baiduWorkParts = workNameStr.split('，').map(s => s.trim()).filter(s => s);
+                    } else {
+                        baiduWorkParts = [workNameStr];
+                    }
+                    if (baiduWorkParts.length > 2) {
+                        workNameStr = baiduWorkParts.slice(0, 2).join('<br>') + `<br>...共${baiduWorkParts.length}部`;
+                    } else {
+                        workNameStr = baiduWorkParts.join('<br>');
                     }
 
                     let exportCell = '';

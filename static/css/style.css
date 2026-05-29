@@ -23,6 +23,7 @@ body { background-color: #f8f9fa; font-size: 14px; }
     display: flex;
     align-items: center;
     justify-content: center;
+    padding-bottom: 50px;
 }
 .platform-card {
     background: white;
