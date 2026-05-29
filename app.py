@@ -3113,6 +3113,18 @@ def baidu_upload_template():
     if not works_list:
         return jsonify({'success': False, 'error': '"作品列表"中没有有效数据'}), 400
 
+    # 校验 Sheet2 作品名称不允许重复
+    seen_work_names = []
+    duplicate_work_names = []
+    for w in works_list:
+        if w['work_name'] in seen_work_names:
+            if w['work_name'] not in duplicate_work_names:
+                duplicate_work_names.append(w['work_name'])
+        else:
+            seen_work_names.append(w['work_name'])
+    if duplicate_work_names:
+        return jsonify({'success': False, 'error': f'"作品列表"中存在重复的作品名称：{", ".join(duplicate_work_names)}'}), 400
+
     # 解析 Sheet3: 侵权链接
     ws_links = wb['侵权链接']
     all_links = []
@@ -3143,33 +3155,48 @@ def baidu_upload_template():
             links_by_work[wn] = []
         links_by_work[wn].append({'link_name': link['link_name'], 'url_address': link['link_url']})
 
-    # 校验：作品列表中的每个作品都必须有对应的侵权链接
+    # 校验：以 Sheet3 侵权链接中的作品为准，Sheet2 多出来的忽略
     work_names_in_list = {w['work_name'] for w in works_list}
     work_names_in_links = set(links_by_work.keys())
-    missing_links = work_names_in_list - work_names_in_links
-    if missing_links:
-        return jsonify({'success': False, 'error': f'以下作品在"侵权链接"中没有对应数据：{", ".join(missing_links)}'}), 400
-    extra_links = work_names_in_links - work_names_in_list
-    if extra_links:
-        return jsonify({'success': False, 'error': f'以下作品在"作品列表"中不存在：{", ".join(extra_links)}'}), 400
 
-    # 构建结果
+    # Sheet3 中有链接但 Sheet2 中没有对应作品的，记录警告但不阻断
+    extra_links_warnings = []
+    extra_link_works = work_names_in_links - work_names_in_list
+    if extra_link_works:
+        for wn in extra_link_works:
+            extra_links_warnings.append(f'{wn}（上传的文件作品列表中未找到该作品配置）')
+            del links_by_work[wn]
+
+    # 构建结果（只处理 Sheet3 中有链接的作品，按 Sheet3 中出现的顺序）
+    # 先收集 Sheet3 中链接的作品出现顺序
+    link_work_order = []
+    for link in all_links:
+        wn = link['work_name']
+        if wn not in link_work_order and wn in links_by_work:
+            link_work_order.append(wn)
+
     works_config = []
     total_links = 0
     total_batches = 0
-    for work in works_list:
-        wn = work['work_name']
+    for wn in link_work_order:
+        # 从 Sheet2 中找到对应的作品配置
+        work_info = next((w for w in works_list if w['work_name'] == wn), None)
+        if not work_info:
+            continue
         work_links = links_by_work[wn]
         link_count = len(work_links)
         batch_count = math.ceil(link_count / 200)
         total_links += link_count
         total_batches += batch_count
         works_config.append({
-            **work,
+            **work_info,
             'links': work_links,
             'link_count': link_count,
             'batch_count': batch_count,
         })
+
+    if not works_config:
+        return jsonify({'success': False, 'error': '没有可投诉的作品（侵权链接中的作品在作品列表中均未找到配置）'}), 400
 
     return jsonify({
         'success': True,
@@ -3179,6 +3206,7 @@ def baidu_upload_template():
         'total_works': len(works_config),
         'total_links': total_links,
         'total_batches': total_batches,
+        'skipped_works': extra_links_warnings,
     })
 
 

@@ -45,6 +45,11 @@ def get_user_info(cookie):
 
 
 def search_ownership(cookie, work_name):
+    """返回 (record, status_hint)
+    - 找到已通过: (record, None)
+    - 找到但未通过: (None, 'rejected')
+    - 未找到: (None, 'not_found')
+    """
     resp = requests.post(
         f'{BASE_URL}/ownership/keyword',
         headers=make_headers(cookie),
@@ -53,12 +58,18 @@ def search_ownership(cookie, work_name):
     )
     data = resp.json()
     if data.get('code') != 200:
-        return None
+        return None, 'not_found'
     records = data.get('data', {}).get('records', [])
+    found_but_not_passed = False
     for record in records:
-        if record.get('ownership_status') == 2 and record.get('works_name', '') == work_name:
-            return record
-    return None
+        if record.get('works_name', '') == work_name:
+            if record.get('ownership_status') == 2:
+                return record, None
+            else:
+                found_but_not_passed = True
+    if found_but_not_passed:
+        return None, 'rejected'
+    return None, 'not_found'
 
 
 def get_ownership_detail(cookie, cp_id):
@@ -221,9 +232,12 @@ def main():
 
             # 搜索权属
             log(f"  搜索权属记录...")
-            ownership = search_ownership(cookie, work_name)
+            ownership, status_hint = search_ownership(cookie, work_name)
             if not ownership:
-                error_msg = f"作品'{work_name}'未找到已通过审核的权属记录"
+                if status_hint == 'rejected':
+                    error_msg = f"作品'{work_name}'权属状态未通过，请在百度投诉原平台进行投诉"
+                else:
+                    error_msg = f"作品'{work_name}'未找到权属记录，请在百度投诉原平台进行投诉"
                 log(f"  错误: {error_msg}")
                 result['works_detail'].append({
                     'work_index': work_idx,
