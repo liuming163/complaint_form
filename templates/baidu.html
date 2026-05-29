@@ -269,9 +269,49 @@ async function submitComplaint() {
     const statusEl = document.getElementById('submitStatus');
 
     submitBtn.disabled = true;
-    statusEl.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin"></i> 提交中...</span>';
+    statusEl.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin"></i> 正在预检作品权属状态...</span>';
 
     try {
+        // 1. 预检：检查所有作品的权属状态
+        const workNames = templateData.works.map(w => w.work_name);
+        const preCheckResp = await fetch('/api/baidu/pre_check', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cookie: cookie, work_names: workNames})
+        });
+        const preCheckData = await preCheckResp.json();
+
+        if (!preCheckData.success) {
+            statusEl.innerHTML = `<div class="alert alert-danger"><i class="fas fa-times-circle"></i> 预检失败: ${preCheckData.error}</div>`;
+            submitBtn.disabled = false;
+            return;
+        }
+
+        const canComplain = preCheckData.can_complain || [];
+        const cannotComplain = preCheckData.cannot_complain || [];
+
+        // 2. 如果有不可投诉的作品，提示用户确认
+        if (cannotComplain.length > 0) {
+            const cannotNames = cannotComplain.map(w => w.work_name).join('、');
+            const confirmMsg = `以下 ${cannotComplain.length} 部作品未找到已通过审核的权属记录，将跳过投诉：\n\n${cannotNames}\n\n请在百度投诉原平台进行投诉。具体信息可在首页百度状态查询里导出查看。\n\n${canComplain.length > 0 ? `剩余 ${canComplain.length} 部作品将正常投诉，是否继续？` : '没有可投诉的作品。'}`;
+
+            if (canComplain.length === 0) {
+                alert(confirmMsg);
+                // 即使全部跳过也提交，写入数据库供导出
+            } else if (!confirm(confirmMsg)) {
+                statusEl.innerHTML = '';
+                submitBtn.disabled = false;
+                return;
+            }
+        }
+
+        // 3. 提交（只传可投诉的作品 + 跳过的作品信息）
+        statusEl.innerHTML = '<span class="text-muted"><i class="fas fa-spinner fa-spin"></i> 提交中...</span>';
+
+        const canComplainSet = new Set(canComplain);
+        const worksToSubmit = templateData.works.filter(w => canComplainSet.has(w.work_name));
+        const skippedWorks = cannotComplain.map(w => ({work_name: w.work_name, reason: w.reason}));
+
         const resp = await fetch('/api/baidu/submit', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -280,18 +320,20 @@ async function submitComplaint() {
                 collect_account: acc.user,
                 complaint_product: templateData.complaint_product,
                 complaint_type_code: templateData.complaint_type_code,
-                works: templateData.works,
+                works: worksToSubmit,
+                skipped_works: skippedWorks,
             })
         });
         const data = await resp.json();
         if (data.success) {
-            statusEl.innerHTML = `
-                <div class="alert alert-success">
-                    <i class="fas fa-check-circle"></i> 投诉任务已提交成功！<br>
-                    <strong>任务ID:</strong> ${data.task_id}<br>
-                    <strong>作品数:</strong> ${data.total_works} | <strong>总链接:</strong> ${data.total_links} | <strong>总批次:</strong> ${data.total_batches}<br>
-                    <a href="/" class="btn btn-sm btn-outline-primary mt-2">返回首页查看状态</a>
-                </div>`;
+            let msg = `<i class="fas fa-check-circle"></i> 投诉任务已提交成功！<br>
+                <strong>任务ID:</strong> ${data.task_id}<br>
+                <strong>投诉作品:</strong> ${data.total_works} 部 | <strong>总链接:</strong> ${data.total_links} | <strong>总批次:</strong> ${data.total_batches}`;
+            if (data.skipped_works > 0) {
+                msg += `<br><strong>跳过作品:</strong> ${data.skipped_works} 部（权属未通过）`;
+            }
+            msg += `<br><a href="/" class="btn btn-sm btn-outline-primary mt-2">返回首页查看状态</a>`;
+            statusEl.innerHTML = `<div class="alert alert-success">${msg}</div>`;
         } else {
             statusEl.innerHTML = `<div class="alert alert-danger"><i class="fas fa-times-circle"></i> ${data.error}</div>`;
             submitBtn.disabled = false;

@@ -2970,6 +2970,68 @@ def baidu_verify_cookie():
         return jsonify({'success': False, 'error': f'验证失败：{str(e)}'}), 500
 
 
+@app.route('/api/baidu/pre_check', methods=['POST'])
+def baidu_pre_check():
+    data = request.get_json() or {}
+    cookie = data.get('cookie', '').strip()
+    work_names = data.get('work_names', [])
+
+    if not cookie:
+        return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
+    if not work_names:
+        return jsonify({'success': False, 'error': '作品列表为空'}), 400
+
+    can_complain = []
+    cannot_complain = []
+
+    try:
+        for work_name in work_names:
+            resp = requests.post(
+                f'{BAIDU_API_BASE}/ownership/keyword',
+                headers={
+                    'Cookie': cookie,
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0',
+                },
+                json={'page': 1, 'size': 50, 'lastPageNo': 0, 'key_word': work_name, 'owner_type': 0},
+                timeout=15,
+            )
+            result = resp.json()
+            found_passed = False
+            found_but_not_passed = False
+
+            if result.get('code') == 200:
+                records = result.get('data', {}).get('records', [])
+                for record in records:
+                    if record.get('works_name', '') == work_name:
+                        if record.get('ownership_status') == 2:
+                            found_passed = True
+                            break
+                        else:
+                            found_but_not_passed = True
+
+            if found_passed:
+                can_complain.append(work_name)
+            elif found_but_not_passed:
+                cannot_complain.append({
+                    'work_name': work_name,
+                    'reason': '权属状态未通过，请在百度投诉原平台进行投诉',
+                })
+            else:
+                cannot_complain.append({
+                    'work_name': work_name,
+                    'reason': '未找到已通过审核的权属记录，请在百度投诉原平台进行投诉',
+                })
+
+        return jsonify({
+            'success': True,
+            'can_complain': can_complain,
+            'cannot_complain': cannot_complain,
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'预检失败：{str(e)}'}), 500
+
+
 @app.route('/api/baidu/search_ownership', methods=['POST'])
 def baidu_search_ownership():
     data = request.get_json() or {}
@@ -3221,6 +3283,7 @@ def baidu_submit():
     complaint_product = data.get('complaint_product', '').strip()
     complaint_type_code = data.get('complaint_type_code')
     works_config = data.get('works', [])
+    skipped_works = data.get('skipped_works', [])
 
     if not cookie:
         return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
@@ -3228,7 +3291,7 @@ def baidu_submit():
         return jsonify({'success': False, 'error': '请选择投诉账号'}), 400
     if not complaint_product:
         return jsonify({'success': False, 'error': '投诉产品不能为空'}), 400
-    if not works_config:
+    if not works_config and not skipped_works:
         return jsonify({'success': False, 'error': '作品列表不能为空'}), 400
 
     # 验证 Cookie
@@ -3244,13 +3307,16 @@ def baidu_submit():
     except Exception as e:
         return jsonify({'success': False, 'error': f'Cookie验证失败：{str(e)}'}), 500
 
-    # 计算批次
+    # 计算批次（只算可投诉的作品）
     total_links = 0
     total_batches = 0
     for work in works_config:
         link_count = len(work.get('links', []))
         total_links += link_count
         total_batches += math.ceil(link_count / 200)
+
+    # 所有作品名称（包含跳过的）
+    all_work_names = [w['work_name'] for w in works_config] + [w['work_name'] for w in skipped_works]
 
     # 创建提交目录
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -3267,6 +3333,7 @@ def baidu_submit():
         'complaint_product': complaint_product,
         'complaint_type_code': complaint_type_code,
         'works_config': works_config,
+        'skipped_works': skipped_works,
         'total_works': len(works_config),
         'total_links': total_links,
         'total_batches': total_batches,
@@ -3280,7 +3347,7 @@ def baidu_submit():
     # 写入数据库
     session = get_db_session()
     try:
-        work_names = ', '.join(w['work_name'] for w in works_config)
+        work_names_str = ', '.join(all_work_names)
         session.execute(text("""
             INSERT INTO complaint_submissions
             (submission_id, platform_code, collect_account, cookie_snapshot,
@@ -3302,7 +3369,7 @@ def baidu_submit():
             'module_name': complaint_product,
             'content_type': '版权',
             'desc': complaint_product,
-            'work_name': work_names[:5000],
+            'work_name': work_names_str[:5000],
             'rows': total_links,
             'batches': total_batches,
         })
@@ -3338,8 +3405,9 @@ def baidu_submit():
                     'rc': chunk_end - chunk_start,
                 })
 
-        # 写入百度作品子表
-        for work_idx, work in enumerate(works_config):
+        # 写入百度作品子表（可投诉的）
+        work_idx = 0
+        for work in works_config:
             work_links = work.get('links', [])
             session.execute(text("""
                 INSERT INTO baidu_submission_works
@@ -3357,6 +3425,23 @@ def baidu_submit():
                 'lcount': len(work_links),
                 'bcount': math.ceil(len(work_links) / 200),
             })
+            work_idx += 1
+
+        # 写入百度作品子表（跳过的，直接标记 failed）
+        for sw in skipped_works:
+            session.execute(text("""
+                INSERT INTO baidu_submission_works
+                (submission_id, work_index, work_name, description,
+                 actual_name, actual_url, link_count, batch_count, status, error_message)
+                VALUES (:sid, :widx, :wname, '',
+                        '', '', 0, 0, 'skipped', :err)
+            """), {
+                'sid': submission_id,
+                'widx': work_idx,
+                'wname': sw['work_name'],
+                'err': sw.get('reason', '未找到已通过审核的权属记录，请在百度投诉原平台进行投诉'),
+            })
+            work_idx += 1
 
         session.commit()
     except Exception as e:
@@ -3365,29 +3450,46 @@ def baidu_submit():
     finally:
         session.close()
 
-    # 入队
-    task_payload = {
-        'task_id': task_id,
-        'submission_id': submission_id,
-        'cookie': cookie,
-        'complaint_product': complaint_product,
-        'complaint_type_code': complaint_type_code,
-        'works_config': works_config,
-        'total_batches': total_batches,
-    }
-    enqueue_baidu_task(task_payload)
+    # 入队（只包含可投诉的作品）
+    if works_config:
+        task_payload = {
+            'task_id': task_id,
+            'submission_id': submission_id,
+            'cookie': cookie,
+            'complaint_product': complaint_product,
+            'complaint_type_code': complaint_type_code,
+            'works_config': works_config,
+            'total_batches': total_batches,
+        }
+        enqueue_baidu_task(task_payload)
 
     tasks[task_id] = {
-        'status': 'queued',
+        'status': 'queued' if works_config else 'completed',
         'submitted_at': datetime.now().isoformat(),
         'total_batches': total_batches,
     }
+
+    # 如果没有可投诉的作品，直接标记完成
+    if not works_config:
+        session = get_db_session()
+        try:
+            skipped_numbers = [f"未找到已通过审核的权属记录:{sw['work_name']}" for sw in skipped_works]
+            session.execute(text("""
+                UPDATE complaint_tasks SET status='completed', completed_at=NOW(),
+                complaint_numbers_json=:nums WHERE task_id=:tid
+            """), {'nums': json.dumps(skipped_numbers, ensure_ascii=False), 'tid': task_id})
+            session.commit()
+        except:
+            session.rollback()
+        finally:
+            session.close()
 
     return jsonify({
         'success': True,
         'task_id': task_id,
         'submission_id': submission_id,
         'total_works': len(works_config),
+        'skipped_works': len(skipped_works),
         'total_links': total_links,
         'total_batches': total_batches,
     })
@@ -3500,13 +3602,12 @@ def baidu_export_excel(submission_id):
         if not sub:
             return jsonify({'success': False, 'error': '记录不存在'}), 404
 
-        # 获取作品列表
+        # 获取作品列表（包含跳过的）
         works = session.execute(text("""
-            SELECT work_name FROM baidu_submission_works
+            SELECT work_name, status, error_message FROM baidu_submission_works
             WHERE submission_id = :sid ORDER BY work_index
         """), {'sid': submission_id}).fetchall()
 
-        work_names = [w.work_name for w in works]
         complaint_numbers = []
         if sub.complaint_numbers_json:
             try:
@@ -3528,16 +3629,22 @@ def baidu_export_excel(submission_id):
             cell.font = Font(bold=True)
 
         # 按作品顺序逐行写入
-        max_rows = max(len(work_names), len(complaint_numbers))
-        for i in range(max_rows):
-            wn = work_names[i] if i < len(work_names) else ''
-            fn = complaint_numbers[i] if i < len(complaint_numbers) else ''
-            ws.append([submitted_at, sub.collect_account, wn, str(fn)])
+        # 可投诉的作品从 complaint_numbers 中按顺序取单号
+        # 跳过的作品直接写 error_message
+        number_idx = 0
+        for work in works:
+            if work.status == 'skipped':
+                ws.append([submitted_at, sub.collect_account, work.work_name,
+                           work.error_message or '未找到已通过审核的权属记录，请在百度投诉原平台进行投诉'])
+            else:
+                fn = complaint_numbers[number_idx] if number_idx < len(complaint_numbers) else ''
+                ws.append([submitted_at, sub.collect_account, work.work_name, str(fn)])
+                number_idx += 1
 
         ws.column_dimensions['A'].width = 20
         ws.column_dimensions['B'].width = 18
         ws.column_dimensions['C'].width = 35
-        ws.column_dimensions['D'].width = 30
+        ws.column_dimensions['D'].width = 55
 
         buf = io.BytesIO()
         wb.save(buf)
