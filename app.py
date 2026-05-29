@@ -53,6 +53,7 @@ DATABASE_URL = os.getenv(
 )
 REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
 UC_QUEUE_NAME = os.getenv('UC_QUEUE_NAME', 'uc_complaint_queue')
+UNIFIED_QUEUE_NAME = os.getenv('UNIFIED_QUEUE_NAME', 'complaint_queue')
 UC_WORKER_LOCK_KEY = os.getenv('UC_WORKER_LOCK_KEY', 'uc_complaint_worker_lock')
 UC_WORKER_LOCK_TTL = int(os.getenv('UC_WORKER_LOCK_TTL', '15'))
 UC_COMPLAIN_LIST_API = 'https://ipp.uc.cn/api/complain/accuse'
@@ -284,7 +285,8 @@ def get_redis_client():
 
 def enqueue_uc_task(task_payload):
     client = get_redis_client()
-    client.lpush(UC_QUEUE_NAME, json.dumps(task_payload, ensure_ascii=False))
+    task_payload['platform'] = 'uc'
+    client.lpush(UNIFIED_QUEUE_NAME, json.dumps(task_payload, ensure_ascii=False))
 
 
 def dequeue_uc_task(timeout=0):
@@ -323,12 +325,22 @@ def release_worker_lock(token):
 
 def enqueue_baidu_task(task_payload):
     client = get_redis_client()
-    client.lpush(BAIDU_QUEUE_NAME, json.dumps(task_payload, ensure_ascii=False))
+    task_payload['platform'] = 'baidu'
+    client.lpush(UNIFIED_QUEUE_NAME, json.dumps(task_payload, ensure_ascii=False))
 
 
 def dequeue_baidu_task(timeout=0):
     client = get_redis_client()
     item = client.brpop(BAIDU_QUEUE_NAME, timeout=timeout)
+    if not item:
+        return None
+    _, payload = item
+    return json.loads(payload)
+
+
+def dequeue_unified_task(timeout=0):
+    client = get_redis_client()
+    item = client.brpop(UNIFIED_QUEUE_NAME, timeout=timeout)
     if not item:
         return None
     _, payload = item
@@ -2746,6 +2758,34 @@ def view_task_log(task_id):
     </body>
     </html>
     """
+
+
+@app.route('/api/worker/queue_status', methods=['GET'])
+def worker_queue_status():
+    session = get_db_session()
+    try:
+        rows = session.execute(text("""
+            SELECT t.task_id, s.platform_code, t.batch_count, t.status, s.submitted_at
+            FROM complaint_tasks t
+            JOIN complaint_submissions s ON s.submission_id = t.submission_id
+            WHERE t.status IN ('queued', 'running')
+            ORDER BY s.submitted_at ASC
+        """)).fetchall()
+
+        queue = []
+        for row in rows:
+            queue.append({
+                'task_id': row.task_id,
+                'platform_code': row.platform_code,
+                'batch_count': row.batch_count or 1,
+                'status': row.status,
+                'submitted_at': normalize_datetime(row.submitted_at),
+            })
+        return jsonify({'success': True, 'queue': queue})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        session.close()
 
 
 @app.route('/api/uc/status_list', methods=['GET'])

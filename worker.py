@@ -4,13 +4,11 @@
 import atexit
 import signal
 import threading
-import time
 
 from app import (
     UC_WORKER_LOCK_TTL,
     acquire_worker_lock,
-    dequeue_baidu_task,
-    dequeue_uc_task,
+    dequeue_unified_task,
     refresh_worker_lock,
     release_worker_lock,
     run_baidu_complaint_script,
@@ -45,28 +43,28 @@ def run_redis_worker():
     heartbeat = threading.Thread(target=keep_lock_alive, daemon=True, name='worker-lock-heartbeat')
     heartbeat.start()
 
-    print('Redis worker started (UC + Baidu).')
+    print('Redis worker started (unified queue).')
     try:
         while not stop_event.is_set():
             if not refresh_worker_lock(token):
                 print('Worker lock lost. Exiting.')
                 return 1
 
-            # 尝试 UC 队列
-            task_payload = dequeue_uc_task(timeout=1)
-            if task_payload:
-                if not refresh_worker_lock(token):
-                    print('Worker lock lost before UC task execution. Exiting.')
-                    return 1
-                run_complaint_script(task_payload)
+            task_payload = dequeue_unified_task(timeout=2)
+            if not task_payload:
                 continue
 
-            # 尝试百度队列
-            task_payload = dequeue_baidu_task(timeout=1)
-            if task_payload:
-                if not refresh_worker_lock(token):
-                    print('Worker lock lost before Baidu task execution. Exiting.')
-                    return 1
+            if not refresh_worker_lock(token):
+                print('Worker lock lost before task execution. Exiting.')
+                return 1
+
+            platform = task_payload.get('platform', '')
+
+            if platform == 'uc':
+                print(f"[UC] 执行任务: {task_payload.get('task_id')}")
+                run_complaint_script(task_payload)
+            elif platform == 'baidu':
+                print(f"[Baidu] 执行任务: {task_payload.get('task_id')}")
                 run_baidu_complaint_script(
                     task_payload['task_id'],
                     task_payload['cookie'],
@@ -75,9 +73,8 @@ def run_redis_worker():
                     task_payload['works_config'],
                     task_payload['total_batches'],
                 )
-                continue
-
-            # 两个队列都为空，brpop 已等待过，直接继续循环
+            else:
+                print(f"[Unknown] 未知平台: {platform}, task_id={task_payload.get('task_id')}")
 
     finally:
         stop_event.set()

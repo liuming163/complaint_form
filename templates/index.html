@@ -111,6 +111,43 @@
 <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
 <script>
 
+// 全局队列数据，用于跨平台计算预估完成时间
+let globalQueue = [];
+
+function getEstimatedTime(taskId) {
+    if (!globalQueue.length) return '-';
+    const idx = globalQueue.findIndex(q => q.task_id === taskId);
+    if (idx === -1) return '-';
+
+    // 计算该任务前面所有任务的累计耗时 + 自己的耗时
+    let cumulativeSeconds = 0;
+    for (let i = 0; i <= idx; i++) {
+        const q = globalQueue[i];
+        const secPerBatch = q.platform_code === 'baidu' ? 20 : 50;
+        cumulativeSeconds += (q.batch_count || 1) * secPerBatch;
+    }
+
+    // 基准时间：第一个任务的提交时间
+    const firstSubmit = globalQueue[0].submitted_at;
+    if (!firstSubmit) return '-';
+    const baseTime = new Date(firstSubmit);
+    const estTime = new Date(baseTime.getTime() + cumulativeSeconds * 1000);
+    const pad = n => String(n).padStart(2, '0');
+    return `${pad(estTime.getHours())}:${pad(estTime.getMinutes())}`;
+}
+
+async function loadGlobalQueue() {
+    try {
+        const resp = await fetch('/api/worker/queue_status');
+        const data = await resp.json();
+        if (data.success) {
+            globalQueue = data.queue || [];
+        }
+    } catch (e) {
+        globalQueue = [];
+    }
+}
+
 function refreshUcStatus() {
     const container = document.getElementById('ucStatusTable');
     const cardHeader = container.closest('.status-card').querySelector('.status-card-header');
@@ -132,6 +169,7 @@ function refreshUcStatus() {
                                 <th>作品名称</th>
                                 <th>投诉单号</th>
                                 <th>状态</th>
+                                <th>预估完成时间</th>
                                 <th>操作</th>
                             </tr>
                         </thead>
@@ -180,6 +218,12 @@ function refreshUcStatus() {
                     else if (item.status === '执行中') statusClass = 'status-running';
                     else if (item.status === '失败' || item.status === '部分失败') statusClass = 'status-failed';
 
+                    // 预估完成时间（使用全局队列计算）
+                    let estimatedTimeStr = '-';
+                    if (item.status === '等待中' || item.status === '执行中') {
+                        estimatedTimeStr = getEstimatedTime(`uc_${item.submission_id}`);
+                    }
+
                     // 操作列：查看日志 + 导出单号
                     const logUrl = `/uc/task/uc_${item.submission_id}/log`;
                     let opsCell = '';
@@ -203,6 +247,7 @@ function refreshUcStatus() {
                             <td style="white-space:normal">${workNameStr}</td>
                             <td style="white-space:normal">${complaintStr}</td>
                             <td><span class="status-badge ${statusClass}">${item.status}</span></td>
+                            <td>${estimatedTimeStr}</td>
                             <td>${opsCell}</td>
                         </tr>
                     `;
@@ -234,8 +279,11 @@ function refreshUcStatus() {
 }
 
 // 页面加载时自动刷新UC状态
-document.addEventListener('DOMContentLoaded', refreshUcStatus);
-document.addEventListener('DOMContentLoaded', refreshBaiduStatus);
+document.addEventListener('DOMContentLoaded', async function() {
+    await loadGlobalQueue();
+    refreshUcStatus();
+    refreshBaiduStatus();
+});
 
 function refreshBaiduStatus() {
     const container = document.getElementById('baiduStatusTable');
@@ -258,6 +306,7 @@ function refreshBaiduStatus() {
                                 <th>作品名称</th>
                                 <th>反馈单号</th>
                                 <th>状态</th>
+                                <th>预估完成时间</th>
                                 <th>操作</th>
                             </tr>
                         </thead>
@@ -300,6 +349,12 @@ function refreshBaiduStatus() {
                         workNameStr = baiduWorkParts.join('<br>');
                     }
 
+                    // 预估完成时间（使用全局队列计算）
+                    let baiduEstTimeStr = '-';
+                    if (item.status === '等待中' || item.status === '执行中') {
+                        baiduEstTimeStr = getEstimatedTime(`baidu_${item.submission_id}`);
+                    }
+
                     let exportCell = '';
                     if (item.status === '已完成' || item.status === '部分失败') {
                         exportCell = `<a href="/api/baidu/export_excel/${item.submission_id}" class="log-link">导出Excel</a>`;
@@ -312,6 +367,7 @@ function refreshBaiduStatus() {
                             <td title="${item.work_name || ''}" style="white-space:normal">${workNameStr}</td>
                             <td>${complaintStr}</td>
                             <td><span class="status-badge ${statusClass}">${item.status}</span></td>
+                            <td>${baiduEstTimeStr}</td>
                             <td>${exportCell}</td>
                         </tr>
                     `;
