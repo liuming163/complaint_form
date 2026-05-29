@@ -1784,7 +1784,8 @@ def submit_uc_form():
         missing_fields.append('被代理人（权利人）信息')
 
     works_config = data.get('works', [])
-    if not works_config:
+    skipped_works = data.get('skipped_works', [])
+    if not works_config and not skipped_works:
         missing_fields.append('作品列表')
 
     if missing_fields:
@@ -1858,7 +1859,8 @@ def submit_uc_form():
 
         total_links = sum(w['link_count'] for w in works_payload)
         total_batches = batch_no_global
-        work_names_str = ', '.join(w['work_name'] for w in works_payload)
+        all_work_names = [w['work_name'] for w in works_payload] + [w['work_name'] for w in skipped_works]
+        work_names_str = ', '.join(all_work_names)
         rights_holder = data.get('principal', '').strip() if identity == '代理人' else data.get('agent', '').strip()
 
         # 保存 submission.json
@@ -1924,17 +1926,27 @@ def submit_uc_form():
             'description': data.get('description', '').strip(),
             'works_config': works_payload,
             'total_batches': total_batches,
+            'skipped_works': skipped_works,
         }
 
-        enqueue_uc_task(task_payload)
-        update_complaint_task(task_id, status='queued')
-        tasks[task_id]['status'] = 'queued'
+        if works_payload:
+            enqueue_uc_task(task_payload)
+            update_complaint_task(task_id, status='queued')
+            tasks[task_id]['status'] = 'queued'
+        else:
+            # 没有可投诉的作品，直接标记完成
+            skipped_numbers = [f"{sw['work_name']}：{sw.get('reason', '作品覆盖列表中未匹配到或证明文件不齐全')}" for sw in skipped_works]
+            update_complaint_task(task_id, status='completed',
+                                 complaint_numbers_json=skipped_numbers,
+                                 completed_at=datetime.now())
+            tasks[task_id]['status'] = 'completed'
 
         return jsonify({
             'success': True,
             'task_id': task_id,
             'message': '任务已创建，正在排队执行投诉',
             'total_works': len(works_payload),
+            'skipped_works': len(skipped_works),
             'total_links': total_links,
             'total_batches': total_batches,
         })
@@ -2557,12 +2569,19 @@ def run_complaint_script(task_payload):
             append_task_log(task_id, '解析到 JSON_RESULT，准备更新任务状态')
             if task_id in tasks:
                 tasks[task_id].update(task_result)
+
+            # 追加 skipped_works 信息到 complaint_numbers
+            complaint_numbers = task_result.get('complaint_numbers', [])
+            skipped_in_payload = task_payload.get('skipped_works', [])
+            for sw in skipped_in_payload:
+                complaint_numbers.append(f"{sw['work_name']}：{sw.get('reason', '作品覆盖列表中未匹配到或证明文件不齐全')}")
+
             update_fields = {
                 'status': task_result.get('status'),
                 'current_batch': task_result.get('current_batch'),
                 'completed_batches': task_result.get('completed_batches'),
                 'failed_batches': task_result.get('failed_batches'),
-                'complaint_numbers_json': task_result.get('complaint_numbers', []),
+                'complaint_numbers_json': complaint_numbers,
                 'error_message': task_result.get('error'),
             }
             if task_result.get('started_at'):

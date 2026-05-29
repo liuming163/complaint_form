@@ -242,6 +242,7 @@
 
         <div class="text-center">
             <button type="submit" id="submitBtn" class="btn btn-brown px-5">提交投诉</button>
+            <a href="/" id="goHomeBtn" class="btn btn-outline-primary px-4 ms-3" style="display:none">回到首页查看投诉状态</a>
         </div>
 
     </form>
@@ -924,6 +925,33 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
 
         if (submitBtn) submitBtn.textContent = '提交中...';
 
+        // 预检：检查是否有匹配失败的作品
+        const matchErrors = window.customTemplateMatchErrors || [];
+        let skippedWorks = [];
+        if (matchErrors.length > 0) {
+            skippedWorks = matchErrors.map(err => {
+                const match = err.match(/^「(.+?)」(.+)$/);
+                if (match) {
+                    return {work_name: match[1], reason: match[2].trim()};
+                }
+                return {work_name: err, reason: '作品覆盖列表中未匹配到或证明文件不齐全'};
+            });
+
+            const skippedNames = skippedWorks.map(w => w.work_name).join('、');
+            const confirmMsg = `以下 ${skippedWorks.length} 部作品在作品覆盖列表中未匹配到或证明文件不齐全，将跳过投诉：\n\n${skippedNames}\n\n具体信息可在首页UC状态查询里导出查看。\n\n${window.customTemplateWorks.length > 0 ? `剩余 ${window.customTemplateWorks.length} 部作品将正常投诉，是否继续？` : '没有可投诉的作品。'}`;
+
+            if (window.customTemplateWorks.length === 0) {
+                alert(confirmMsg);
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalBtnText;
+                return;
+            } else if (!confirm(confirmMsg)) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalBtnText;
+                return;
+            }
+        }
+
         // 构建 works_config（包含每个作品的 excel_rows 和证明文件路径）
         const works = window.customTemplateWorks.map(work => {
             const workExcelRows = window.customTemplateExcelRows.filter(row => row['作品名称'] === work.work_name);
@@ -947,6 +975,7 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
             content_type: document.querySelector('input[name="content_type"]:checked')?.value.trim() || '',
             description: document.querySelector('textarea[name="description"]')?.value.trim() || '',
             works: works,
+            skipped_works: skippedWorks,
         };
 
         const response = await fetch('/api/uc/submit', {
@@ -960,13 +989,21 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
             throw new Error(result.error || '提交失败');
         }
 
-        alert(`提交成功\n任务编号：${result.task_id}\n作品数：${result.total_works}\n总链接：${result.total_links}\n总批次：${result.total_batches}`);
+        let alertMsg = `提交成功\n任务编号：${result.task_id}\n投诉作品：${result.total_works} 部\n总链接：${result.total_links}\n总批次：${result.total_batches}`;
+        if (result.skipped_works > 0) {
+            alertMsg += `\n跳过作品：${result.skipped_works} 部（未匹配到）`;
+        }
+        alert(alertMsg);
         console.log('提交成功:', result);
+
+        // 显示回到首页按钮
+        document.getElementById('goHomeBtn').style.display = '';
 
         // 清空自定义模板数据
         window.customTemplateExcelRows = null;
         window.customTemplateOtherProofFiles = null;
         window.customTemplateWorks = null;
+        window.customTemplateMatchErrors = null;
         resetUcForm();
     } catch (error) {
         alert(error.message || '提交失败');
@@ -1180,15 +1217,6 @@ function handleCustomTemplateUpload(input) {
             enableLockedFields();
             applyCustomTemplateData(res);
             lockAllFieldsExceptAccount();
-
-            let msg = '自定义模版加载成功';
-            if (res.works && res.works.length > 0) {
-                msg += `\n\n共 ${res.total_works} 部作品，${res.total_links} 条链接，${res.total_batches} 个批次`;
-            }
-            if (res.match_errors && res.match_errors.length > 0) {
-                msg += `\n\n⚠️ 以下作品匹配失败（将跳过）：\n` + res.match_errors.join('\n');
-            }
-            alert(msg);
         } else {
             alert('加载失败：' + res.error);
             input.value = '';
@@ -1230,6 +1258,7 @@ function applyCustomTemplateData(data) {
     // 存储多作品配置
     window.customTemplateWorks = works;
     window.customTemplateExcelRows = excelRows;
+    window.customTemplateMatchErrors = data.match_errors || [];
 
     if (!validateCurrentPrincipalAgainstTemplate(true)) {
         return;
