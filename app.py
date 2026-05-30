@@ -207,76 +207,19 @@ def cleanup_old_task_logs(max_age_days=5):
 
 
 def upsert_task_execution_log(task_id, submission_id, status, log_text):
-    if not log_text:
-        return
-    with get_db_session() as session:
-        existing = session.execute(text("""
-            SELECT log_id FROM task_execution_logs
-            WHERE task_id = :task_id
-            ORDER BY created_at DESC
-            LIMIT 1
-        """), {'task_id': task_id}).mappings().first()
-        if existing:
-            session.execute(text("""
-                UPDATE task_execution_logs
-                SET submission_id = :submission_id,
-                    platform_code = :platform_code,
-                    status = :status,
-                    log_text = :log_text,
-                    updated_at = :updated_at
-                WHERE log_id = :log_id
-            """), {
-                'submission_id': submission_id,
-                'platform_code': 'uc',
-                'status': status,
-                'log_text': log_text,
-                'updated_at': datetime.now(),
-                'log_id': existing['log_id'],
-            })
-        else:
-            now = datetime.now()
-            session.execute(text("""
-                INSERT INTO task_execution_logs (
-                    log_id, task_id, submission_id, platform_code,
-                    status, log_text, created_at, updated_at
-                ) VALUES (
-                    :log_id, :task_id, :submission_id, :platform_code,
-                    :status, :log_text, :created_at, :updated_at
-                )
-            """), {
-                'log_id': uuid4().hex[:12],
-                'task_id': task_id,
-                'submission_id': submission_id,
-                'platform_code': 'uc',
-                'status': status,
-                'log_text': log_text,
-                'created_at': now,
-                'updated_at': now,
-            })
-        session.commit()
+    pass
 
 
 def sync_task_log_to_db(task_id, submission_id, status):
-    log_text = read_task_log_file(task_id)
-    upsert_task_execution_log(task_id, submission_id, status, log_text)
+    pass
 
 
 def get_task_execution_log(task_id):
-    with get_db_session() as session:
-        row = session.execute(text("""
-            SELECT task_id, submission_id, status, log_text, created_at, updated_at
-            FROM task_execution_logs
-            WHERE task_id = :task_id
-            ORDER BY created_at DESC
-            LIMIT 1
-        """), {'task_id': task_id}).mappings().first()
-        return row
+    return None
 
 
 def has_available_task_log(task_id):
-    if read_task_log_file(task_id):
-        return True
-    return bool(get_task_execution_log(task_id))
+    return bool(read_task_log_file(task_id))
 
 
 def get_redis_client():
@@ -358,15 +301,37 @@ def works():
 
 
 # 平台映射
-PLATFORM_MAP = {
-    'uc': {'platform_name': 'UC', 'pingtai': 'UC'},
-    'quark': {'platform_name': '夸克', 'pingtai': '夸克'},
-    'baidu': {'platform_name': '百度', 'pingtai': '百度'},
-}
-
-
 def get_db_session():
     return SessionLocal()
+
+
+def _load_platform_map():
+    try:
+        with get_db_session() as session:
+            rows = session.execute(text(
+                "SELECT platform_code, platform_name FROM platforms"
+            )).fetchall()
+        return {row[0]: {'platform_name': row[1], 'pingtai': row[1]} for row in rows}
+    except Exception:
+        return {
+            'uc': {'platform_name': 'UC', 'pingtai': 'UC'},
+            'quark': {'platform_name': '夸克', 'pingtai': '夸克'},
+            'baidu': {'platform_name': '百度', 'pingtai': '百度'},
+        }
+
+
+PLATFORM_MAP = _load_platform_map()
+
+
+def get_platforms_list():
+    with get_db_session() as session:
+        rows = session.execute(text("""
+            SELECT platform_code, platform_name, status
+            FROM platforms
+            WHERE status = 'active'
+            ORDER BY sort_order ASC
+        """)).mappings().all()
+    return [dict(row) for row in rows]
 
 
 def normalize_datetime(value):
@@ -428,106 +393,18 @@ def build_file_asset_row(business_type, business_id, category, local_path, saved
 
 
 def insert_file_asset(asset_row):
-    with get_db_session() as session:
-        exists = session.execute(text("""
-            SELECT 1 FROM file_assets
-            WHERE business_type = :business_type
-              AND business_id = :business_id
-              AND category = :category
-              AND saved_name = :saved_name
-            LIMIT 1
-        """), {
-            'business_type': asset_row['business_type'],
-            'business_id': asset_row['business_id'],
-            'category': asset_row['category'],
-            'saved_name': asset_row['saved_name'],
-        }).first()
-        if exists:
-            return False
-        session.execute(text("""
-            INSERT INTO file_assets (
-                asset_id, business_type, business_id, category, storage_type,
-                bucket_name, object_key, local_path, original_name, saved_name,
-                mime_type, file_size, file_hash, created_at
-            ) VALUES (
-                :asset_id, :business_type, :business_id, :category, :storage_type,
-                :bucket_name, :object_key, :local_path, :original_name, :saved_name,
-                :mime_type, :file_size, :file_hash, :created_at
-            )
-        """), asset_row)
-        session.commit()
-        return True
+    pass
 
 
-def register_submission_files(submission_id, submission_dir, saved_files, batches, original_names=None):
-    original_names = original_names or {}
 
-    if saved_files.get('excel_file'):
-        insert_file_asset(build_file_asset_row(
-            'submission', submission_id, 'excel_source',
-            os.path.join(submission_dir, saved_files['excel_file']),
-            saved_files['excel_file'],
-            original_names.get('excel_file')
-        ))
+def register_submission_files(*args, **kwargs):
+    pass
 
-    if saved_files.get('proof_file'):
-        insert_file_asset(build_file_asset_row(
-            'submission', submission_id, 'proof_file',
-            os.path.join(submission_dir, saved_files['proof_file']),
-            saved_files['proof_file'],
-            original_names.get('proof_file')
-        ))
-
-    other_original_names = original_names.get('other_proof_files', [])
-    for index, saved_name in enumerate(saved_files.get('other_proof_files', [])):
-        insert_file_asset(build_file_asset_row(
-            'submission', submission_id, 'other_proof_file',
-            os.path.join(submission_dir, saved_name),
-            saved_name,
-            other_original_names[index] if index < len(other_original_names) else saved_name
-        ))
-
-    for batch in batches:
-        insert_file_asset(build_file_asset_row(
-            'batch', submission_id, 'excel_batch',
-            os.path.join(submission_dir, 'batches', batch['filename']),
-            batch['filename'],
-            batch['filename']
-        ))
 
 
 def migrate_submission_file_assets_if_needed():
-    submissions_root = Path(app.config['UC_SUBMISSION_FOLDER'])
-    if not submissions_root.exists():
-        return
+    pass
 
-    for item in sorted(submissions_root.iterdir()):
-        if not item.is_dir() or item.name.startswith('.'):
-            continue
-        submission_file = item / 'submission.json'
-        if not submission_file.exists():
-            continue
-        with submission_file.open('r', encoding='utf-8') as f:
-            payload = json.load(f)
-
-        submission_id = payload.get('submission_id', item.name)
-        files = payload.get('files', {})
-        saved_files = {
-            'excel_file': files.get('excel_file'),
-            'proof_file': files.get('proof_file'),
-            'other_proof_files': files.get('other_proof_files', []),
-        }
-        register_submission_files(
-            submission_id,
-            str(item),
-            saved_files,
-            payload.get('batches', []),
-            {
-                'excel_file': files.get('excel_file'),
-                'proof_file': files.get('proof_file'),
-                'other_proof_files': files.get('other_proof_files', []),
-            }
-        )
 
 
 def load_accounts():
@@ -545,26 +422,25 @@ def load_accounts():
 def load_principals_map():
     with get_db_session() as session:
         rows = session.execute(text("""
-            SELECT g.group_id, g.platform_code, g.platform_name, g.account_user,
-                   i.principal_name, g.created_at, g.updated_at
-            FROM principal_groups g
-            LEFT JOIN principal_items i ON i.group_id = g.group_id
-            ORDER BY g.id ASC, i.id ASC
+            SELECT id, platform_code, used_company, account_user,
+                   principal_name, created_at, updated_at
+            FROM principals
+            ORDER BY id ASC
         """)).mappings().all()
 
     principals_map = {}
     for row in rows:
         key = f"{row.platform_code}:{row.account_user}"
         entry = principals_map.setdefault(key, {
-            'group_id': row.group_id,
+            'group_id': str(row.id),
             'platform_code': row.platform_code,
-            'platform_name': row.platform_name,
+            'platform_name': PLATFORM_MAP.get(row.platform_code, {}).get('platform_name', row.platform_code),
             'account_user': row.account_user,
             'principals': [],
             'created_at': normalize_datetime(row.created_at),
             'updated_at': normalize_datetime(row.updated_at),
         })
-        if row.principal_name:
+        if row.principal_name and row.principal_name not in entry['principals']:
             entry['principals'].append(row.principal_name)
     return principals_map
 
@@ -577,42 +453,31 @@ def get_principal_document_record(platform_code, used_company, principal_name):
     normalized_company = normalize_company_name(used_company)
     normalized_principal = normalize_company_name(principal_name)
     with get_db_session() as session:
-        business_license = session.execute(text("""
-            SELECT business_license_filename
-            FROM principal_documents
+        row = session.execute(text("""
+            SELECT business_license_filename, authorization_filename, authorization_expires_on
+            FROM principals
             WHERE principal_name = :principal_name
-              AND business_license_filename IS NOT NULL
-              AND business_license_filename <> ''
-            ORDER BY updated_at DESC, created_at DESC
-            LIMIT 1
-        """), {'principal_name': normalized_principal}).mappings().first()
-        authorization = session.execute(text("""
-            SELECT authorization_filename, authorization_expires_on
-            FROM principal_documents
-            WHERE platform_code = :platform_code
+              AND platform_code = :platform_code
               AND used_company = :used_company
-              AND principal_name = :principal_name
-              AND authorization_filename IS NOT NULL
-              AND authorization_filename <> ''
-            ORDER BY updated_at DESC, created_at DESC
+            ORDER BY updated_at DESC
             LIMIT 1
         """), {
+            'principal_name': normalized_principal,
             'platform_code': platform_code,
             'used_company': normalized_company,
-            'principal_name': normalized_principal,
         }).mappings().first()
 
-    if not business_license and not authorization:
+    if not row:
         return None
 
     data = {
         'principal_name': normalized_principal,
         'used_company': normalized_company,
-        'business_license_filename': business_license.get('business_license_filename') if business_license else None,
-        'authorization_filename': authorization.get('authorization_filename') if authorization else None,
-        'authorization_expires_on': normalize_datetime(authorization.get('authorization_expires_on')) if authorization else None,
-        'business_license_locked': bool(business_license),
-        'authorization_locked': bool(authorization),
+        'business_license_filename': row.get('business_license_filename') or None,
+        'authorization_filename': row.get('authorization_filename') or None,
+        'authorization_expires_on': normalize_datetime(row.get('authorization_expires_on')) if row.get('authorization_expires_on') else None,
+        'business_license_locked': bool(row.get('business_license_filename')),
+        'authorization_locked': bool(row.get('authorization_filename')),
     }
     return data
 
@@ -654,48 +519,43 @@ def upsert_principal_documents(platform_code, used_company, account_user, princi
     normalized_principal = normalize_company_name(principal_name)
     with get_db_session() as session:
         existing = session.execute(text("""
-            SELECT doc_id
-            FROM principal_documents
+            SELECT id
+            FROM principals
             WHERE platform_code = :platform_code
-              AND used_company = :used_company
+              AND account_user = :account_user
               AND principal_name = :principal_name
             LIMIT 1
         """), {
             'platform_code': platform_code,
-            'used_company': normalized_company,
+            'account_user': account_user,
             'principal_name': normalized_principal,
         }).mappings().first()
         if existing:
             session.execute(text("""
-                UPDATE principal_documents
-                SET account_user = :account_user,
+                UPDATE principals
+                SET used_company = :used_company,
                     business_license_filename = :business_license_filename,
                     authorization_filename = :authorization_filename,
                     authorization_expires_on = :authorization_expires_on,
-                    updated_at = :updated_at
-                WHERE doc_id = :doc_id
+                    updated_at = NOW()
+                WHERE id = :id
             """), {
-                'account_user': account_user,
+                'used_company': normalized_company,
                 'business_license_filename': business_license_filename,
                 'authorization_filename': authorization_filename,
                 'authorization_expires_on': authorization_expires_on,
-                'updated_at': datetime.now(),
-                'doc_id': existing['doc_id'],
+                'id': existing['id'],
             })
         else:
-            now = datetime.now()
             session.execute(text("""
-                INSERT INTO principal_documents (
-                    doc_id, platform_code, used_company, account_user, principal_name,
-                    business_license_filename, authorization_filename, authorization_expires_on,
-                    created_at, updated_at
+                INSERT INTO principals (
+                    platform_code, used_company, account_user, principal_name,
+                    business_license_filename, authorization_filename, authorization_expires_on
                 ) VALUES (
-                    :doc_id, :platform_code, :used_company, :account_user, :principal_name,
-                    :business_license_filename, :authorization_filename, :authorization_expires_on,
-                    :created_at, :updated_at
+                    :platform_code, :used_company, :account_user, :principal_name,
+                    :business_license_filename, :authorization_filename, :authorization_expires_on
                 )
             """), {
-                'doc_id': uuid4().hex[:12],
                 'platform_code': platform_code,
                 'used_company': normalized_company,
                 'account_user': account_user,
@@ -703,8 +563,6 @@ def upsert_principal_documents(platform_code, used_company, account_user, princi
                 'business_license_filename': business_license_filename,
                 'authorization_filename': authorization_filename,
                 'authorization_expires_on': authorization_expires_on,
-                'created_at': now,
-                'updated_at': now,
             })
         session.commit()
 
@@ -715,7 +573,7 @@ def get_principal_options_by_used_company(used_company):
     with get_db_session() as session:
         rows = session.execute(text("""
             SELECT DISTINCT principal_name
-            FROM principal_documents
+            FROM principals
             WHERE used_company = :used_company
               AND principal_name IS NOT NULL
               AND principal_name <> ''
@@ -768,13 +626,21 @@ def migrate_works_principal_name_if_needed():
 
 def get_work_content_types():
     with get_db_session() as session:
-        rows = session.execute(text("SELECT id, name FROM work_content_types ORDER BY sort ASC, id ASC")).mappings().all()
+        rows = session.execute(text("""
+            SELECT dict_code AS id, dict_name AS name
+            FROM dictionaries WHERE dict_type = 'content_type'
+            ORDER BY sort_order ASC, id ASC
+        """)).mappings().all()
         return [dict(row) for row in rows]
 
 
 def get_work_complaint_types():
     with get_db_session() as session:
-        rows = session.execute(text("SELECT id, name FROM work_complaint_types ORDER BY sort ASC, id ASC")).mappings().all()
+        rows = session.execute(text("""
+            SELECT dict_code AS id, dict_name AS name
+            FROM dictionaries WHERE dict_type = 'complaint_type'
+            ORDER BY sort_order ASC, id ASC
+        """)).mappings().all()
         return [dict(row) for row in rows]
 
 
@@ -815,8 +681,8 @@ def create_work_with_assets(work_name, used_company, principal_name, content_typ
         if exists:
             return None, '该作品在当前代理主体、被代理人、所属类型和投诉类型下已存在'
 
-        content_type = session.execute(text("SELECT name FROM work_content_types WHERE id = :id LIMIT 1"), {'id': content_type_id}).mappings().first()
-        complaint_type = session.execute(text("SELECT name FROM work_complaint_types WHERE id = :id LIMIT 1"), {'id': complaint_type_id}).mappings().first()
+        content_type = session.execute(text("SELECT dict_name AS name FROM dictionaries WHERE dict_type = 'content_type' AND dict_code = :id LIMIT 1"), {'id': str(content_type_id)}).mappings().first()
+        complaint_type = session.execute(text("SELECT dict_name AS name FROM dictionaries WHERE dict_type = 'complaint_type' AND dict_code = :id LIMIT 1"), {'id': str(complaint_type_id)}).mappings().first()
         if not content_type or not complaint_type:
             return None, '内容类型或投诉类型无效'
 
@@ -854,27 +720,16 @@ def create_work_with_assets(work_name, used_company, principal_name, content_typ
         })
         work_id = session.execute(text('SELECT LAST_INSERT_ID()')).scalar_one()
 
+        # 更新证明文件路径到 works 表
+        other_proof_list = [saved_name for saved_name, saved_path in other_saved]
         session.execute(text("""
-            INSERT INTO work_assets (work_id, asset_type, file_name, local_path, created_at)
-            VALUES (:work_id, :asset_type, :file_name, :local_path, :created_at)
+            UPDATE works SET proof_file = :proof_file, other_proof_files = :other_proof_files
+            WHERE id = :work_id
         """), {
+            'proof_file': proof_filename,
+            'other_proof_files': json.dumps(other_proof_list, ensure_ascii=False) if other_proof_list else None,
             'work_id': work_id,
-            'asset_type': 'proof_file',
-            'file_name': proof_filename,
-            'local_path': proof_path,
-            'created_at': now,
         })
-        for saved_name, saved_path in other_saved:
-            session.execute(text("""
-                INSERT INTO work_assets (work_id, asset_type, file_name, local_path, created_at)
-                VALUES (:work_id, :asset_type, :file_name, :local_path, :created_at)
-            """), {
-                'work_id': work_id,
-                'asset_type': 'other_proof_file',
-                'file_name': saved_name,
-                'local_path': saved_path,
-                'created_at': now,
-            })
         session.commit()
         return {
             'work_id': work_id,
@@ -921,110 +776,73 @@ def map_task_status_label(status):
     return status or '未知'
 
 
-def insert_complaint_submission(payload, rights_holder):
+def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holder):
     submitted_at = datetime.fromisoformat(payload['submitted_at'])
-    work_name = payload['form'].get('作品名称') or None
+    work_name = payload['form'].get('作品名称') or ''
     with get_db_session() as session:
         session.execute(text("""
-            INSERT INTO complaint_submissions (
-                submission_id, platform_code, collect_account, cookie_snapshot,
-                identity_type, agent_name, principal_name, rights_holder_name,
+            INSERT INTO complaints (
+                complaint_id, task_id, platform_code, collect_account, cookie_snapshot,
+                identity_type, agent_name, principal_name,
                 complaint_category, complaint_type, module_name, content_type,
-                description_text, work_name, excel_rows, batch_size, batch_count,
-                status, submitted_at, created_at, updated_at
+                description_text, work_name, total_links, batch_size, batch_count,
+                status, submitted_at
             ) VALUES (
-                :submission_id, :platform_code, :collect_account, :cookie_snapshot,
-                :identity_type, :agent_name, :principal_name, :rights_holder_name,
+                :complaint_id, :task_id, :platform_code, :collect_account, :cookie_snapshot,
+                :identity_type, :agent_name, :principal_name,
                 :complaint_category, :complaint_type, :module_name, :content_type,
-                :description_text, :work_name, :excel_rows, :batch_size, :batch_count,
-                :status, :submitted_at, :created_at, :updated_at
+                :description_text, :work_name, :total_links, :batch_size, :batch_count,
+                :status, :submitted_at
             )
         """), {
-            'submission_id': payload['submission_id'],
-            'platform_code': 'uc',
+            'complaint_id': complaint_id,
+            'task_id': task_id,
+            'platform_code': platform_code,
             'collect_account': payload['form'].get('collect_account', ''),
-            'cookie_snapshot': payload['form'].get('cookie', ''),
+            'cookie_snapshot': (payload['form'].get('cookie', '') or '')[:100] + '...',
             'identity_type': payload['form'].get('identity', ''),
             'agent_name': payload['form'].get('agent', ''),
-            'principal_name': payload['form'].get('principal') or None,
-            'rights_holder_name': rights_holder,
+            'principal_name': payload['form'].get('principal') or rights_holder or '',
             'complaint_category': payload['form'].get('complaint_category', ''),
             'complaint_type': payload['form'].get('complaint_type', ''),
             'module_name': payload['form'].get('module', ''),
             'content_type': payload['form'].get('content_type', ''),
             'description_text': payload['form'].get('description', ''),
             'work_name': work_name,
-            'excel_rows': payload.get('excel_rows', 0),
-            'batch_size': payload.get('batch_size', 0),
+            'total_links': payload.get('excel_rows', 0),
+            'batch_size': payload.get('batch_size', 200),
             'batch_count': payload.get('batch_count', 0),
-            'status': 'pending',
+            'status': 'queued',
             'submitted_at': submitted_at,
-            'created_at': submitted_at,
-            'updated_at': submitted_at,
         })
         session.commit()
 
 
 def insert_complaint_task(task_id, submission_id, submitted_at, batch_count, excel_rows):
-    dt = datetime.fromisoformat(submitted_at)
-    with get_db_session() as session:
-        session.execute(text("""
-            INSERT INTO complaint_tasks (
-                task_id, submission_id, queue_name, status, current_batch, batch_count,
-                completed_batches, failed_batches, complaint_numbers_json, error_message,
-                submitted_at, queued_at, created_at, updated_at
-            ) VALUES (
-                :task_id, :submission_id, :queue_name, :status, :current_batch, :batch_count,
-                :completed_batches, :failed_batches, :complaint_numbers_json, :error_message,
-                :submitted_at, :queued_at, :created_at, :updated_at
-            )
-        """), {
-            'task_id': task_id,
-            'submission_id': submission_id,
-            'queue_name': 'uc_complaint',
-            'status': 'pending',
-            'current_batch': 0,
-            'batch_count': batch_count,
-            'completed_batches': 0,
-            'failed_batches': 0,
-            'complaint_numbers_json': serialize_complaint_numbers([]),
-            'error_message': None,
-            'submitted_at': dt,
-            'queued_at': dt,
-            'created_at': dt,
-            'updated_at': dt,
-        })
-        session.commit()
+    """兼容旧调用，内部不再使用"""
+    pass
 
 
-def insert_complaint_batches(submission_id, batches):
+def insert_complaint_batches(complaint_id, batches):
     with get_db_session() as session:
         for batch in batches:
-            now = datetime.now()
             session.execute(text("""
                 INSERT INTO complaint_batches (
-                    batch_id, submission_id, batch_no, source_asset_id, batch_filename,
-                    start_row, end_row, row_count, status, complaint_number,
-                    error_message, created_at, updated_at
+                    batch_id, complaint_id, batch_no, work_name, batch_filename,
+                    start_row, end_row, row_count, status
                 ) VALUES (
-                    :batch_id, :submission_id, :batch_no, :source_asset_id, :batch_filename,
-                    :start_row, :end_row, :row_count, :status, :complaint_number,
-                    :error_message, :created_at, :updated_at
+                    :batch_id, :complaint_id, :batch_no, :work_name, :batch_filename,
+                    :start_row, :end_row, :row_count, 'pending'
                 )
             """), {
                 'batch_id': uuid4().hex[:12],
-                'submission_id': submission_id,
+                'complaint_id': complaint_id,
                 'batch_no': batch['batch_no'],
-                'source_asset_id': None,
-                'batch_filename': batch.get('filename'),
+                'work_name': batch.get('work_name', ''),
+                'batch_filename': batch.get('filename', ''),
                 'start_row': batch.get('start_row', 0),
                 'end_row': batch.get('end_row', 0),
                 'row_count': batch.get('rows', 0),
-                'status': 'pending',
-                'complaint_number': None,
-                'error_message': None,
-                'created_at': now,
-                'updated_at': now,
             })
         session.commit()
 
@@ -1046,7 +864,7 @@ def update_complaint_task(task_id, **fields):
     set_clause = ', '.join(f"{key} = :{key}" for key in updates.keys())
     updates['task_id'] = task_id
     with get_db_session() as session:
-        session.execute(text(f"UPDATE complaint_tasks SET {set_clause} WHERE task_id = :task_id"), updates)
+        session.execute(text(f"UPDATE complaints SET {set_clause} WHERE task_id = :task_id"), updates)
         session.commit()
 
 
@@ -1065,7 +883,7 @@ def update_complaint_batch(submission_id, batch_no, **fields):
         session.execute(text(f"""
             UPDATE complaint_batches
             SET {set_clause}
-            WHERE submission_id = :submission_id AND batch_no = :batch_no
+            WHERE complaint_id = :complaint_id AND batch_no = :batch_no
         """), updates)
         session.commit()
 
@@ -1076,7 +894,7 @@ def get_complaint_task(task_id):
             SELECT task_id, submission_id, status, current_batch, batch_count,
                    completed_batches, failed_batches, complaint_numbers_json,
                    error_message, submitted_at, queued_at, started_at, completed_at
-            FROM complaint_tasks
+            FROM complaints
             WHERE task_id = :task_id
             LIMIT 1
         """), {'task_id': task_id}).mappings().first()
@@ -1086,7 +904,7 @@ def get_complaint_task(task_id):
             SELECT batch_no, row_count, start_row, end_row, batch_filename,
                    status, complaint_number, error_message
             FROM complaint_batches
-            WHERE submission_id = :submission_id
+            WHERE complaint_id = :complaint_id
             ORDER BY batch_no ASC
         """), {'submission_id': task['submission_id']}).mappings().all()
 
@@ -1127,23 +945,22 @@ def get_complaint_task(task_id):
 def get_submission_status_list():
     with get_db_session() as session:
         rows = session.execute(text("""
-            SELECT s.submission_id, s.submitted_at, s.collect_account, s.work_name,
-                   s.excel_rows, s.batch_count, t.status, t.complaint_numbers_json
-            FROM complaint_submissions s
-            LEFT JOIN complaint_tasks t ON t.submission_id = s.submission_id
-            WHERE s.platform_code = 'uc'
-            ORDER BY s.submitted_at DESC
+            SELECT complaint_id, submitted_at, collect_account, work_name,
+                   total_links, batch_count, status, complaint_numbers_json
+            FROM complaints
+            WHERE platform_code = 'uc'
+            ORDER BY submitted_at DESC
         """)).mappings().all()
 
     items = []
     for row in rows:
-        task_id = f"uc_{row['submission_id']}"
+        task_id = f"uc_{row['complaint_id']}"
         items.append({
-            'submission_id': row['submission_id'],
+            'submission_id': row['complaint_id'],
             'submitted_at': normalize_datetime(row.get('submitted_at')),
             'collect_account': row.get('collect_account') or '',
             'work_name': row.get('work_name') or '',
-            'excel_rows': row.get('excel_rows') or 0,
+            'excel_rows': row.get('total_links') or 0,
             'batch_count': row.get('batch_count') or 0,
             'status': map_task_status_label(row.get('status')),
             'complaint_numbers': deserialize_complaint_numbers(row.get('complaint_numbers_json')),
@@ -1153,124 +970,10 @@ def get_submission_status_list():
 
 
 def migrate_submission_and_task_data_if_needed():
-    submissions_root = Path(app.config['UC_SUBMISSION_FOLDER'])
-    results_root = Path(app.config['TASK_RESULT_FOLDER'])
-    if not submissions_root.exists():
-        return
-
-    with get_db_session() as session:
-        existing_submission_ids = {
-            row[0] for row in session.execute(text("SELECT submission_id FROM complaint_submissions")).all()
-        }
-        existing_task_ids = {
-            row[0] for row in session.execute(text("SELECT task_id FROM complaint_tasks")).all()
-        }
-        existing_batch_keys = {
-            (row[0], row[1]) for row in session.execute(text("SELECT submission_id, batch_no FROM complaint_batches")).all()
-        }
-
-    for item in sorted(submissions_root.iterdir()):
-        if not item.is_dir() or item.name.startswith('.'):
-            continue
-        submission_file = item / 'submission.json'
-        if not submission_file.exists():
-            continue
-        with submission_file.open('r', encoding='utf-8') as f:
-            payload = json.load(f)
-
-        submission_id = payload.get('submission_id', item.name)
-        task_id = f'uc_{submission_id}'
-        rights_holder = payload.get('form', {}).get('principal') or payload.get('form', {}).get('agent') or ''
-
-        if submission_id not in existing_submission_ids:
-            insert_complaint_submission(payload, rights_holder)
-            existing_submission_ids.add(submission_id)
-
-        if task_id not in existing_task_ids:
-            insert_complaint_task(task_id, submission_id, payload.get('submitted_at', datetime.now().isoformat()), payload.get('batch_count', 0), payload.get('excel_rows', 0))
-            existing_task_ids.add(task_id)
-
-        pending_batch_inserts = []
-        for batch in payload.get('batches', []):
-            key = (submission_id, batch['batch_no'])
-            if key in existing_batch_keys:
-                continue
-            pending_batch_inserts.append(batch)
-            existing_batch_keys.add(key)
-        if pending_batch_inserts:
-            insert_complaint_batches(submission_id, pending_batch_inserts)
-
-        result_file = results_root / f'{task_id}.json'
-        if result_file.exists():
-            with result_file.open('r', encoding='utf-8') as f:
-                task_result = json.load(f)
-            update_fields = {
-                'status': task_result.get('status'),
-                'current_batch': task_result.get('current_batch'),
-                'completed_batches': task_result.get('completed_batches'),
-                'failed_batches': task_result.get('failed_batches'),
-                'complaint_numbers_json': task_result.get('complaint_numbers', []),
-                'error_message': task_result.get('error'),
-            }
-            if task_result.get('started_at'):
-                update_fields['started_at'] = datetime.fromisoformat(task_result['started_at'])
-            if task_result.get('completed_at'):
-                update_fields['completed_at'] = datetime.fromisoformat(task_result['completed_at'])
-            update_complaint_task(task_id, **update_fields)
-            for batch in task_result.get('batches', []):
-                update_complaint_batch(
-                    submission_id,
-                    batch['batch_no'],
-                    status=batch.get('status'),
-                    complaint_number=batch.get('complaint_number'),
-                    error_message=batch.get('error')
-                )
-
-    with get_db_session() as session:
-        session.execute(text("""
-            UPDATE complaint_submissions s
-            JOIN complaint_tasks t ON t.submission_id = s.submission_id
-            SET s.status = t.status, s.updated_at = NOW()
-            WHERE s.platform_code = 'uc'
-        """))
-        session.commit()
+    pass
 
 
-migrate_works_principal_name_if_needed()
-migrate_submission_and_task_data_if_needed()
-migrate_submission_file_assets_if_needed()
 cleanup_old_task_logs()
-
-
-def ensure_baidu_submission_works_table():
-    with get_db_session() as session:
-        session.execute(text("""
-            CREATE TABLE IF NOT EXISTS baidu_submission_works (
-                id INT AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
-                submission_id VARCHAR(100) NOT NULL COMMENT '关联 complaint_submissions.submission_id',
-                work_index INT NOT NULL DEFAULT 0 COMMENT '作品在本次提交中的序号(从0开始)',
-                work_name VARCHAR(500) NOT NULL COMMENT '作品名称(与百度权属登记中的名称一致)',
-                cp_id VARCHAR(100) DEFAULT '' COMMENT '百度权属ID(执行时从API获取)',
-                owner_type INT DEFAULT 2 COMMENT '权属身份类型: 1=权利人 2=代理人',
-                works_category INT DEFAULT 0 COMMENT '作品类型编号(百度定义: 1=文字 2=图片 5=视听作品(影视) 8=视听作品(其他) 等)',
-                works_category_name VARCHAR(100) DEFAULT '' COMMENT '作品类型中文名称',
-                contact_name VARCHAR(200) DEFAULT '' COMMENT '权利人名称(被授权方公司名)',
-                description TEXT COMMENT '投诉问题描述(每个作品可不同)',
-                actual_name VARCHAR(500) DEFAULT '' COMMENT '原版链接标题',
-                actual_url VARCHAR(1000) DEFAULT '' COMMENT '原版链接地址',
-                link_count INT DEFAULT 0 COMMENT '该作品的侵权链接总数',
-                batch_count INT DEFAULT 0 COMMENT '该作品按200条分片后的批次数',
-                feedback_numbers JSON COMMENT '该作品对应的反馈单号列表(JSON数组)',
-                status VARCHAR(50) DEFAULT 'pending' COMMENT '状态: pending/completed/failed',
-                error_message TEXT COMMENT '失败时的错误信息',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-                INDEX idx_submission_id (submission_id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='百度投诉-作品维度明细表(每次提交可含多个作品)'
-        """))
-        session.commit()
-
-
-ensure_baidu_submission_works_table()
 
 
 def _schedule_daily_log_cleanup():
@@ -1294,6 +997,11 @@ def accounts():
 @app.route('/principals')
 def principals():
     return render_template('principals.html')
+
+
+@app.route('/api/platforms')
+def api_platforms():
+    return jsonify({'success': True, 'data': get_platforms_list()})
 
 
 @app.route('/api/accounts/list')
@@ -1539,66 +1247,32 @@ def principals_add():
             if filename_error:
                 return jsonify({'success': False, 'error': filename_error}), 400
 
-        group = session.execute(text("""
-            SELECT group_id, platform_name
-            FROM principal_groups
-            WHERE platform_code = :platform_code AND account_user = :account_user
+        # 检查是否已存在
+        exists = session.execute(text("""
+            SELECT 1 FROM principals
+            WHERE platform_code = :platform_code
+              AND account_user = :account_user
+              AND principal_name = :principal_name
             LIMIT 1
         """), {
             'platform_code': platform_code,
             'account_user': account_user,
-        }).mappings().first()
-
-        if not group:
-            group_id = uuid4().hex[:12]
-            now = datetime.now()
-            session.execute(text("""
-                INSERT INTO principal_groups (
-                    group_id, platform_code, platform_name, account_user, created_at, updated_at
-                ) VALUES (
-                    :group_id, :platform_code, :platform_name, :account_user, :created_at, :updated_at
-                )
-            """), {
-                'group_id': group_id,
-                'platform_code': platform_code,
-                'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
-                'account_user': account_user,
-                'created_at': now,
-                'updated_at': now,
-            })
-        else:
-            group_id = group['group_id']
-
-        exists = session.execute(text("""
-            SELECT 1 FROM principal_items
-            WHERE group_id = :group_id AND principal_name = :principal_name
-            LIMIT 1
-        """), {
-            'group_id': group_id,
             'principal_name': normalized_principal_name,
         }).first()
         if exists:
             return jsonify({'success': False, 'error': '该被代理人信息已存在'}), 400
 
         session.execute(text("""
-            INSERT INTO principal_items (
-                item_id, group_id, principal_name, created_at
+            INSERT INTO principals (
+                platform_code, used_company, account_user, principal_name
             ) VALUES (
-                :item_id, :group_id, :principal_name, :created_at
+                :platform_code, :used_company, :account_user, :principal_name
             )
         """), {
-            'item_id': uuid4().hex[:12],
-            'group_id': group_id,
+            'platform_code': platform_code,
+            'used_company': normalized_used_company,
+            'account_user': account_user,
             'principal_name': normalized_principal_name,
-            'created_at': datetime.now(),
-        })
-        session.execute(text("""
-            UPDATE principal_groups
-            SET updated_at = :updated_at
-            WHERE group_id = :group_id
-        """), {
-            'updated_at': datetime.now(),
-            'group_id': group_id,
         })
         session.commit()
 
@@ -1656,22 +1330,23 @@ def works_complaint_types():
 def works_list():
     with get_db_session() as session:
         rows = session.execute(text("""
-            SELECT w.id, w.work_name, w.used_company, w.principal_name, ct.name AS content_type, cpt.name AS complaint_type
+            SELECT w.id, w.work_name, w.used_company, w.principal_name,
+                   w.proof_file, w.other_proof_files,
+                   ct.dict_name AS content_type, cpt.dict_name AS complaint_type
             FROM works w
-            JOIN work_content_types ct ON ct.id = w.content_type_id
-            JOIN work_complaint_types cpt ON cpt.id = w.complaint_type_id
+            JOIN dictionaries ct ON ct.dict_type = 'content_type' AND ct.dict_code = CAST(w.content_type_id AS CHAR)
+            JOIN dictionaries cpt ON cpt.dict_type = 'complaint_type' AND cpt.dict_code = CAST(w.complaint_type_id AS CHAR)
             ORDER BY w.updated_at DESC, w.id DESC
         """)).mappings().all()
         results = []
         for row in rows:
-            assets = session.execute(text("""
-                SELECT asset_type, file_name
-                FROM work_assets
-                WHERE work_id = :work_id
-                ORDER BY id ASC
-            """), {'work_id': row['id']}).mappings().all()
-            proof_file = next((a['file_name'] for a in assets if a['asset_type'] == 'proof_file'), None)
-            other_files = [a['file_name'] for a in assets if a['asset_type'] == 'other_proof_file']
+            proof_file = row.get('proof_file') or None
+            other_files = []
+            if row.get('other_proof_files'):
+                try:
+                    other_files = json.loads(row['other_proof_files']) if isinstance(row['other_proof_files'], str) else row['other_proof_files']
+                except:
+                    pass
             results.append({
                 'id': row['id'],
                 'work_name': row['work_name'],
@@ -2346,10 +2021,10 @@ def upload_custom_template():
             # 查询 works 表
             with get_db_session() as session:
                 work_rows = session.execute(text("""
-                    SELECT w.id, w.work_name, w.used_company, w.principal_name, ct.name AS content_type, cpt.name AS complaint_type
+                    SELECT w.id, w.work_name, w.used_company, w.principal_name, ct.dict_name AS content_type, cpt.dict_name AS complaint_type
                     FROM works w
-                    JOIN work_content_types ct ON ct.id = w.content_type_id
-                    JOIN work_complaint_types cpt ON cpt.id = w.complaint_type_id
+                    JOIN dictionaries ct ON ct.dict_type = 'content_type' AND ct.dict_code = CAST(w.content_type_id AS CHAR)
+                    JOIN dictionaries cpt ON cpt.dict_type = 'complaint_type' AND cpt.dict_code = CAST(w.complaint_type_id AS CHAR)
                     WHERE w.work_name = :work_name
                 """), {'work_name': work_name}).mappings().all()
 
@@ -2765,11 +2440,10 @@ def worker_queue_status():
     session = get_db_session()
     try:
         rows = session.execute(text("""
-            SELECT t.task_id, s.platform_code, t.batch_count, t.status, s.submitted_at
-            FROM complaint_tasks t
-            JOIN complaint_submissions s ON s.submission_id = t.submission_id
-            WHERE t.status IN ('queued', 'running')
-            ORDER BY s.submitted_at ASC
+            SELECT task_id, platform_code, batch_count, status, submitted_at
+            FROM complaints
+            WHERE status IN ('queued', 'running')
+            ORDER BY submitted_at ASC
         """)).fetchall()
 
         queue = []
@@ -2853,11 +2527,10 @@ def uc_export_excel(submission_id):
     session = get_db_session()
     try:
         sub = session.execute(text("""
-            SELECT s.submission_id, s.collect_account, s.work_name, s.submitted_at,
-                   t.complaint_numbers_json
-            FROM complaint_submissions s
-            LEFT JOIN complaint_tasks t ON t.submission_id = s.submission_id
-            WHERE s.submission_id = :sid AND s.platform_code = 'uc'
+            SELECT complaint_id, collect_account, work_name, submitted_at,
+                   complaint_numbers_json
+            FROM complaints
+            WHERE complaint_id = :sid AND platform_code = 'uc'
         """), {'sid': submission_id}).fetchone()
         if not sub:
             return jsonify({'success': False, 'error': '记录不存在'}), 404
@@ -3438,17 +3111,18 @@ def baidu_submit():
     try:
         work_names_str = ', '.join(all_work_names)
         session.execute(text("""
-            INSERT INTO complaint_submissions
-            (submission_id, platform_code, collect_account, cookie_snapshot,
+            INSERT INTO complaints
+            (complaint_id, task_id, platform_code, collect_account, cookie_snapshot,
              identity_type, agent_name, principal_name,
              complaint_category, complaint_type, module_name, content_type,
-             description_text, work_name, excel_rows, batch_size, batch_count, status, submitted_at)
-            VALUES (:sid, 'baidu', :account, :cookie,
+             description_text, work_name, total_links, batch_size, batch_count, status, submitted_at)
+            VALUES (:sid, :tid, 'baidu', :account, :cookie,
                     :identity_type, :agent_name, '',
                     :complaint_category, :complaint_type, :module_name, :content_type,
                     :desc, :work_name, :rows, 200, :batches, 'queued', NOW())
         """), {
             'sid': submission_id,
+            'tid': task_id,
             'account': collect_account,
             'cookie': cookie[:100] + '...',
             'identity_type': '代理人',
@@ -3463,17 +3137,6 @@ def baidu_submit():
             'batches': total_batches,
         })
 
-        session.execute(text("""
-            INSERT INTO complaint_tasks
-            (task_id, submission_id, queue_name, status, batch_count, submitted_at)
-            VALUES (:tid, :sid, :queue, 'queued', :batches, NOW())
-        """), {
-            'tid': task_id,
-            'sid': submission_id,
-            'queue': BAIDU_QUEUE_NAME,
-            'batches': total_batches,
-        })
-
         batch_no = 0
         for work in works_config:
             links = work.get('links', [])
@@ -3482,12 +3145,13 @@ def baidu_submit():
                 chunk_end = min(chunk_start + 200, len(links))
                 session.execute(text("""
                     INSERT INTO complaint_batches
-                    (batch_id, submission_id, batch_no, batch_filename, start_row, end_row, row_count, status)
-                    VALUES (:bid, :sid, :bno, :fname, :sr, :er, :rc, 'pending')
+                    (batch_id, complaint_id, batch_no, work_name, batch_filename, start_row, end_row, row_count, status)
+                    VALUES (:bid, :sid, :bno, :wname, :fname, :sr, :er, :rc, 'pending')
                 """), {
                     'bid': uuid4().hex[:12],
                     'sid': submission_id,
                     'bno': batch_no,
+                    'wname': work['work_name'],
                     'fname': f"{work['work_name']}_part{batch_no}",
                     'sr': chunk_start + 1,
                     'er': chunk_end,
@@ -3499,10 +3163,10 @@ def baidu_submit():
         for work in works_config:
             work_links = work.get('links', [])
             session.execute(text("""
-                INSERT INTO baidu_submission_works
-                (submission_id, work_index, work_name, description,
+                INSERT INTO submission_works
+                (complaint_id, work_index, work_name, platform_code, description,
                  actual_name, actual_url, link_count, batch_count, status)
-                VALUES (:sid, :widx, :wname, :desc,
+                VALUES (:sid, :widx, :wname, 'baidu', :desc,
                         :aname, :aurl, :lcount, :bcount, 'pending')
             """), {
                 'sid': submission_id,
@@ -3519,10 +3183,10 @@ def baidu_submit():
         # 写入百度作品子表（跳过的，直接标记 failed）
         for sw in skipped_works:
             session.execute(text("""
-                INSERT INTO baidu_submission_works
-                (submission_id, work_index, work_name, description,
+                INSERT INTO submission_works
+                (complaint_id, work_index, work_name, platform_code, description,
                  actual_name, actual_url, link_count, batch_count, status, error_message)
-                VALUES (:sid, :widx, :wname, '',
+                VALUES (:sid, :widx, :wname, 'baidu', '',
                         '', '', 0, 0, 'skipped', :err)
             """), {
                 'sid': submission_id,
@@ -3564,7 +3228,7 @@ def baidu_submit():
         try:
             skipped_numbers = [f"未找到已通过审核的权属记录:{sw['work_name']}" for sw in skipped_works]
             session.execute(text("""
-                UPDATE complaint_tasks SET status='completed', completed_at=NOW(),
+                UPDATE complaints SET status='completed', completed_at=NOW(),
                 complaint_numbers_json=:nums WHERE task_id=:tid
             """), {'nums': json.dumps(skipped_numbers, ensure_ascii=False), 'tid': task_id})
             session.commit()
@@ -3592,7 +3256,7 @@ def baidu_task_status(task_id):
             SELECT task_id, submission_id, status, current_batch, batch_count,
                    completed_batches, failed_batches, complaint_numbers_json,
                    error_message, submitted_at, started_at, completed_at
-            FROM complaint_tasks WHERE task_id = :tid
+            FROM complaints WHERE task_id = :tid
         """), {'tid': task_id}).fetchone()
         if not row:
             mem = tasks.get(task_id)
@@ -3625,14 +3289,13 @@ def baidu_status_list():
     session = get_db_session()
     try:
         rows = session.execute(text("""
-            SELECT s.submission_id, s.collect_account, s.work_name, s.excel_rows,
-                   s.batch_count, s.submitted_at,
-                   t.task_id, t.status, t.complaint_numbers_json, t.error_message,
-                   t.completed_at
-            FROM complaint_submissions s
-            LEFT JOIN complaint_tasks t ON t.submission_id = s.submission_id
-            WHERE s.platform_code = 'baidu'
-            ORDER BY s.submitted_at DESC
+            SELECT complaint_id AS submission_id, collect_account, work_name, total_links AS excel_rows,
+                   batch_count, submitted_at,
+                   task_id, status, complaint_numbers_json, error_message,
+                   completed_at
+            FROM complaints
+            WHERE platform_code = 'baidu'
+            ORDER BY submitted_at DESC
             LIMIT 50
         """)).fetchall()
 
@@ -3682,19 +3345,18 @@ def baidu_export_excel(submission_id):
     try:
         # 获取主表信息
         sub = session.execute(text("""
-            SELECT s.submission_id, s.collect_account, s.submitted_at,
-                   t.complaint_numbers_json
-            FROM complaint_submissions s
-            LEFT JOIN complaint_tasks t ON t.submission_id = s.submission_id
-            WHERE s.submission_id = :sid AND s.platform_code = 'baidu'
+            SELECT complaint_id AS submission_id, collect_account, submitted_at,
+                   complaint_numbers_json
+            FROM complaints
+            WHERE complaint_id = :sid AND platform_code = 'baidu'
         """), {'sid': submission_id}).fetchone()
         if not sub:
             return jsonify({'success': False, 'error': '记录不存在'}), 404
 
         # 获取作品列表（包含跳过的）
         works = session.execute(text("""
-            SELECT work_name, status, error_message FROM baidu_submission_works
-            WHERE submission_id = :sid ORDER BY work_index
+            SELECT work_name, status, error_message FROM submission_works
+            WHERE complaint_id = :sid ORDER BY work_index
         """), {'sid': submission_id}).fetchall()
 
         complaint_numbers = []
@@ -3754,7 +3416,7 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
     session = get_db_session()
     try:
         session.execute(text("""
-            UPDATE complaint_tasks SET status='running', started_at=NOW() WHERE task_id=:tid
+            UPDATE complaints SET status='running', started_at=NOW() WHERE task_id=:tid
         """), {'tid': task_id})
         session.commit()
     except:
@@ -3814,7 +3476,7 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
                 failed_batches = result_data.get('failed_batches', 0)
 
                 session.execute(text("""
-                    UPDATE complaint_tasks
+                    UPDATE complaints
                     SET status=:st, completed_at=NOW(),
                         complaint_numbers_json=:nums,
                         completed_batches=:cb, failed_batches=:fb,
@@ -3835,7 +3497,7 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
                     session.execute(text("""
                         UPDATE complaint_batches
                         SET status=:st, complaint_number=:cn, error_message=:err
-                        WHERE submission_id=:sid AND batch_no=:bno
+                        WHERE complaint_id=:sid AND batch_no=:bno
                     """), {
                         'st': br.get('status', 'completed'),
                         'cn': br.get('feedback_number'),
@@ -3850,11 +3512,11 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
                     wd_status = wd.get('status', 'completed')
                     works_category_name = BAIDU_WORKS_CATEGORY_MAP.get(wd.get('works_category'), '')
                     session.execute(text("""
-                        UPDATE baidu_submission_works
+                        UPDATE submission_works
                         SET cp_id=:cpid, owner_type=:ot, works_category=:wc,
                             works_category_name=:wcn, contact_name=:cn,
                             status=:st, error_message=:err
-                        WHERE submission_id=:sid AND work_index=:widx
+                        WHERE complaint_id=:sid AND work_index=:widx
                     """), {
                         'cpid': wd.get('cp_id', ''),
                         'ot': wd.get('owner_type') or 0,
@@ -3868,7 +3530,7 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
                     })
             else:
                 session.execute(text("""
-                    UPDATE complaint_tasks
+                    UPDATE complaints
                     SET status='failed', completed_at=NOW(),
                         error_message=:err
                     WHERE task_id=:tid
@@ -3894,7 +3556,7 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
         session = get_db_session()
         try:
             session.execute(text("""
-                UPDATE complaint_tasks SET status='failed', completed_at=NOW(),
+                UPDATE complaints SET status='failed', completed_at=NOW(),
                 error_message='脚本执行超时' WHERE task_id=:tid
             """), {'tid': task_id})
             session.commit()
@@ -3909,7 +3571,7 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
         session = get_db_session()
         try:
             session.execute(text("""
-                UPDATE complaint_tasks SET status='failed', completed_at=NOW(),
+                UPDATE complaints SET status='failed', completed_at=NOW(),
                 error_message=:err WHERE task_id=:tid
             """), {'err': str(e), 'tid': task_id})
             session.commit()

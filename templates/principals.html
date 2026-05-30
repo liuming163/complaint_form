@@ -75,9 +75,6 @@
                 <div class="mb-3">
                     <label class="form-label">平台名称</label>
                     <select class="form-select" id="inputPlatform" onchange="onPrincipalFormSelectionChange()">
-                        <option value="uc">UC</option>
-                        <option value="quark">夸克</option>
-                        <option value="baidu">百度</option>
                     </select>
                 </div>
                 <div class="mb-3">
@@ -271,9 +268,28 @@ async function loadPrincipalDocumentRecord() {
 
 document.addEventListener('DOMContentLoaded', () => {
     addModal = new bootstrap.Modal(document.getElementById('addModal'));
+    loadPlatformOptions();
     loadAccounts();
     loadPrincipals();
 });
+
+async function loadPlatformOptions() {
+    try {
+        const resp = await fetch('/api/platforms');
+        const data = await resp.json();
+        if (data.success) {
+            const select = document.getElementById('inputPlatform');
+            select.innerHTML = '';
+            data.data.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.platform_code;
+                opt.textContent = p.platform_name;
+                select.appendChild(opt);
+            });
+            onPrincipalFormSelectionChange();
+        }
+    } catch (e) {}
+}
 
 async function loadAccounts() {
     const res = await fetch('/api/accounts/list');
