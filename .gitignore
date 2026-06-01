@@ -6,3 +6,6 @@ task_results/
 .env
 .DS_Store
 deploy_update.sh
+static/imgs/剧名/
+static/imgs/营业执照/
+static/imgs/授权委托书/
