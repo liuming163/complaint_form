@@ -283,7 +283,12 @@ async function loadPlatformOptions() {
             data.data.forEach(p => {
                 const opt = document.createElement('option');
                 opt.value = p.platform_code;
-                opt.textContent = p.platform_name;
+                if (p.platform_code === 'baidu') {
+                    opt.textContent = p.platform_name + '（无需添加被代理人）';
+                    opt.disabled = true;
+                } else {
+                    opt.textContent = p.platform_name;
+                }
                 select.appendChild(opt);
             });
             onPrincipalFormSelectionChange();
