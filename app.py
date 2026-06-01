@@ -876,9 +876,9 @@ def update_complaint_batch(submission_id, batch_no, **fields):
     if not updates:
         return
     updates['updated_at'] = datetime.now()
-    updates['submission_id'] = submission_id
+    updates['complaint_id'] = submission_id
     updates['batch_no'] = batch_no
-    set_clause = ', '.join(f"{key} = :{key}" for key in updates.keys() if key not in {'submission_id', 'batch_no'})
+    set_clause = ', '.join(f"{key} = :{key}" for key in updates.keys() if key not in {'complaint_id', 'batch_no'})
     with get_db_session() as session:
         session.execute(text(f"""
             UPDATE complaint_batches
@@ -1592,7 +1592,7 @@ def submit_uc_form():
         }
         tasks[task_id] = task_state
 
-        insert_complaint_submission(payload, rights_holder)
+        insert_complaint(submission_id, task_id, 'uc', payload, rights_holder)
         insert_complaint_task(task_id, submission_id, payload['submitted_at'], total_batches, total_links)
         insert_complaint_batches(submission_id, all_batches)
 
