@@ -17,7 +17,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 AUTH_SERVICE_URL = 'https://hotdl.xinjudata.com'
 AES_KEY = b'ir9crios932j60vm'
 JWT_KEY = '77897159'
-SYSTEM_TYPE = '4'
+SYSTEM_TYPE = '5'
 
 
 def _get_random_iv():
