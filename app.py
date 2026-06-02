@@ -449,6 +449,12 @@ def normalize_company_name(value):
     return (value or '').strip().replace('（', '(').replace('）', ')')
 
 
+def normalize_filename_part(value):
+    import re
+    normalized = (value or '').strip().replace('（', '(').replace('）', ')')
+    return re.sub(r'[/:*?"<>|\\：＊？＂＜＞｜＼／]', '', normalized)
+
+
 def get_principal_document_record(platform_code, used_company, principal_name):
     normalized_company = normalize_company_name(used_company)
     normalized_principal = normalize_company_name(principal_name)
@@ -597,21 +603,22 @@ def validate_work_name_format(work_name):
 
 
 def validate_work_asset_filenames(work_name, proof_file=None, other_proof_files=None):
-    normalized_work_name = normalize_company_name(work_name)
+    normalized_work_name = normalize_filename_part(work_name)
+    display_work_name = normalize_company_name(work_name)
 
     if proof_file and proof_file.filename:
-        proof_stem = normalize_company_name(Path(proof_file.filename).stem)
+        proof_stem = normalize_filename_part(Path(proof_file.filename).stem)
         expected_prefix = f'证明文件_{normalized_work_name}'
         if not proof_stem.startswith(expected_prefix):
-            return f'作品权属文件名不符合要求，请上传以“{expected_prefix}”开头的文件'
+            return f'作品权属文件名不符合要求，请上传以”证明文件_{display_work_name}”开头的文件'
 
     for file_storage in (other_proof_files or []):
         if not file_storage or not file_storage.filename:
             continue
-        other_stem = normalize_company_name(Path(file_storage.filename).stem)
+        other_stem = normalize_filename_part(Path(file_storage.filename).stem)
         pattern = re.compile(rf'^其他证明_{re.escape(normalized_work_name)}_[0-9]+$')
         if not pattern.match(other_stem):
-            return f'其他证明文件名不符合要求，请上传命名为“其他证明_{normalized_work_name}_序号.文件后缀”的文件'
+            return f'其他证明文件名不符合要求，请上传命名为”其他证明_{display_work_name}_序号.文件后缀”的文件'
 
     return None
 

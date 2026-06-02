@@ -174,7 +174,7 @@ let addWorkModal = null;
 let otherProofModal = null;
 
 function normalizeWorkFilenamePart(value) {
-    return (value || '').trim().replace(/（/g, '(').replace(/）/g, ')');
+    return (value || '').trim().replace(/（/g, '(').replace(/）/g, ')').replace(/[/:*?"<>|\\：＊？＂＜＞｜＼／]/g, '');
 }
 
 function showWorkFileNameError(inputId, errorId, message) {
