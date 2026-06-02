@@ -20,10 +20,11 @@ from uuid import uuid4
 
 import pandas as pd
 import requests
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, session, redirect, url_for
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from werkzeug.utils import secure_filename
+from functools import wraps
 
 try:
     from dotenv import load_dotenv
@@ -89,6 +90,94 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, futu
 
 # 任务状态存储（生产环境建议用数据库）
 tasks = {}
+
+# ==================== 登录系统 ====================
+import time
+from auth_client import login as auth_login, verify_token
+
+
+def get_client_ip():
+    return request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+
+
+def get_current_user():
+    return session.get('username', '')
+
+
+# 登录有效期（秒），12小时
+LOGIN_EXPIRE_SECONDS = 43200
+
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = session.get('token')
+        if not token:
+            if request.is_json or request.path.startswith('/api/'):
+                return jsonify({'success': False, 'error': '未登录', 'login_required': True}), 401
+            return redirect(url_for('login_page', next=request.path))
+        login_time = session.get('login_time', 0)
+        if time.time() - login_time > LOGIN_EXPIRE_SECONDS:
+            session.clear()
+            if request.is_json or request.path.startswith('/api/'):
+                return jsonify({'success': False, 'error': '登录已过期，请重新登录', 'login_required': True}), 401
+            return redirect(url_for('login_page', next=request.path))
+        v = verify_token(token, get_client_ip())
+        if not v['valid']:
+            session.clear()
+            if request.is_json or request.path.startswith('/api/'):
+                return jsonify({'success': False, 'error': v['error'], 'login_required': True}), 401
+            return redirect(url_for('login_page', next=request.path))
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route('/login')
+def login_page():
+    if session.get('token'):
+        v = verify_token(session['token'], get_client_ip())
+        if v['valid']:
+            return redirect('/')
+    return render_template('login.html')
+
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.get_json()
+    username = (data or {}).get('username', '').strip()
+    password = (data or {}).get('password', '').strip()
+    if not username or not password:
+        return jsonify({'success': False, 'error': '用户名和密码不能为空'})
+
+    client_ip = get_client_ip()
+    result = auth_login(username, password, client_ip)
+
+    if not result['success']:
+        return jsonify({'success': False, 'error': result['error']})
+
+    session['token'] = result['token']
+    session['username'] = result['user_info']['username']
+    session['uid'] = result['user_info'].get('uid')
+    session['level'] = result['user_info'].get('level')
+    session['login_time'] = time.time()
+
+    next_url = (data or {}).get('next') or request.args.get('next') or '/'
+    return jsonify({'success': True, 'redirect': next_url})
+
+
+@app.route('/api/logout', methods=['POST'])
+def api_logout():
+    session.clear()
+    return jsonify({'success': True})
+
+
+# ==================== END 登录系统 ====================
+
+
+@app.context_processor
+def inject_user():
+    return {'current_user': session.get('username', '')}
+
 
 @app.after_request
 def no_cache(response):
@@ -291,11 +380,13 @@ def dequeue_unified_task(timeout=0):
 
 
 @app.route('/')
+@login_required
 def index():
     return render_template('index.html', is_index=True)
 
 
 @app.route('/works')
+@login_required
 def works():
     return render_template('works.html')
 
@@ -783,7 +874,7 @@ def map_task_status_label(status):
     return status or '未知'
 
 
-def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holder):
+def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holder, operator=''):
     submitted_at = datetime.fromisoformat(payload['submitted_at'])
     work_name = payload['form'].get('作品名称') or ''
     with get_db_session() as session:
@@ -793,13 +884,13 @@ def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holde
                 identity_type, agent_name, principal_name,
                 complaint_category, complaint_type, module_name, content_type,
                 description_text, work_name, total_links, batch_size, batch_count,
-                status, submitted_at
+                status, submitted_at, operator
             ) VALUES (
                 :complaint_id, :task_id, :platform_code, :collect_account, :cookie_snapshot,
                 :identity_type, :agent_name, :principal_name,
                 :complaint_category, :complaint_type, :module_name, :content_type,
                 :description_text, :work_name, :total_links, :batch_size, :batch_count,
-                :status, :submitted_at
+                :status, :submitted_at, :operator
             )
         """), {
             'complaint_id': complaint_id,
@@ -821,6 +912,7 @@ def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holde
             'batch_count': payload.get('batch_count', 0),
             'status': 'queued',
             'submitted_at': submitted_at,
+            'operator': operator,
         })
         session.commit()
 
@@ -953,7 +1045,7 @@ def get_submission_status_list():
     with get_db_session() as session:
         rows = session.execute(text("""
             SELECT complaint_id, submitted_at, collect_account, work_name,
-                   total_links, batch_count, status, complaint_numbers_json
+                   total_links, batch_count, status, complaint_numbers_json, operator
             FROM complaints
             WHERE platform_code = 'uc'
             ORDER BY submitted_at DESC
@@ -972,6 +1064,7 @@ def get_submission_status_list():
             'status': map_task_status_label(row.get('status')),
             'complaint_numbers': deserialize_complaint_numbers(row.get('complaint_numbers_json')),
             'log_available': has_available_task_log(task_id),
+            'operator': row.get('operator') or '',
         })
     return items
 
@@ -997,21 +1090,25 @@ threading.Thread(target=_schedule_daily_log_cleanup, daemon=True, name='daily-lo
 
 
 @app.route('/accounts')
+@login_required
 def accounts():
     return render_template('accounts.html')
 
 
 @app.route('/principals')
+@login_required
 def principals():
     return render_template('principals.html')
 
 
 @app.route('/api/platforms')
+@login_required
 def api_platforms():
     return jsonify({'success': True, 'data': get_platforms_list()})
 
 
 @app.route('/api/accounts/list')
+@login_required
 def accounts_list():
     platform_code = request.args.get('platform_code')
     accounts = load_accounts()
@@ -1021,6 +1118,7 @@ def accounts_list():
 
 
 @app.route('/api/accounts/add', methods=['POST'])
+@login_required
 def accounts_add():
     data = request.get_json()
     platform_code = data.get('platform_code', '').strip()
@@ -1083,6 +1181,7 @@ def accounts_add():
 
 
 @app.route('/api/accounts/update_cookie', methods=['POST'])
+@login_required
 def accounts_update_cookie():
     data = request.get_json()
     acc_id = data.get('id')
@@ -1108,6 +1207,7 @@ def accounts_update_cookie():
 
 
 @app.route('/api/principals/list')
+@login_required
 def principals_list():
     """返回所有账号及其被代理人信息，每行一个被代理人"""
     platform_code_filter = request.args.get('platform_code', '').strip()
@@ -1157,6 +1257,7 @@ def principals_list():
 
 
 @app.route('/api/principals/document', methods=['GET'])
+@login_required
 def principal_document_detail():
     platform_code = request.args.get('platform_code', '').strip()
     used_company = request.args.get('used_company', '').strip()
@@ -1183,6 +1284,7 @@ def principal_document_detail():
 
 
 @app.route('/api/principals/add', methods=['POST'])
+@login_required
 def principals_add():
     """添加被代理人信息，按 (platform_code + account_user) 分组"""
     if request.is_json:
@@ -1318,22 +1420,26 @@ def principals_add():
 
 
 @app.route('/api/works/content_types')
+@login_required
 def works_content_types():
     return jsonify({'success': True, 'data': get_work_content_types()})
 
 
 @app.route('/api/works/principal_options')
+@login_required
 def works_principal_options():
     used_company = request.args.get('used_company', '').strip()
     return jsonify({'success': True, 'data': get_principal_options_by_used_company(used_company)})
 
 
 @app.route('/api/works/complaint_types')
+@login_required
 def works_complaint_types():
     return jsonify({'success': True, 'data': get_work_complaint_types()})
 
 
 @app.route('/api/works/list')
+@login_required
 def works_list():
     with get_db_session() as session:
         rows = session.execute(text("""
@@ -1369,6 +1475,7 @@ def works_list():
 
 
 @app.route('/api/works/add', methods=['POST'])
+@login_required
 def works_add():
     work_name = request.form.get('work_name', '').strip()
     used_company = request.form.get('used_company', '').strip()
@@ -1412,16 +1519,19 @@ def works_add():
 
 
 @app.route('/kuake')
+@login_required
 def kuake():
     return render_template('kuake.html')
 
 
 @app.route('/uc')
+@login_required
 def uc():
     return render_template('uc.html')
 
 
 @app.route('/api/check_excel', methods=['POST'])
+@login_required
 def check_excel():
     if 'file' not in request.files:
         return jsonify({'success': False, 'error': '未上传文件'})
@@ -1455,6 +1565,7 @@ def check_excel():
 
 
 @app.route('/api/uc/submit', methods=['POST'])
+@login_required
 def submit_uc_form():
     data = request.get_json()
     if not data:
@@ -1599,7 +1710,7 @@ def submit_uc_form():
         }
         tasks[task_id] = task_state
 
-        insert_complaint(submission_id, task_id, 'uc', payload, rights_holder)
+        insert_complaint(submission_id, task_id, 'uc', payload, rights_holder, operator=get_current_user())
         insert_complaint_task(task_id, submission_id, payload['submitted_at'], total_batches, total_links)
         insert_complaint_batches(submission_id, all_batches)
 
@@ -1621,6 +1732,7 @@ def submit_uc_form():
             'works_config': works_payload,
             'total_batches': total_batches,
             'skipped_works': skipped_works,
+            'operator': get_current_user(),
         }
 
         if works_payload:
@@ -1687,6 +1799,7 @@ def extract_zip_with_correct_encoding(zip_file_storage, extract_dir):
 
 
 @app.route('/api/download_custom_template', methods=['GET'])
+@login_required
 def download_custom_template():
     """下载自定义模板Excel（3个Sheet）"""
     try:
@@ -1785,6 +1898,7 @@ def download_custom_template():
 
 
 @app.route('/api/upload_custom_template', methods=['POST'])
+@login_required
 def upload_custom_template():
     """上传自定义模板Excel，自动匹配证明文件"""
     import glob
@@ -2179,6 +2293,7 @@ def upload_custom_template():
 
 
 @app.route('/api/proof_file/<path:filename>', methods=['GET'])
+@login_required
 def serve_proof_file(filename):
     """服务证明文件（从static/imgs目录）"""
     # 安全检查：防止路径遍历
@@ -2196,6 +2311,7 @@ def serve_proof_file(filename):
 
 
 @app.route('/api/custom_template_file/<template_id>/<path:filename>', methods=['GET'])
+@login_required
 def serve_custom_template_file(template_id, filename):
     """服务自定义模板的临时文件"""
     # 安全检查：防止路径遍历
@@ -2222,6 +2338,7 @@ def run_complaint_script(task_payload):
 
     works_config = task_payload.get('works_config', [])
     total_batches = task_payload.get('total_batches', 0)
+    operator = task_payload.get('operator', '')
 
     cmd = [
         sys.executable,
@@ -2243,7 +2360,7 @@ def run_complaint_script(task_payload):
         cmd.extend(['--complaint-type', complaint_category, '--copyright-type', copyright_type])
 
     print(f"[{task_id}] 执行UC多作品投诉，作品数: {len(works_config)}，总批次: {total_batches}")
-    append_task_log(task_id, f"执行UC多作品投诉，作品数: {len(works_config)}，总批次: {total_batches}")
+    append_task_log(task_id, f"操作人: {operator}, 执行UC多作品投诉，作品数: {len(works_config)}，总批次: {total_batches}")
 
     try:
         started_at = datetime.now().isoformat()
@@ -2338,6 +2455,7 @@ def run_complaint_script(task_payload):
 
 
 @app.route('/api/uc/task/<task_id>', methods=['GET'])
+@login_required
 def get_task_status(task_id):
     """查询任务状态"""
     task = get_complaint_task(task_id)
@@ -2368,6 +2486,7 @@ def get_task_status(task_id):
 
 
 @app.route('/uc/task/<task_id>/log', methods=['GET'])
+@login_required
 def view_task_log(task_id):
     task_log = get_task_execution_log(task_id)
     if not task_log:
@@ -2443,6 +2562,7 @@ def view_task_log(task_id):
 
 
 @app.route('/api/worker/queue_status', methods=['GET'])
+@login_required
 def worker_queue_status():
     session = get_db_session()
     try:
@@ -2470,6 +2590,7 @@ def worker_queue_status():
 
 
 @app.route('/api/uc/status_list', methods=['GET'])
+@login_required
 def get_uc_status_list():
     """获取UC投诉状态列表"""
     submissions = get_submission_status_list()
@@ -2527,6 +2648,7 @@ def get_uc_status_list():
 
 
 @app.route('/api/uc/export_excel/<submission_id>', methods=['GET'])
+@login_required
 def uc_export_excel(submission_id):
     from openpyxl import Workbook
     from openpyxl.styles import Font
@@ -2594,6 +2716,7 @@ def uc_export_excel(submission_id):
 
 
 @app.route('/api/uc/verify_cookie', methods=['POST'])
+@login_required
 def verify_cookie():
     """验证Cookie是否有效"""
     data = request.get_json()
@@ -2701,11 +2824,13 @@ def verify_cookie():
 # ============================================================
 
 @app.route('/baidu')
+@login_required
 def baidu_page():
     return render_template('baidu.html')
 
 
 @app.route('/api/baidu/verify_cookie', methods=['POST'])
+@login_required
 def baidu_verify_cookie():
     data = request.get_json() or {}
     cookie = data.get('cookie', '').strip()
@@ -2726,6 +2851,7 @@ def baidu_verify_cookie():
 
 
 @app.route('/api/baidu/pre_check', methods=['POST'])
+@login_required
 def baidu_pre_check():
     data = request.get_json() or {}
     cookie = data.get('cookie', '').strip()
@@ -2788,6 +2914,7 @@ def baidu_pre_check():
 
 
 @app.route('/api/baidu/search_ownership', methods=['POST'])
+@login_required
 def baidu_search_ownership():
     data = request.get_json() or {}
     cookie = data.get('cookie', '').strip()
@@ -2820,6 +2947,7 @@ def baidu_search_ownership():
 
 
 @app.route('/api/baidu/download_template', methods=['GET'])
+@login_required
 def baidu_download_template():
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill
@@ -2866,6 +2994,7 @@ def baidu_download_template():
 
 
 @app.route('/api/baidu/upload_template', methods=['POST'])
+@login_required
 def baidu_upload_template():
     if 'file' not in request.files:
         return jsonify({'success': False, 'error': '未上传文件'}), 400
@@ -3042,6 +3171,7 @@ def baidu_upload_template():
 
 
 @app.route('/api/baidu/submit', methods=['POST'])
+@login_required
 def baidu_submit():
     data = request.get_json()
     if not data:
@@ -3122,11 +3252,11 @@ def baidu_submit():
             (complaint_id, task_id, platform_code, collect_account, cookie_snapshot,
              identity_type, agent_name, principal_name,
              complaint_category, complaint_type, module_name, content_type,
-             description_text, work_name, total_links, batch_size, batch_count, status, submitted_at)
+             description_text, work_name, total_links, batch_size, batch_count, status, submitted_at, operator)
             VALUES (:sid, :tid, 'baidu', :account, :cookie,
                     :identity_type, :agent_name, '',
                     :complaint_category, :complaint_type, :module_name, :content_type,
-                    :desc, :work_name, :rows, 200, :batches, 'queued', NOW())
+                    :desc, :work_name, :rows, 200, :batches, 'queued', NOW(), :operator)
         """), {
             'sid': submission_id,
             'tid': task_id,
@@ -3142,6 +3272,7 @@ def baidu_submit():
             'work_name': work_names_str[:5000],
             'rows': total_links,
             'batches': total_batches,
+            'operator': get_current_user(),
         })
 
         batch_no = 0
@@ -3256,6 +3387,7 @@ def baidu_submit():
 
 
 @app.route('/api/baidu/task/<task_id>', methods=['GET'])
+@login_required
 def baidu_task_status(task_id):
     session = get_db_session()
     try:
@@ -3292,6 +3424,7 @@ def baidu_task_status(task_id):
 
 
 @app.route('/api/baidu/status_list', methods=['GET'])
+@login_required
 def baidu_status_list():
     session = get_db_session()
     try:
@@ -3299,7 +3432,7 @@ def baidu_status_list():
             SELECT complaint_id AS submission_id, collect_account, work_name, total_links AS excel_rows,
                    batch_count, submitted_at,
                    task_id, status, complaint_numbers_json, error_message,
-                   completed_at
+                   completed_at, operator
             FROM complaints
             WHERE platform_code = 'baidu'
             ORDER BY submitted_at DESC
@@ -3334,6 +3467,7 @@ def baidu_status_list():
                 'error_message': row.error_message,
                 'submitted_at': normalize_datetime(row.submitted_at),
                 'completed_at': normalize_datetime(row.completed_at),
+                'operator': row.operator or '',
             })
 
         return jsonify({'success': True, 'data': result})
@@ -3344,6 +3478,7 @@ def baidu_status_list():
 
 
 @app.route('/api/baidu/export_excel/<submission_id>', methods=['GET'])
+@login_required
 def baidu_export_excel(submission_id):
     from openpyxl import Workbook
     from openpyxl.styles import Font

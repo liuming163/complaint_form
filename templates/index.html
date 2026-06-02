@@ -16,6 +16,8 @@
         <a href="/works" class="back-btn" style="margin-left:8px"><i class="fas fa-images"></i> 作品覆盖列表</a>
         <a href="https://alidocs.dingtalk.com/i/nodes/P7QG4Yx2JpoQ5lRRigZ6vNeZV9dEq3XD" target="_blank" class="back-btn" style="margin-left:8px"><i class="fas fa-book"></i> 使用指南</a>
         {% if not is_index %}<a href="/" class="back-btn" style="margin-left:8px"><i class="fas fa-arrow-left"></i> 返回首页</a>{% endif %}
+        <span class="user-info" style="margin-left:16px"><i class="fas fa-user"></i> {{ current_user }}</span>
+        <button class="btn btn-sm btn-outline-secondary" style="margin-left:8px" onclick="logout()"><i class="fas fa-sign-out-alt"></i> 登出</button>
     </div>
 </header>
 
@@ -109,6 +111,7 @@
 </div>
 
 <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
 <script>
 
 // 全局队列数据，用于跨平台计算预估完成时间
@@ -165,6 +168,7 @@ function refreshUcStatus() {
                         <thead>
                             <tr>
                                 <th>时间</th>
+                                <th>操作人</th>
                                 <th>采集账号</th>
                                 <th>作品名称</th>
                                 <th>投诉单号</th>
@@ -243,6 +247,7 @@ function refreshUcStatus() {
                     html += `
                         <tr>
                             <td>${timeStr}</td>
+                            <td>${item.operator || '-'}</td>
                             <td>${accountStr}</td>
                             <td style="white-space:normal">${workNameStr}</td>
                             <td style="white-space:normal">${complaintStr}</td>
@@ -302,6 +307,7 @@ function refreshBaiduStatus() {
                         <thead>
                             <tr>
                                 <th>时间</th>
+                                <th>操作人</th>
                                 <th>采集账号</th>
                                 <th>作品名称</th>
                                 <th>反馈单号</th>
@@ -363,6 +369,7 @@ function refreshBaiduStatus() {
                     html += `
                         <tr>
                             <td>${timeStr}</td>
+                            <td>${item.operator || '-'}</td>
                             <td>${item.collect_account || '-'}</td>
                             <td title="${item.work_name || ''}" style="white-space:normal">${workNameStr}</td>
                             <td>${complaintStr}</td>

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>登录 - 投诉处理系统</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+<div class="login-wrap">
+    <div class="login-card shadow">
+        <div class="login-header">
+            <i class="fas fa-shield-alt"></i>
+            <h4>投诉处理系统</h4>
+        </div>
+        <form id="loginForm" onsubmit="return handleLogin(event)">
+            <div class="mb-3">
+                <label class="form-label">用户名</label>
+                <input type="text" class="form-control" id="username" required autocomplete="username">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">密码</label>
+                <input type="password" class="form-control" id="password" required autocomplete="current-password">
+            </div>
+            <div id="loginError" class="alert alert-danger" style="display:none"></div>
+            <button type="submit" class="btn btn-primary w-100" id="loginBtn">
+                <i class="fas fa-sign-in-alt"></i> 登录
+            </button>
+        </form>
+    </div>
+</div>
+
+<script>
+async function handleLogin(e) {
+    e.preventDefault();
+    const btn = document.getElementById('loginBtn');
+    const errorEl = document.getElementById('loginError');
+    errorEl.style.display = 'none';
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 登录中...';
+
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const nextUrl = params.get('next') || '/';
+        const resp = await fetch('/api/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                username: document.getElementById('username').value,
+                password: document.getElementById('password').value,
+                next: nextUrl
+            })
+        });
+        const data = await resp.json();
+        if (data.success) {
+            window.location.href = data.redirect || nextUrl;
+        } else {
+            errorEl.textContent = data.error || '登录失败';
+            errorEl.style.display = 'block';
+        }
+    } catch (err) {
+        errorEl.textContent = '网络错误，请重试';
+        errorEl.style.display = 'block';
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-sign-in-alt"></i> 登录';
+    }
+}
+</script>
+
+<style>
+.login-wrap {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f0f2f5;
+}
+.login-card {
+    width: 380px;
+    padding: 40px 35px;
+    background: #fff;
+    border-radius: 10px;
+}
+.login-header {
+    text-align: center;
+    margin-bottom: 30px;
+    color: #333;
+}
+.login-header i {
+    font-size: 36px;
+    color: #0d6efd;
+    margin-bottom: 10px;
+}
+.login-header h4 {
+    margin-top: 8px;
+    font-weight: 600;
+}
+</style>
+</body>
+</html>
