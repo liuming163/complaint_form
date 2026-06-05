@@ -1239,6 +1239,7 @@ def principals_list():
                     'principal_name': name,
                     'business_license_filename': doc_record.get('business_license_filename') if doc_record else None,
                     'authorization_filename': doc_record.get('authorization_filename') if doc_record else None,
+                    'authorization_expires_on': doc_record.get('authorization_expires_on') if doc_record else None,
                     'rowspan': count if i == 0 else 0,
                 })
         else:
@@ -1251,6 +1252,7 @@ def principals_list():
                 'principal_name': '-',
                 'business_license_filename': None,
                 'authorization_filename': None,
+                'authorization_expires_on': None,
                 'rowspan': 1,
             })
     return jsonify({'success': True, 'data': results})
