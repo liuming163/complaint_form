@@ -104,6 +104,10 @@ def get_current_user():
     return session.get('username', '')
 
 
+def get_current_operator_name():
+    return get_current_user()
+
+
 # 登录有效期（秒），12小时
 LOGIN_EXPIRE_SECONDS = 43200
 
@@ -717,9 +721,21 @@ def validate_work_asset_filenames(work_name, proof_file=None, other_proof_files=
 def migrate_works_principal_name_if_needed():
     with get_db_session() as session:
         columns = {row[0] for row in session.execute(text("SHOW COLUMNS FROM works")).all()}
+        schema_changed = False
         if 'principal_name' not in columns:
             session.execute(text("ALTER TABLE works ADD COLUMN principal_name varchar(255) NULL AFTER used_company"))
+            schema_changed = True
+        if 'operator_name' not in columns:
+            session.execute(text("ALTER TABLE works ADD COLUMN operator_name varchar(255) NULL AFTER principal_name"))
+            schema_changed = True
+        if schema_changed:
             session.commit()
+
+
+try:
+    migrate_works_principal_name_if_needed()
+except Exception as exc:
+    print(f'works schema migration skipped: {exc}')
 
 
 def get_work_content_types():
@@ -758,7 +774,7 @@ def save_work_asset_file(file_storage, target_dir, filename_prefix):
     return filename, save_path
 
 
-def create_work_with_assets(work_name, used_company, principal_name, content_type_id, complaint_type_id, proof_file, other_proof_files):
+def create_work_with_assets(work_name, used_company, principal_name, content_type_id, complaint_type_id, proof_file, other_proof_files, operator_name=''):
     normalized_work_name = normalize_work_path_part(work_name)
     with get_db_session() as session:
         exists = session.execute(text("""
@@ -803,14 +819,15 @@ def create_work_with_assets(work_name, used_company, principal_name, content_typ
         now = datetime.now()
         session.execute(text("""
             INSERT INTO works (
-                work_name, used_company, principal_name, content_type_id, complaint_type_id, created_at, updated_at
+                work_name, used_company, principal_name, operator_name, content_type_id, complaint_type_id, created_at, updated_at
             ) VALUES (
-                :work_name, :used_company, :principal_name, :content_type_id, :complaint_type_id, :created_at, :updated_at
+                :work_name, :used_company, :principal_name, :operator_name, :content_type_id, :complaint_type_id, :created_at, :updated_at
             )
         """), {
             'work_name': work_name,
             'used_company': used_company,
             'principal_name': principal_name,
+            'operator_name': operator_name,
             'content_type_id': content_type_id,
             'complaint_type_id': complaint_type_id,
             'created_at': now,
@@ -834,6 +851,7 @@ def create_work_with_assets(work_name, used_company, principal_name, content_typ
             'work_name': work_name,
             'used_company': used_company,
             'principal_name': principal_name,
+            'operator_name': operator_name,
             'content_type': content_type['name'],
             'complaint_type': complaint_type['name'],
             'proof_file': proof_filename,
@@ -1445,7 +1463,7 @@ def works_complaint_types():
 def works_list():
     with get_db_session() as session:
         rows = session.execute(text("""
-            SELECT w.id, w.work_name, w.used_company, w.principal_name,
+            SELECT w.id, w.work_name, w.used_company, w.principal_name, w.operator_name,
                    w.proof_file, w.other_proof_files,
                    ct.dict_name AS content_type, cpt.dict_name AS complaint_type
             FROM works w
@@ -1467,6 +1485,7 @@ def works_list():
                 'work_name': row['work_name'],
                 'used_company': row['used_company'],
                 'principal_name': row.get('principal_name') or '',
+                'operator_name': row.get('operator_name') or '',
                 'content_type': row['content_type'],
                 'complaint_type': row['complaint_type'],
                 'proof_file': proof_file,
@@ -1514,6 +1533,7 @@ def works_add():
         int(complaint_type_id),
         proof_file,
         other_files,
+        operator_name=get_current_operator_name(),
     )
     if error:
         return jsonify({'success': False, 'error': error}), 400

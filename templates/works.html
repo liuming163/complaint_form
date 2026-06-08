@@ -38,6 +38,7 @@
                         <th>剧名</th>
                         <th>代理主体(司内)</th>
                         <th>被代理人信息</th>
+                        <th>操作人</th>
                         <th>内容类型</th>
                         <th>投诉类型</th>
                         <th>作品权属文件</th>
@@ -45,7 +46,7 @@
                     </tr>
                 </thead>
                 <tbody id="worksTableBody">
-                    <tr><td colspan="7" class="text-center text-muted py-4">加载中...</td></tr>
+                    <tr><td colspan="8" class="text-center text-muted py-4">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -372,14 +373,14 @@ async function loadWorks() {
     const res = await fetch('/api/works/list');
     const data = await res.json();
     if (!data.success) {
-        document.getElementById('worksTableBody').innerHTML = '<tr><td colspan="7" class="text-danger text-center py-4">加载失败</td></tr>';
+        document.getElementById('worksTableBody').innerHTML = '<tr><td colspan="8" class="text-danger text-center py-4">加载失败</td></tr>';
         return;
     }
     allWorks = data.data;
     fuse = new Fuse(allWorks, {
         threshold: 0.3,
         ignoreLocation: true,
-        keys: ['work_name', 'used_company', 'principal_name', 'content_type', 'complaint_type']
+        keys: ['work_name', 'used_company', 'principal_name', 'operator_name', 'content_type', 'complaint_type']
     });
     renderWorks(allWorks);
 }
@@ -419,6 +420,7 @@ function renderWorks(works) {
             <td>${escapeHtml(item.work_name)}</td>
             <td>${escapeHtml(item.used_company)}</td>
             <td>${escapeHtml(item.principal_name || '-')}</td>
+            <td>${escapeHtml(item.operator_name || '-')}</td>
             <td>${escapeHtml(item.content_type)}</td>
             <td>${escapeHtml(item.complaint_type)}</td>
             <td>${proofCell}</td>
