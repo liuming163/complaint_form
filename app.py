@@ -59,6 +59,8 @@ UC_WORKER_LOCK_KEY = os.getenv('UC_WORKER_LOCK_KEY', 'uc_complaint_worker_lock')
 UC_WORKER_LOCK_TTL = int(os.getenv('UC_WORKER_LOCK_TTL', '15'))
 UC_COMPLAIN_LIST_API = 'https://ipp.uc.cn/api/complain/accuse'
 
+PRINCIPAL_UPDATE_UID_WHITELIST = {'1717602'}
+
 BAIDU_QUEUE_NAME = os.getenv('BAIDU_QUEUE_NAME', 'baidu_complaint_queue')
 BAIDU_WORKER_LOCK_KEY = os.getenv('BAIDU_WORKER_LOCK_KEY', 'baidu_complaint_worker_lock')
 BAIDU_WORKER_LOCK_TTL = int(os.getenv('BAIDU_WORKER_LOCK_TTL', '15'))
@@ -102,6 +104,10 @@ def get_client_ip():
 
 def get_current_user():
     return session.get('username', '')
+
+
+def can_update_principal_authorization():
+    return str(session.get('uid') or '') in PRINCIPAL_UPDATE_UID_WHITELIST
 
 
 def get_current_operator_name():
@@ -1231,6 +1237,7 @@ def principals_list():
     platform_code_filter = request.args.get('platform_code', '').strip()
     account_user_filter = request.args.get('account_user', '').strip()
     used_company_filter = request.args.get('used_company', '').strip()
+    can_update_authorization = can_update_principal_authorization()
     principals_data = load_principals_map()
     accounts = load_accounts()
     if platform_code_filter:
@@ -1258,7 +1265,7 @@ def principals_list():
                     'business_license_filename': doc_record.get('business_license_filename') if doc_record else None,
                     'authorization_filename': doc_record.get('authorization_filename') if doc_record else None,
                     'authorization_expires_on': doc_record.get('authorization_expires_on') if doc_record else None,
-                    'can_update': True,
+                    'can_update': can_update_authorization,
                     'rowspan': count if i == 0 else 0,
                 })
         else:
@@ -1444,6 +1451,9 @@ def principals_add():
 @app.route('/api/principals/update', methods=['POST'])
 @login_required
 def principals_update():
+    if not can_update_principal_authorization():
+        return jsonify({'success': False, 'error': '当前账号无权限更新授权委托书'}), 403
+
     platform_code = request.form.get('platform_code', '').strip()
     account_user = request.form.get('account_user', '').strip()
     principal_name = request.form.get('principal_name', '').strip()
