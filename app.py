@@ -1258,6 +1258,7 @@ def principals_list():
                     'business_license_filename': doc_record.get('business_license_filename') if doc_record else None,
                     'authorization_filename': doc_record.get('authorization_filename') if doc_record else None,
                     'authorization_expires_on': doc_record.get('authorization_expires_on') if doc_record else None,
+                    'can_update': True,
                     'rowspan': count if i == 0 else 0,
                 })
         else:
@@ -1271,6 +1272,7 @@ def principals_list():
                 'business_license_filename': None,
                 'authorization_filename': None,
                 'authorization_expires_on': None,
+                'can_update': False,
                 'rowspan': 1,
             })
     return jsonify({'success': True, 'data': results})
@@ -1436,6 +1438,103 @@ def principals_add():
         'used_company': account_exists.get('used_company', normalized_used_company),
         'account_user': account_user,
         'principal_name': normalized_principal_name,
+    }})
+
+
+@app.route('/api/principals/update', methods=['POST'])
+@login_required
+def principals_update():
+    platform_code = request.form.get('platform_code', '').strip()
+    account_user = request.form.get('account_user', '').strip()
+    principal_name = request.form.get('principal_name', '').strip()
+    used_company = request.form.get('used_company', '').strip()
+    authorization_file = request.files.get('authorization_file')
+    authorization_expires_on = request.form.get('authorization_expires_on', '').strip()
+
+    if not platform_code or not account_user or not principal_name or not used_company:
+        return jsonify({'success': False, 'error': '平台名称、投诉账号、代理主体(司内)、被代理人信息都不能为空'}), 400
+    if platform_code not in PLATFORM_MAP:
+        return jsonify({'success': False, 'error': '平台编码无效'}), 400
+    if not authorization_file or not authorization_file.filename:
+        return jsonify({'success': False, 'error': '请上传授权委托书'}), 400
+    if not authorization_expires_on:
+        return jsonify({'success': False, 'error': '请填写授权期限截止日期'}), 400
+
+    normalized_principal_name = normalize_company_name(principal_name)
+    normalized_used_company = normalize_company_name(used_company)
+    if not normalized_principal_name or normalized_principal_name == '-':
+        return jsonify({'success': False, 'error': '被代理人信息无效，无法更新授权委托书'}), 400
+
+    with get_db_session() as session:
+        account_exists = session.execute(text("""
+            SELECT platform_name, used_company FROM accounts
+            WHERE platform_code = :platform_code AND account_user = :account_user
+            LIMIT 1
+        """), {
+            'platform_code': platform_code,
+            'account_user': account_user,
+        }).mappings().first()
+        if not account_exists:
+            return jsonify({'success': False, 'error': '投诉账号不存在'}), 400
+        if account_exists.get('used_company') != normalized_used_company:
+            return jsonify({'success': False, 'error': '所选投诉账号与使用的公司不匹配'}), 400
+
+        principal_exists = session.execute(text("""
+            SELECT 1 FROM principals
+            WHERE platform_code = :platform_code
+              AND account_user = :account_user
+              AND principal_name = :principal_name
+            LIMIT 1
+        """), {
+            'platform_code': platform_code,
+            'account_user': account_user,
+            'principal_name': normalized_principal_name,
+        }).first()
+        if not principal_exists:
+            return jsonify({'success': False, 'error': '被代理人信息不存在'}), 404
+
+    filename_error = validate_principal_upload_filenames(
+        normalized_principal_name,
+        normalized_used_company,
+        authorization_expires_on,
+        authorization_file=authorization_file,
+    )
+    if filename_error:
+        return jsonify({'success': False, 'error': filename_error}), 400
+
+    business_license_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '营业执照')
+    auth_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '授权委托书')
+    ensure_dir(business_license_dir)
+    ensure_dir(auth_dir)
+
+    existing_docs = get_principal_document_record(platform_code, normalized_used_company, normalized_principal_name)
+    if not existing_docs:
+        return jsonify({'success': False, 'error': '被代理人资料不存在'}), 404
+
+    expires_yyyymmdd = authorization_expires_on.replace('-', '')
+    authorization_filename = save_named_upload(
+        authorization_file,
+        auth_dir,
+        f'授权委托书_{normalized_principal_name}_{normalized_used_company}_截止日期{expires_yyyymmdd}'
+    )
+    upsert_principal_documents(
+        platform_code,
+        normalized_used_company,
+        account_user,
+        normalized_principal_name,
+        existing_docs.get('business_license_filename'),
+        authorization_filename,
+        authorization_expires_on,
+    )
+
+    return jsonify({'success': True, 'data': {
+        'platform_code': platform_code,
+        'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
+        'used_company': normalized_used_company,
+        'account_user': account_user,
+        'principal_name': normalized_principal_name,
+        'authorization_filename': authorization_filename,
+        'authorization_expires_on': authorization_expires_on,
     }})
 
 

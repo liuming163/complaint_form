@@ -41,10 +41,11 @@
                         <th>被代理人营业执照</th>
                         <th>授权委托书</th>
                         <th>授权截止日期</th>
+                        <th>操作</th>
                     </tr>
                 </thead>
                 <tbody id="principalsTableBody">
-                    <tr><td colspan="8" class="text-center text-muted py-4">加载中...</td></tr>
+                    <tr><td colspan="9" class="text-center text-muted py-4">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -59,12 +60,12 @@
     </div>
 </div>
 
-<!-- 添加被代理人弹窗 -->
+<!-- 添加/更新被代理人弹窗 -->
 <div class="modal fade" id="addModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
-                <div class="modal-title"><i class="fas fa-plus me-2"></i>添加被代理人</div>
+                <div class="modal-title" id="principalModalTitle"><i class="fas fa-plus me-2"></i>添加被代理人</div>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
             </div>
             <div class="modal-body">
@@ -103,7 +104,7 @@
                     <div class="mb-3">
                         <label class="form-label">上传授权委托书</label>
                         <input type="file" class="form-control" id="inputAuthorization" accept=".png,.jpg,.jpeg,.bmp,.pdf">
-                        <div class="form-text">上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx</div>
+                        <div class="form-text" id="authorizationUploadHint">上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx</div>
                         <div class="invalid-feedback d-block" id="authorizationFilenameError" style="display:none !important;"></div>
                     </div>
                     <div class="mb-3">
@@ -114,7 +115,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="submitAddPrincipal()">确认添加</button>
+                <button type="button" class="btn btn-primary" id="principalSubmitButton" onclick="submitPrincipalForm()">确认添加</button>
             </div>
         </div>
     </div>
@@ -126,6 +127,30 @@ let allPrincipals = [];
 let allAccounts = [];
 let debounceTimer = null;
 let addModal = null;
+const principalModalState = {
+    mode: 'add',
+    currentRecord: null,
+    documentRequestToken: 0,
+};
+
+function getPrincipalDocumentLookupState() {
+    return {
+        mode: principalModalState.mode,
+        platformCode: document.getElementById('inputPlatform').value,
+        usedCompany: document.getElementById('inputUsedCompany').value,
+        accountUser: document.getElementById('inputAccount').value.trim(),
+        principalName: document.getElementById('inputPrincipal').value.trim(),
+    };
+}
+
+function isPrincipalDocumentLookupStateCurrent(snapshot) {
+    const current = getPrincipalDocumentLookupState();
+    return current.mode === snapshot.mode
+        && current.platformCode === snapshot.platformCode
+        && current.usedCompany === snapshot.usedCompany
+        && current.accountUser === snapshot.accountUser
+        && current.principalName === snapshot.principalName;
+}
 
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -185,6 +210,42 @@ function clearFileNameError(inputId, errorId) {
     }
 }
 
+function clearPrincipalFileErrors() {
+    clearFileNameError('inputBusinessLicense', 'businessLicenseFilenameError');
+    clearFileNameError('inputAuthorization', 'authorizationFilenameError');
+}
+
+function setPrincipalModalMode(mode, record = null) {
+    principalModalState.mode = mode;
+    principalModalState.currentRecord = record;
+
+    const title = document.getElementById('principalModalTitle');
+    const submitButton = document.getElementById('principalSubmitButton');
+    const hint = document.getElementById('authorizationUploadHint');
+    const usedCompanyInput = document.getElementById('inputUsedCompany');
+    const platformInput = document.getElementById('inputPlatform');
+    const accountInput = document.getElementById('inputAccount');
+    const principalInput = document.getElementById('inputPrincipal');
+
+    if (mode === 'update') {
+        title.innerHTML = '<i class="fas fa-pen me-2"></i>更新授权委托书';
+        submitButton.textContent = '确认更新';
+        hint.textContent = '更新时必须上传新的授权委托书，文件名需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx';
+        usedCompanyInput.disabled = true;
+        platformInput.disabled = true;
+        accountInput.disabled = true;
+        principalInput.readOnly = true;
+    } else {
+        title.innerHTML = '<i class="fas fa-plus me-2"></i>添加被代理人';
+        submitButton.textContent = '确认添加';
+        hint.textContent = '上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx';
+        usedCompanyInput.disabled = false;
+        platformInput.disabled = false;
+        accountInput.disabled = false;
+        principalInput.readOnly = false;
+    }
+}
+
 function validateBusinessLicenseFileImmediately() {
     const principalName = document.getElementById('inputPrincipal').value.trim();
     const usedCompany = document.getElementById('inputUsedCompany').value;
@@ -218,7 +279,7 @@ function buildPrincipalAssetUrl(folder, fileName) {
     return `/api/proof_file/${encodeURIComponent(`${folder}/${fileName}`)}`;
 }
 
-function getPrincipalDocViewHtml(data) {
+function getPrincipalDocViewHtml(data, mode = 'add') {
     const businessLicenseLink = data.business_license_path
         ? `<div class="mb-2"><strong>被代理人营业执照：</strong><a href="/api/proof_file/${encodeURIComponent(data.business_license_path)}" target="_blank">${escapeHtml(data.business_license_filename)}</a></div>`
         : `<div class="mb-2 text-muted"><strong>被代理人营业执照：</strong>暂无</div>`;
@@ -228,21 +289,24 @@ function getPrincipalDocViewHtml(data) {
     const expiresOn = data.authorization_expires_on
         ? `<div><strong>授权期限截止日期：</strong>${escapeHtml(data.authorization_expires_on)}</div>`
         : `<div class="text-muted"><strong>授权期限截止日期：</strong>暂无</div>`;
-    return `<div class="alert alert-info mb-0"><div class="fw-bold mb-2">已存在资料，已有部分仅展示，不允许在此处覆盖上传；缺失部分可继续补充。</div>${businessLicenseLink}${authorizationLink}${expiresOn}</div>`;
+    const message = mode === 'update'
+        ? '当前授权资料如下，可在下方重新上传新的授权委托书并修改授权期限截止日期。营业执照仅供查看，不在此处更新。'
+        : '已存在资料，已有部分仅展示，不允许在此处覆盖上传；缺失部分可继续补充。';
+    return `<div class="alert alert-info mb-0"><div class="fw-bold mb-2">${message}</div>${businessLicenseLink}${authorizationLink}${expiresOn}</div>`;
 }
 
 async function loadPrincipalDocumentRecord() {
-    const platformCode = document.getElementById('inputPlatform').value;
-    const usedCompany = document.getElementById('inputUsedCompany').value;
-    const accountUser = document.getElementById('inputAccount').value.trim();
-    const principalName = document.getElementById('inputPrincipal').value.trim();
+    const snapshot = getPrincipalDocumentLookupState();
+    const { platformCode, usedCompany, accountUser, principalName } = snapshot;
     const existingBox = document.getElementById('principalDocsExisting');
     const businessLicenseSection = document.getElementById('principalBusinessLicenseSection');
     const authorizationSection = document.getElementById('principalAuthorizationSection');
+    const isUpdate = snapshot.mode === 'update';
+    const requestToken = ++principalModalState.documentRequestToken;
 
     existingBox.style.display = 'none';
     existingBox.innerHTML = '';
-    businessLicenseSection.style.display = '';
+    businessLicenseSection.style.display = isUpdate ? 'none' : '';
     authorizationSection.style.display = '';
 
     if (!platformCode || !usedCompany || !accountUser || !principalName) {
@@ -258,13 +322,19 @@ async function loadPrincipalDocumentRecord() {
     try {
         const res = await fetch(`/api/principals/document?${query.toString()}`);
         const data = await res.json();
+        if (requestToken !== principalModalState.documentRequestToken || !isPrincipalDocumentLookupStateCurrent(snapshot)) {
+            return;
+        }
         if (data.success && data.data) {
-            existingBox.innerHTML = getPrincipalDocViewHtml(data.data);
+            existingBox.innerHTML = getPrincipalDocViewHtml(data.data, snapshot.mode);
             existingBox.style.display = '';
-            businessLicenseSection.style.display = data.data.business_license_locked ? 'none' : '';
-            authorizationSection.style.display = data.data.authorization_locked ? 'none' : '';
+            businessLicenseSection.style.display = isUpdate ? 'none' : (data.data.business_license_locked ? 'none' : '');
+            authorizationSection.style.display = isUpdate ? '' : (data.data.authorization_locked ? 'none' : '');
         }
     } catch (e) {
+        if (requestToken !== principalModalState.documentRequestToken || !isPrincipalDocumentLookupStateCurrent(snapshot)) {
+            return;
+        }
         console.error('加载被代理人资料失败', e);
     }
 }
@@ -328,6 +398,10 @@ function onPlatformChange() {
 }
 
 function onPrincipalFormSelectionChange() {
+    if (principalModalState.mode === 'update') {
+        loadPrincipalDocumentRecord();
+        return;
+    }
     onPlatformChange();
 }
 
@@ -335,7 +409,7 @@ async function loadPrincipals() {
     const res = await fetch('/api/principals/list');
     const data = await res.json();
     if (!data.success) {
-        document.getElementById('principalsTableBody').innerHTML = '<tr><td colspan="8" class="text-center text-danger py-4">加载失败</td></tr>';
+        document.getElementById('principalsTableBody').innerHTML = '<tr><td colspan="9" class="text-center text-danger py-4">加载失败</td></tr>';
         return;
     }
     allPrincipals = data.data;
@@ -380,10 +454,21 @@ function renderTable(principals) {
         const authorizationExpiresCell = item.authorization_expires_on
             ? escapeHtml(item.authorization_expires_on)
             : '<span class="text-muted">-</span>';
+        const updateRecordPayload = encodeURIComponent(JSON.stringify({
+            platform_code: item.platform_code,
+            used_company: item.used_company,
+            account_user: item.account_user,
+            principal_name: item.principal_name,
+            authorization_expires_on: item.authorization_expires_on || '',
+        }));
+        const actionCell = item.can_update
+            ? `<button type="button" class="btn btn-sm btn-outline-primary" onclick='openUpdateModal("${updateRecordPayload}")'>更新授权委托书</button>`
+            : '<span class="text-muted">-</span>';
         html += `<td>${escapeHtml(item.principal_name)}</td>`;
         html += `<td>${businessLicenseCell}</td>`;
         html += `<td>${authorizationCell}</td>`;
         html += `<td>${authorizationExpiresCell}</td>`;
+        html += `<td>${actionCell}</td>`;
         tr.innerHTML = html;
         tbody.appendChild(tr);
     });
@@ -402,17 +487,10 @@ function showToast(message, isError = false) {
     }, 5000);
 }
 
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
 function fuzzyMatch(text, keyword) {
     if (!keyword) return true;
     text = text.toLowerCase();
     keyword = keyword.toLowerCase();
-    // 简单模糊：关键词所有字符按顺序出现在文本中
     let ki = 0;
     for (let i = 0; i < text.length && ki < keyword.length; i++) {
         if (text[i] === keyword[ki]) ki++;
@@ -420,24 +498,47 @@ function fuzzyMatch(text, keyword) {
     return ki === keyword.length;
 }
 
-function openAddModal() {
+function resetPrincipalModalForm() {
+    principalModalState.documentRequestToken += 1;
     document.getElementById('inputUsedCompany').value = '和晞科技';
     document.getElementById('inputPlatform').value = 'uc';
+    document.getElementById('inputAccount').value = '';
     document.getElementById('inputPrincipal').value = '';
     document.getElementById('inputBusinessLicense').value = '';
     document.getElementById('inputAuthorization').value = '';
     document.getElementById('inputAuthorizationExpiresOn').value = '';
-    clearFileNameError('inputBusinessLicense', 'businessLicenseFilenameError');
-    clearFileNameError('inputAuthorization', 'authorizationFilenameError');
     document.getElementById('principalDocsExisting').style.display = 'none';
     document.getElementById('principalDocsExisting').innerHTML = '';
     document.getElementById('principalBusinessLicenseSection').style.display = '';
     document.getElementById('principalAuthorizationSection').style.display = '';
+    clearPrincipalFileErrors();
+}
+
+function openAddModal() {
+    setPrincipalModalMode('add');
+    resetPrincipalModalForm();
     onPlatformChange();
     addModal.show();
 }
 
-async function submitAddPrincipal() {
+function openUpdateModal(encodedRecord) {
+    const record = JSON.parse(decodeURIComponent(encodedRecord));
+    setPrincipalModalMode('update', record);
+    resetPrincipalModalForm();
+
+    document.getElementById('inputUsedCompany').value = record.used_company || '';
+    document.getElementById('inputPlatform').value = record.platform_code || '';
+    onPlatformChange();
+    document.getElementById('inputAccount').value = record.account_user || '';
+    document.getElementById('inputPrincipal').value = record.principal_name || '';
+    document.getElementById('inputAuthorizationExpiresOn').value = record.authorization_expires_on || '';
+    document.getElementById('principalBusinessLicenseSection').style.display = 'none';
+    document.getElementById('principalAuthorizationSection').style.display = '';
+    loadPrincipalDocumentRecord();
+    addModal.show();
+}
+
+async function submitPrincipalForm() {
     const used_company = document.getElementById('inputUsedCompany').value;
     const platform_code = document.getElementById('inputPlatform').value;
     const account_user = document.getElementById('inputAccount').value.trim();
@@ -447,6 +548,7 @@ async function submitAddPrincipal() {
     const authorization_expires_on = document.getElementById('inputAuthorizationExpiresOn').value;
     const businessLicenseVisible = document.getElementById('principalBusinessLicenseSection').style.display !== 'none';
     const authorizationVisible = document.getElementById('principalAuthorizationSection').style.display !== 'none';
+    const isUpdate = principalModalState.mode === 'update';
 
     if (!used_company || !platform_code || !account_user || !principal_name) {
         showToast('请填写所有必填项', true);
@@ -456,8 +558,16 @@ async function submitAddPrincipal() {
         showToast('请上传被代理人营业执照', true);
         return;
     }
-    if (authorizationVisible && (!authorization_file || !authorization_expires_on)) {
-        showToast('请补全授权委托书和授权期限截止日期', true);
+    if (authorizationVisible && !authorization_expires_on) {
+        showToast('请填写授权期限截止日期', true);
+        return;
+    }
+    if (isUpdate && !authorization_file) {
+        showToast('更新时必须上传新的授权委托书', true);
+        return;
+    }
+    if (!isUpdate && authorizationVisible && !authorization_file) {
+        showToast('请上传授权委托书', true);
         return;
     }
 
@@ -470,7 +580,7 @@ async function submitAddPrincipal() {
         used_company,
         authorization_expires_on,
         businessLicenseVisible ? business_license_file : null,
-        authorizationVisible ? authorization_file : null,
+        authorization_file || null,
     );
     if (filenameError) {
         showToast(filenameError, true);
@@ -486,22 +596,26 @@ async function submitAddPrincipal() {
     if (authorization_file) formData.append('authorization_file', authorization_file);
     if (authorization_expires_on) formData.append('authorization_expires_on', authorization_expires_on);
 
-    const res = await fetch('/api/principals/add', {
+    const endpoint = isUpdate ? '/api/principals/update' : '/api/principals/add';
+    const actionLabel = isUpdate ? '更新' : '添加';
+    const res = await fetch(endpoint, {
         method: 'POST',
         body: formData
     });
     const data = await res.json();
 
     if (!data.success) {
-        showToast('添加失败：' + data.error, true);
+        showToast(`${actionLabel}失败：` + data.error, true);
         return;
     }
 
-    showToast('添加成功');
+    showToast(`${actionLabel}成功`);
     addModal.hide();
 }
 
 document.getElementById('addModal').addEventListener('hidden.bs.modal', () => {
+    setPrincipalModalMode('add');
+    resetPrincipalModalForm();
     loadPrincipals();
 });
 
