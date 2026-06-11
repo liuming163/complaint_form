@@ -703,6 +703,9 @@ def validate_work_name_format(work_name):
     return None
 
 
+WORK_ASSET_MAX_SIZE = 5 * 1024 * 1024
+
+
 def validate_work_asset_filenames(work_name, proof_file=None, other_proof_files=None):
     normalized_work_name = normalize_filename_part(work_name)
     display_work_name = normalize_company_name(work_name)
@@ -720,6 +723,26 @@ def validate_work_asset_filenames(work_name, proof_file=None, other_proof_files=
         pattern = re.compile(rf'^其他证明_{re.escape(normalized_work_name)}_[0-9]+$')
         if not pattern.match(other_stem):
             return f'其他证明文件名不符合要求，请上传命名为”其他证明_{display_work_name}_序号.文件后缀”的文件'
+
+    return None
+
+
+def validate_work_asset_file_sizes(proof_file=None, other_proof_files=None):
+    files_to_check = []
+    if proof_file and proof_file.filename:
+        files_to_check.append(('作品权属文件', proof_file))
+
+    for idx, file_storage in enumerate(other_proof_files or [], start=1):
+        if file_storage and file_storage.filename:
+            files_to_check.append((f'其他证明文件#{idx}', file_storage))
+
+    for label, file_storage in files_to_check:
+        current_pos = file_storage.stream.tell()
+        file_storage.stream.seek(0, os.SEEK_END)
+        size = file_storage.stream.tell()
+        file_storage.stream.seek(current_pos)
+        if size > WORK_ASSET_MAX_SIZE:
+            return f'{label}不能超过5MB'
 
     return None
 
@@ -1629,6 +1652,10 @@ def works_add():
         return jsonify({'success': False, 'error': '请上传作品权属文件'}), 400
     if len(other_files) > 2:
         return jsonify({'success': False, 'error': '其他证明文件最多上传2个'}), 400
+
+    size_error = validate_work_asset_file_sizes(proof_file=proof_file, other_proof_files=other_files)
+    if size_error:
+        return jsonify({'success': False, 'error': size_error}), 400
 
     filename_error = validate_work_asset_filenames(work_name, proof_file=proof_file, other_proof_files=other_files)
     if filename_error:

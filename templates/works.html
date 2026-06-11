@@ -123,13 +123,13 @@
                 <div class="mb-3">
                     <label class="form-label">请上传作品权属（此处上传的文件用于投诉时的证明文件） </label>
                     <input type="file" class="form-control" id="inputProofFile" accept=".png,.jpg,.jpeg,.bmp,.pdf">
-                    <div class="form-text">上传文件原始名称需以：证明文件_作品名称 开头，例如：证明文件_铳火.png、证明文件_铳火_file.jpg</div>
+                    <div class="form-text">上传文件原始名称需以：证明文件_作品名称 开头，例如：证明文件_铳火.png、证明文件_铳火_file.jpg；单文件不得超过5MB</div>
                     <div class="invalid-feedback d-block" id="proofFileNameError" style="display:none !important;"></div>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">是否还有其他证明文件（最多2个，此处上传的文件用于投诉时的其他证明，除两执照一委托外）</label>
                     <input type="file" class="form-control" id="inputOtherProofFiles" accept=".png,.jpg,.jpeg,.bmp,.pdf" multiple>
-                    <div class="form-text">上传文件原始名称需符合：其他证明_作品名称_序号.xxx，例如：其他证明_铳火_1.png</div>
+                    <div class="form-text">上传文件原始名称需符合：其他证明_作品名称_序号.xxx，例如：其他证明_铳火_1.png；单文件不得超过5MB</div>
                     <div class="invalid-feedback d-block" id="otherProofFilesNameError" style="display:none !important;"></div>
                 </div>
             </div>
@@ -175,6 +175,7 @@ let fuse = null;
 let debounceTimer = null;
 let addWorkModal = null;
 let otherProofModal = null;
+const WORK_FILE_SIZE_LIMIT = 5 * 1024 * 1024;
 
 function normalizeWorkFilenamePart(value) {
     return (value || '').trim().replace(/（/g, '(').replace(/）/g, ')').replace(/[/:*?"<>|\\：＊？＂＜＞｜＼／]/g, '');
@@ -276,7 +277,12 @@ function validateProofFileImmediately() {
     const workName = document.getElementById('inputWorkName').value.trim();
     const proofFile = document.getElementById('inputProofFile').files[0];
     clearWorkFileNameError('inputProofFile', 'proofFileNameError');
-    if (!proofFile || !workName) return true;
+    if (!proofFile) return true;
+    if (proofFile.size > WORK_FILE_SIZE_LIMIT) {
+        showWorkFileNameError('inputProofFile', 'proofFileNameError', '作品权属文件不能超过5MB');
+        return false;
+    }
+    if (!workName) return true;
     const msg = validateWorkAssetFilenames(workName, proofFile, []);
     if (msg) {
         showWorkFileNameError('inputProofFile', 'proofFileNameError', msg);
@@ -289,7 +295,13 @@ function validateOtherProofFilesImmediately() {
     const workName = document.getElementById('inputWorkName').value.trim();
     const otherFiles = Array.from(document.getElementById('inputOtherProofFiles').files || []);
     clearWorkFileNameError('inputOtherProofFiles', 'otherProofFilesNameError');
-    if (!otherFiles.length || !workName) return true;
+    if (!otherFiles.length) return true;
+    const oversizeFile = otherFiles.find(file => file.size > WORK_FILE_SIZE_LIMIT);
+    if (oversizeFile) {
+        showWorkFileNameError('inputOtherProofFiles', 'otherProofFilesNameError', `其他证明文件不能超过5MB：${oversizeFile.name}`);
+        return false;
+    }
+    if (!workName) return true;
     const msg = validateWorkAssetFilenames(workName, null, otherFiles);
     if (msg) {
         showWorkFileNameError('inputOtherProofFiles', 'otherProofFilesNameError', msg);
