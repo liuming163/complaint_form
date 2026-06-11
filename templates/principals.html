@@ -96,7 +96,7 @@
                     <div class="mb-3">
                         <label class="form-label">上传被代理人营业执照</label>
                         <input type="file" class="form-control" id="inputBusinessLicense" accept=".png,.jpg,.jpeg,.bmp,.pdf">
-                        <div class="form-text">上传文件原始名称需符合：营业执照_被代理人信息.xxx</div>
+                        <div class="form-text">上传文件原始名称需符合：营业执照_被代理人信息.xxx；单文件不得超过5MB</div>
                         <div class="invalid-feedback d-block" id="businessLicenseFilenameError" style="display:none !important;"></div>
                     </div>
                 </div>
@@ -104,7 +104,7 @@
                     <div class="mb-3">
                         <label class="form-label">上传授权委托书</label>
                         <input type="file" class="form-control" id="inputAuthorization" accept=".png,.jpg,.jpeg,.bmp,.pdf">
-                        <div class="form-text" id="authorizationUploadHint">上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx</div>
+                        <div class="form-text" id="authorizationUploadHint">上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx；单文件不得超过5MB</div>
                         <div class="invalid-feedback d-block" id="authorizationFilenameError" style="display:none !important;"></div>
                     </div>
                     <div class="mb-3">
@@ -127,6 +127,7 @@ let allPrincipals = [];
 let allAccounts = [];
 let debounceTimer = null;
 let addModal = null;
+const PRINCIPAL_FILE_SIZE_LIMIT = 5 * 1024 * 1024;
 const principalModalState = {
     mode: 'add',
     currentRecord: null,
@@ -230,7 +231,7 @@ function setPrincipalModalMode(mode, record = null) {
     if (mode === 'update') {
         title.innerHTML = '<i class="fas fa-pen me-2"></i>更新授权委托书';
         submitButton.textContent = '确认更新';
-        hint.textContent = '更新时必须上传新的授权委托书，文件名需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx';
+        hint.textContent = '更新时必须上传新的授权委托书，文件名需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx；单文件不得超过5MB';
         usedCompanyInput.disabled = true;
         platformInput.disabled = true;
         accountInput.disabled = true;
@@ -238,7 +239,7 @@ function setPrincipalModalMode(mode, record = null) {
     } else {
         title.innerHTML = '<i class="fas fa-plus me-2"></i>添加被代理人';
         submitButton.textContent = '确认添加';
-        hint.textContent = '上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx';
+        hint.textContent = '上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx；单文件不得超过5MB';
         usedCompanyInput.disabled = false;
         platformInput.disabled = false;
         accountInput.disabled = false;
@@ -251,7 +252,12 @@ function validateBusinessLicenseFileImmediately() {
     const usedCompany = document.getElementById('inputUsedCompany').value;
     const file = document.getElementById('inputBusinessLicense').files[0];
     clearFileNameError('inputBusinessLicense', 'businessLicenseFilenameError');
-    if (!file || !principalName) return true;
+    if (!file) return true;
+    if (file.size > PRINCIPAL_FILE_SIZE_LIMIT) {
+        showFileNameError('inputBusinessLicense', 'businessLicenseFilenameError', '被代理人营业执照文件不能超过5MB');
+        return false;
+    }
+    if (!principalName) return true;
     const msg = validatePrincipalUploadFilenames(principalName, usedCompany, '', file, null);
     if (msg) {
         showFileNameError('inputBusinessLicense', 'businessLicenseFilenameError', msg);
@@ -266,7 +272,12 @@ function validateAuthorizationFileImmediately() {
     const expires = document.getElementById('inputAuthorizationExpiresOn').value;
     const file = document.getElementById('inputAuthorization').files[0];
     clearFileNameError('inputAuthorization', 'authorizationFilenameError');
-    if (!file || !principalName || !usedCompany || !expires) return true;
+    if (!file) return true;
+    if (file.size > PRINCIPAL_FILE_SIZE_LIMIT) {
+        showFileNameError('inputAuthorization', 'authorizationFilenameError', '授权委托书文件不能超过5MB');
+        return false;
+    }
+    if (!principalName || !usedCompany || !expires) return true;
     const msg = validatePrincipalUploadFilenames(principalName, usedCompany, expires, null, file);
     if (msg) {
         showFileNameError('inputAuthorization', 'authorizationFilenameError', msg);

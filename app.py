@@ -599,6 +599,9 @@ def save_named_upload(file_storage, target_dir, target_name_without_ext):
     return filename
 
 
+PRINCIPAL_UPLOAD_MAX_SIZE = 5 * 1024 * 1024
+
+
 def validate_principal_upload_filenames(principal_name, used_company, authorization_expires_on,
                                         business_license_file=None, authorization_file=None):
     normalized_principal = normalize_company_name(principal_name)
@@ -616,6 +619,24 @@ def validate_principal_upload_filenames(principal_name, used_company, authorizat
         expected_authorization_stem = f'授权委托书_{normalized_principal}_{normalized_used_company}_截止日期{expires_yyyymmdd}'
         if authorization_stem != expected_authorization_stem:
             return f'授权委托书文件名不符合要求，请上传命名为“{expected_authorization_stem}.文件后缀”的文件'
+
+    return None
+
+
+def validate_principal_upload_file_sizes(business_license_file=None, authorization_file=None):
+    files_to_check = []
+    if business_license_file and business_license_file.filename:
+        files_to_check.append(('被代理人营业执照文件', business_license_file))
+    if authorization_file and authorization_file.filename:
+        files_to_check.append(('授权委托书文件', authorization_file))
+
+    for label, file_storage in files_to_check:
+        current_pos = file_storage.stream.tell()
+        file_storage.stream.seek(0, os.SEEK_END)
+        size = file_storage.stream.tell()
+        file_storage.stream.seek(current_pos)
+        if size > PRINCIPAL_UPLOAD_MAX_SIZE:
+            return f'{label}不能超过5MB'
 
     return None
 
@@ -1398,6 +1419,13 @@ def principals_add():
             else:
                 authorization_file = None
 
+            size_error = validate_principal_upload_file_sizes(
+                business_license_file=business_license_file,
+                authorization_file=authorization_file,
+            )
+            if size_error:
+                return jsonify({'success': False, 'error': size_error}), 400
+
             filename_error = validate_principal_upload_filenames(
                 normalized_principal_name,
                 normalized_used_company,
@@ -1525,6 +1553,12 @@ def principals_update():
         }).first()
         if not principal_exists:
             return jsonify({'success': False, 'error': '被代理人信息不存在'}), 404
+
+    size_error = validate_principal_upload_file_sizes(
+        authorization_file=authorization_file,
+    )
+    if size_error:
+        return jsonify({'success': False, 'error': size_error}), 400
 
     filename_error = validate_principal_upload_filenames(
         normalized_principal_name,
