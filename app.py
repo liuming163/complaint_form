@@ -636,6 +636,55 @@ def get_authorization_expiry_alerts(days_threshold=30):
     return alerts
 
 
+def check_principal_authorization_blocked(principal_name, platform_code='uc', account_user=''):
+    """检查所选被代理人的授权是否已过期 / 缺少截止日期。
+    返回错误提示文案（需拦截）或 None（可正常投诉）。"""
+    normalized_principal = normalize_company_name(principal_name)
+    if not normalized_principal:
+        return None
+
+    params = {
+        'principal_name': normalized_principal,
+        'platform_code': platform_code,
+    }
+    account_filter = ''
+    if account_user:
+        account_filter = 'AND account_user = :account_user'
+        params['account_user'] = account_user
+
+    with get_db_session() as session:
+        row = session.execute(text(f"""
+            SELECT authorization_expires_on
+            FROM principals
+            WHERE principal_name = :principal_name
+              AND platform_code = :platform_code
+              {account_filter}
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """), params).mappings().first()
+
+    if not row:
+        return None
+
+    expires_value = row.get('authorization_expires_on')
+    if not expires_value:
+        return (f'所选被代理人「{normalized_principal}」未设置授权截止日期，无法确认授权是否有效，'
+                f'暂不能发起投诉。请先到「被代理人信息管理」补充授权委托书及截止日期后再试。')
+
+    try:
+        expires_date = expires_value.date() if isinstance(expires_value, datetime) else datetime.fromisoformat(str(expires_value)).date()
+    except Exception:
+        return (f'所选被代理人「{normalized_principal}」未设置授权截止日期，无法确认授权是否有效，'
+                f'暂不能发起投诉。请先到「被代理人信息管理」补充授权委托书及截止日期后再试。')
+
+    delta_days = (expires_date - datetime.now().date()).days
+    if delta_days < 0:
+        return (f'所选被代理人「{normalized_principal}」的授权委托书已于 {expires_date.isoformat()} 过期'
+                f'（已过期 {abs(delta_days)} 天），无法发起投诉。请先到「被代理人信息管理」更新授权委托书后再试。')
+
+    return None
+
+
 def save_named_upload(file_storage, target_dir, target_name_without_ext):
     if not file_storage or not file_storage.filename:
         return None
@@ -1840,6 +1889,15 @@ def submit_uc_form():
 
     if missing_fields:
         return jsonify({'success': False, 'error': '缺少必填项：' + '、'.join(missing_fields)}), 400
+
+    # 授权拦截：所选被代理人授权已过期 / 缺少截止日期时，禁止投诉
+    auth_block_error = check_principal_authorization_blocked(
+        data.get('principal', '').strip(),
+        platform_code='uc',
+        account_user=data.get('collect_account', '').strip(),
+    )
+    if auth_block_error:
+        return jsonify({'success': False, 'error': auth_block_error}), 400
 
     submission_id, submission_dir = create_submission_dir()
 

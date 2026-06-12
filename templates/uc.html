@@ -42,6 +42,7 @@
                 <option value="">请先选择采集账号</option>
             </select>
             <div class="form-text">选择本次投诉实际使用的被代理人信息，上传自定义模版时会校验是否一致</div>
+            <div class="invalid-feedback d-block" id="currentPrincipalAuthorizationError" style="display:none !important;"></div>
         </div>
     </div>
 
@@ -251,6 +252,8 @@
 </div>
 
 <script>
+window.currentPrincipalAuthByName = {};
+
 // 身份切换
 function onIdentityChange() {
     const isAgent = document.getElementById('id_agent').checked;
@@ -476,6 +479,8 @@ async function loadPrincipalsForAccount(accountUser) {
     const previousCurrentPrincipalValue = currentPrincipalSelect.value;
     principalSelect.innerHTML = '<option value="">加载中...</option>';
     currentPrincipalSelect.innerHTML = '<option value="">加载中...</option>';
+    window.currentPrincipalAuthByName = {};
+    setCurrentPrincipalAuthorizationError('');
     try {
         const res = await fetch(`/api/principals/list?platform_code=uc&account_user=${encodeURIComponent(accountUser)}`);
         const data = await res.json();
@@ -494,6 +499,7 @@ async function loadPrincipalsForAccount(accountUser) {
                 currentOpt.value = item.principal_name;
                 currentOpt.textContent = item.principal_name;
                 currentPrincipalSelect.appendChild(currentOpt);
+                window.currentPrincipalAuthByName[item.principal_name] = item.authorization_expires_on || '';
             });
 
             if (previousPrincipalValue && principalValues.includes(previousPrincipalValue)) {
@@ -502,6 +508,7 @@ async function loadPrincipalsForAccount(accountUser) {
             if (previousCurrentPrincipalValue && principalValues.includes(previousCurrentPrincipalValue)) {
                 currentPrincipalSelect.value = previousCurrentPrincipalValue;
             }
+            checkCurrentPrincipalAuthorization(false);
         } else {
             principalSelect.innerHTML += '<option value="" disabled>暂无可用被代理人，请先添加</option>';
             currentPrincipalSelect.innerHTML += '<option value="" disabled>暂无可用被代理人，请先添加</option>';
@@ -510,6 +517,75 @@ async function loadPrincipalsForAccount(accountUser) {
         principalSelect.innerHTML = '<option value="">加载失败</option>';
         currentPrincipalSelect.innerHTML = '<option value="">加载失败</option>';
     }
+}
+
+function parseAuthorizationDate(value) {
+    if (!value) return null;
+    const text = String(value).slice(0, 10);
+    const parts = text.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+}
+
+function formatDateForAuthorization(value) {
+    const date = parseAuthorizationDate(value);
+    if (!date) return value || '';
+    const pad = n => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function getAuthorizationDaysDelta(value) {
+    const target = parseAuthorizationDate(value);
+    if (!target) return null;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return Math.round((target - today) / (24 * 60 * 60 * 1000));
+}
+
+function setCurrentPrincipalAuthorizationError(message) {
+    const select = document.getElementById('currentPrincipalSelect');
+    const errorEl = document.getElementById('currentPrincipalAuthorizationError');
+    if (message) {
+        if (select) select.classList.add('is-invalid');
+        if (errorEl) {
+            errorEl.textContent = message;
+            errorEl.style.display = 'block';
+        }
+    } else {
+        if (select) select.classList.remove('is-invalid');
+        if (errorEl) {
+            errorEl.textContent = '';
+            errorEl.style.display = 'none';
+        }
+    }
+}
+
+function checkCurrentPrincipalAuthorization(showAlert = false) {
+    const select = document.getElementById('currentPrincipalSelect');
+    const principalName = select?.value?.trim() || '';
+    if (!principalName) {
+        setCurrentPrincipalAuthorizationError('');
+        return {blocked: false, message: ''};
+    }
+
+    const expiresOn = window.currentPrincipalAuthByName?.[principalName] || '';
+    let message = '';
+    if (!expiresOn) {
+        message = `所选被代理人「${principalName}」未设置授权截止日期，无法确认授权是否有效，暂不能发起投诉。请先到「被代理人信息管理」补充授权委托书及截止日期后再试。`;
+    } else {
+        const deltaDays = getAuthorizationDaysDelta(expiresOn);
+        if (deltaDays === null) {
+            message = `所选被代理人「${principalName}」未设置授权截止日期，无法确认授权是否有效，暂不能发起投诉。请先到「被代理人信息管理」补充授权委托书及截止日期后再试。`;
+        } else if (deltaDays < 0) {
+            message = `所选被代理人「${principalName}」的授权委托书已于 ${formatDateForAuthorization(expiresOn)} 过期（已过期 ${Math.abs(deltaDays)} 天），无法发起投诉。请先到「被代理人信息管理」更新授权委托书后再试。`;
+        }
+    }
+
+    setCurrentPrincipalAuthorizationError(message);
+    if (message && showAlert) {
+        alert(message);
+    }
+    return {blocked: Boolean(message), message};
 }
 
 
@@ -892,6 +968,11 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
         return;
     }
 
+    const authorizationValidation = checkCurrentPrincipalAuthorization(true);
+    if (authorizationValidation.blocked) {
+        return;
+    }
+
     // 检查是否有多作品数据
     if (!window.customTemplateWorks || window.customTemplateWorks.length === 0) {
         alert('请先上传自定义模版');
@@ -1035,7 +1116,7 @@ function validateAccountInfo() {
     [collectAccount, cookie, principal, currentPrincipal, description].forEach(field => {
         if (field) {
             field.classList.remove('is-invalid');
-            const feedback = field.parentNode.querySelector('.invalid-feedback');
+            const feedback = field.parentNode.querySelector('.invalid-feedback:not(#currentPrincipalAuthorizationError)');
             if (feedback) feedback.remove();
         }
     });
@@ -1178,6 +1259,7 @@ let currentTemplateId = null;
 window.currentTemplatePrincipal = null;
 
 document.getElementById('currentPrincipalSelect')?.addEventListener('change', function() {
+    checkCurrentPrincipalAuthorization(true);
     validateCurrentPrincipalAgainstTemplate(true);
 });
 
