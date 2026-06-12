@@ -392,7 +392,7 @@ def dequeue_unified_task(timeout=0):
 @app.route('/')
 @login_required
 def index():
-    return render_template('index.html', is_index=True)
+    return render_template('index.html', is_index=True, login_time_marker=str(session.get('login_time') or ''))
 
 
 @app.route('/works')
@@ -587,6 +587,53 @@ def get_principal_document_record(platform_code, used_company, principal_name):
         'authorization_locked': bool(row.get('authorization_filename')),
     }
     return data
+
+
+def get_authorization_expiry_alerts(days_threshold=30):
+    with get_db_session() as session:
+        rows = session.execute(text("""
+            SELECT DISTINCT principal_name, authorization_expires_on
+            FROM principals
+            WHERE authorization_filename IS NOT NULL
+              AND authorization_filename <> ''
+              AND authorization_expires_on IS NOT NULL
+              AND principal_name IS NOT NULL
+              AND principal_name <> ''
+            ORDER BY authorization_expires_on ASC, principal_name ASC
+        """)).mappings().all()
+
+    today = datetime.now().date()
+    alerts = []
+    for row in rows:
+        principal_name = normalize_company_name(row.get('principal_name'))
+        expires_value = row.get('authorization_expires_on')
+        if not principal_name or not expires_value:
+            continue
+
+        try:
+            expires_date = expires_value.date() if isinstance(expires_value, datetime) else datetime.fromisoformat(str(expires_value)).date()
+        except Exception:
+            continue
+
+        delta_days = (expires_date - today).days
+        if delta_days < 0:
+            alerts.append({
+                'principal_name': principal_name,
+                'expires_on': expires_date.isoformat(),
+                'days': abs(delta_days),
+                'status': 'expired',
+                'message': f'被代理人信息管理页面中，{principal_name}的授权委托书已过期{abs(delta_days)}天，请及时更新',
+            })
+        elif delta_days <= days_threshold:
+            alerts.append({
+                'principal_name': principal_name,
+                'expires_on': expires_date.isoformat(),
+                'days': delta_days,
+                'status': 'expiring',
+                'message': f'被代理人信息管理页面中，{principal_name}的授权委托书将于{delta_days}天到期，请及时更新',
+            })
+
+    return alerts
 
 
 def save_named_upload(file_storage, target_dir, target_name_without_ext):
@@ -1327,6 +1374,12 @@ def principals_list():
                 'rowspan': 1,
             })
     return jsonify({'success': True, 'data': results})
+
+
+@app.route('/api/principals/authorization_alerts')
+@login_required
+def principal_authorization_alerts():
+    return jsonify({'success': True, 'data': get_authorization_expiry_alerts()})
 
 
 @app.route('/api/principals/document', methods=['GET'])

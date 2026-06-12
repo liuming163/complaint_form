@@ -110,12 +110,30 @@
     </div>
 </div>
 
+<div class="modal fade" id="authorizationExpiryModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fas fa-exclamation-circle me-2 text-warning"></i>授权委托书到期提醒</div>
+            </div>
+            <div class="modal-body">
+                <div id="authorizationExpiryAlertList" class="d-flex flex-column gap-2"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">确认</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/auth.js') }}"></script>
 <script>
 
 // 全局队列数据，用于跨平台计算预估完成时间
 let globalQueue = [];
+let authorizationExpiryModal = null;
+const authorizationExpiryLoginMarker = {{ login_time_marker | tojson }};
 
 function getEstimatedTime(taskId) {
     if (!globalQueue.length) return '-';
@@ -148,6 +166,39 @@ async function loadGlobalQueue() {
         }
     } catch (e) {
         globalQueue = [];
+    }
+}
+
+function getAuthorizationExpiryStorageKey() {
+    return authorizationExpiryLoginMarker ? `authorization-expiry-alert-shown:${authorizationExpiryLoginMarker}` : '';
+}
+
+async function checkAuthorizationExpiryAlertsOnce() {
+    const storageKey = getAuthorizationExpiryStorageKey();
+    if (!storageKey || localStorage.getItem(storageKey) === '1') {
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/principals/authorization_alerts');
+        const data = await resp.json();
+        if (!data.success) {
+            return;
+        }
+
+        localStorage.setItem(storageKey, '1');
+
+        if (!data.data || data.data.length === 0) {
+            return;
+        }
+
+        const list = document.getElementById('authorizationExpiryAlertList');
+        list.innerHTML = data.data.map(item => `
+            <div class="alert alert-warning mb-0 py-2 px-3">${item.message}</div>
+        `).join('');
+        authorizationExpiryModal.show();
+    } catch (e) {
+        console.error('加载授权委托书到期提醒失败', e);
     }
 }
 
@@ -285,9 +336,13 @@ function refreshUcStatus() {
 
 // 页面加载时自动刷新UC状态
 document.addEventListener('DOMContentLoaded', async function() {
+    authorizationExpiryModal = new bootstrap.Modal(document.getElementById('authorizationExpiryModal'));
     await loadGlobalQueue();
     refreshUcStatus();
     refreshBaiduStatus();
+    setTimeout(() => {
+        checkAuthorizationExpiryAlertsOnce();
+    }, 1000);
 });
 
 function refreshBaiduStatus() {
