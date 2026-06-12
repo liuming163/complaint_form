@@ -2241,18 +2241,18 @@ def upload_custom_template():
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': 'Sheet2 A列（侵权链接）格式错误：' + '、'.join(invalid_rows) + '，必须以 http:// 或 https:// 开头'}), 400
 
-        # 校验同一作品下链接地址是否重复
+        # 校验链接地址是否重复（全局判重，只要链接地址相同即视为重复，与作品名称无关）
         uc_link_positions = {}
         for i, row in enumerate(excel_rows, start=2):
-            key = (row.get('作品名称', ''), row.get('侵权链接', ''))
-            if key[1]:
+            key = row.get('侵权链接', '')
+            if key:
                 if key not in uc_link_positions:
                     uc_link_positions[key] = []
                 uc_link_positions[key].append(i)
         uc_duplicate_errors = []
-        for (wn, url), rows in uc_link_positions.items():
+        for url, rows in uc_link_positions.items():
             if len(rows) > 1:
-                uc_duplicate_errors.append(f'第{rows[0]}行与第{rows[1]}行链接地址重复（作品：{wn}）')
+                uc_duplicate_errors.append(f'第{rows[0]}行与第{rows[1]}行链接地址重复')
         if uc_duplicate_errors:
             shutil.rmtree(template_dir, ignore_errors=True)
             return jsonify({'success': False, 'error': '侵权链接中存在重复，请删除后重新上传：\n' + '\n'.join(uc_duplicate_errors[:5])}), 400
