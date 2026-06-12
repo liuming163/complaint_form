@@ -3285,17 +3285,17 @@ def baidu_upload_template():
     if not all_links:
         return jsonify({'success': False, 'error': '"侵权链接"中没有有效数据'}), 400
 
-    # 校验同一作品下链接地址是否重复
-    link_positions = {}  # {(work_name, url): [行号列表]}
+    # 校验链接地址是否重复（全局判重，只要链接地址相同即视为重复，与作品名称无关）
+    link_positions = {}  # {url: [行号列表]}
     for idx, link in enumerate(all_links):
-        key = (link['work_name'], link['link_url'])
+        key = link['link_url']
         if key not in link_positions:
             link_positions[key] = []
         link_positions[key].append(idx + 2)  # +2 因为第1行是标题，idx从0开始
     duplicate_errors = []
-    for (wn, url), rows in link_positions.items():
+    for url, rows in link_positions.items():
         if len(rows) > 1:
-            duplicate_errors.append(f'第{rows[0]}行与第{rows[1]}行链接地址重复（作品：{wn}）')
+            duplicate_errors.append(f'第{rows[0]}行与第{rows[1]}行链接地址重复')
     if duplicate_errors:
         return jsonify({'success': False, 'error': '侵权链接中存在重复，请删除后重新上传：\n' + '\n'.join(duplicate_errors[:5])}), 400
 
