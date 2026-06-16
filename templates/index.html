@@ -144,7 +144,8 @@ function getEstimatedTime(taskId) {
     let cumulativeSeconds = 0;
     for (let i = 0; i <= idx; i++) {
         const q = globalQueue[i];
-        const secPerBatch = q.platform_code === 'baidu' ? 20 : 50;
+        // 每批次预估耗时：百度 20 秒；UC 按每批 2 分钟（120 秒）估算
+        const secPerBatch = q.platform_code === 'baidu' ? 20 : 120;
         cumulativeSeconds += (q.batch_count || 1) * secPerBatch;
     }
 
