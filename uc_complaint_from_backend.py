@@ -87,11 +87,13 @@ def save_task_result(task_id, result):
     print(f"📁 任务结果已保存到: {result_file}")
 
 
-def update_batch_result(result, batch_no, status, error=None):
+def update_batch_result(result, batch_no, status, error=None, complaint_number=None):
     for batch in result["batches"]:
         if batch["batch_no"] == batch_no:
             batch["status"] = status
             batch["error"] = error
+            if complaint_number is not None:
+                batch["complaint_number"] = complaint_number
             break
     result["completed_batches"] = sum(1 for batch in result["batches"] if batch["status"] == "completed")
     result["failed_batches"] = sum(1 for batch in result["batches"] if batch["status"] == "failed")
@@ -342,6 +344,50 @@ def resolve_complaint_numbers(cookie, work_name, task_started_utc, batch_count):
             f"提交时间 ≥ {task_started_utc.isoformat()}），预期 {batch_count} 个，请人工核对"
         )
     return numbers
+
+
+def resolve_one_batch_number(cookie, work_name, task_started_utc, seen_ids, retries=3):
+    """逐批查询：提交某一批后立刻取该批新产生的那个投诉单号。
+
+    用 seen_ids（已认领过的 complain_id 集合）排除前面批次的单号，返回本批的
+    新单号；找不到时重试几次（接口有延迟）。失败返回 None，由调用方记占位。
+    seen_ids 会被原地更新。
+    """
+    if not work_name:
+        return None
+    for attempt in range(retries):
+        try:
+            records = fetch_complaints_via_api(cookie, page_size=100)
+        except Exception as e:
+            print(f"  ⚠️ 查询单号接口异常(第{attempt+1}次): {e}")
+            records = []
+
+        expected = normalize_company_name(work_name)
+        candidates = []
+        for r in records:
+            cid = r.get("complain_id")
+            if not cid or cid in seen_ids:
+                continue
+            created = _parse_gmt_create(r.get("gmt_create"))
+            if not created or created < task_started_utc:
+                continue
+            evs = r.get("evidence_contents") or []
+            if not evs:
+                continue
+            title = ((evs[0].get("work") or {}).get("url") or "").strip()
+            if normalize_company_name(title) != expected:
+                continue
+            candidates.append((created, cid))
+
+        if candidates:
+            candidates.sort(key=lambda x: x[0])
+            cid = candidates[-1][1]  # 取最新的一个作为本批单号
+            seen_ids.add(cid)
+            return str(cid)
+
+        if attempt < retries - 1:
+            human_delay(2000, 3000)
+    return None
 
 
 def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copyright_type,
@@ -970,6 +1016,11 @@ def main(args):
                 for excel_idx, excel_file in enumerate(work.get('excel_files', [])):
                     flat_batches.append((work, excel_idx, excel_file))
 
+            # 逐批查询单号：已认领的 complain_id（避免后批匹配到前批的单号），
+            # 以及随提交进度累积的单号列表（每批查到立刻落盘，超时也不丢已成功的）。
+            seen_complain_ids = set()
+            all_complaint_numbers = []
+
             for batch_idx, (work, excel_idx, excel_file) in enumerate(flat_batches):
                 work_name = work['work_name']
                 batch_no_global = batch_idx + 1
@@ -1007,28 +1058,25 @@ def main(args):
                 current_step = f"批次{batch_no_global}确认提交成功"
                 verify_submit_success(page)
                 update_batch_result(result, batch_no_global, "completed")
-                human_delay(1500, 2500)
 
-            # 查询投诉单号（按作品逐个查询）
-            current_step = "查询投诉单号"
-            human_delay(2000, 3000)
-            all_complaint_numbers = []
+                # 逐批查询单号并立刻落盘：哪怕后续批次超时/失败，
+                # 已成功批次的单号也不会丢（之前是攒到最后统一查，最后一步超时会全丢）。
+                current_step = f"批次{batch_no_global}查询单号"
+                human_delay(2000, 3000)
+                number = resolve_one_batch_number(
+                    cookie, work_name, task_started_utc, seen_complain_ids
+                )
+                if number:
+                    all_complaint_numbers.append(number)
+                    update_batch_result(result, batch_no_global, "completed", complaint_number=number)
+                    print(f"✅ 批次{batch_no_global}单号: {number}")
+                else:
+                    all_complaint_numbers.append(f"未获取到单号:{work_name}")
+                    print(f"⚠️ 批次{batch_no_global}未查到单号（作品: {work_name}）")
+                result["complaint_numbers"] = list(all_complaint_numbers)
+                save_task_result(task_id, result)
+                human_delay(1000, 2000)
 
-            for work in works_config:
-                work_name = work['work_name']
-                work_batch_count = len(work.get('excel_files', []))
-                try:
-                    numbers = resolve_complaint_numbers(
-                        cookie, work_name, task_started_utc, work_batch_count
-                    )
-                    for n in numbers:
-                        all_complaint_numbers.append(str(n))
-                except Exception as e:
-                    print(f"⚠️ 作品'{work_name}'获取投诉单号失败: {e}")
-                    for _ in range(work_batch_count):
-                        all_complaint_numbers.append(f"未获取到单号:{work_name}")
-
-            result["complaint_numbers"] = all_complaint_numbers
             result["status"] = "completed"
 
         except Exception as e:

@@ -2670,7 +2670,10 @@ def run_complaint_script(task_payload):
             cmd,
             capture_output=True,
             text=True,
-            timeout=max(600, total_batches * 300)
+            # 每批现在要 reload + 完整重填表单 + 重传证明文件，实测约 5 分钟/批，
+            # 旧的 300s/批毫无余量必超时。给 360s/批 + 180s 基础（覆盖初始打开和
+            # 最后的单号查询），下限 900s。超时会导致已成功的投诉拿不到单号。
+            timeout=max(900, 180 + total_batches * 360)
         )
 
         print(f"[{task_id}] stdout: {result.stdout}")
@@ -2735,12 +2738,39 @@ def run_complaint_script(task_payload):
             append_task_log(task_id, '未解析到 JSON_RESULT，任务标记为 failed')
             sync_task_log_to_db(task_id, submission_id, 'failed')
     except subprocess.TimeoutExpired:
+        # 超时被杀时，脚本没机会输出 JSON_RESULT。但它每批确认成功后已把单号
+        # 逐批写进 task_results/<task_id>.json，这里读回来，避免“已成功投诉的单号全丢”。
+        recovered = load_task_result(task_id)
+        recovered_numbers = (recovered or {}).get('complaint_numbers') or []
+        rec_completed = (recovered or {}).get('completed_batches')
+        rec_failed = (recovered or {}).get('failed_batches')
         if task_id in tasks:
-            tasks[task_id]['status'] = 'failed'
+            tasks[task_id]['status'] = 'partial_failed' if recovered_numbers else 'failed'
             tasks[task_id]['error'] = '执行超时'
-        update_complaint_task(task_id, status='failed', error_message='执行超时', completed_at=datetime.now())
-        append_task_log(task_id, '任务执行超时')
-        sync_task_log_to_db(task_id, submission_id, 'failed')
+            if recovered_numbers:
+                tasks[task_id]['complaint_numbers'] = recovered_numbers
+        timeout_fields = {
+            'status': 'partial_failed' if recovered_numbers else 'failed',
+            'error_message': '执行超时',
+            'completed_at': datetime.now(),
+        }
+        if recovered_numbers:
+            timeout_fields['complaint_numbers_json'] = recovered_numbers
+        if rec_completed is not None:
+            timeout_fields['completed_batches'] = rec_completed
+        if rec_failed is not None:
+            timeout_fields['failed_batches'] = rec_failed
+        update_complaint_task(task_id, **timeout_fields)
+        # 回填已完成批次的单号到批次子表
+        for batch in (recovered or {}).get('batches', []):
+            if batch.get('status') == 'completed':
+                update_complaint_batch(
+                    submission_id, batch['batch_no'],
+                    status='completed', complaint_number=batch.get('complaint_number')
+                )
+        msg = '任务执行超时' + (f'（已回收 {len(recovered_numbers)} 个已成功批次单号）' if recovered_numbers else '')
+        append_task_log(task_id, msg)
+        sync_task_log_to_db(task_id, submission_id, timeout_fields['status'])
     except Exception as e:
         if task_id in tasks:
             tasks[task_id]['status'] = 'failed'
