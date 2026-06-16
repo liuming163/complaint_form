@@ -807,16 +807,8 @@ def get_principal_options_by_used_company(used_company):
 
 
 def validate_work_name_format(work_name):
-    if not work_name:
-        return None
-
-    trimmed = work_name.strip()
-    if not trimmed:
-        return None
-
-    if re.search(r'\s', trimmed):
-        return '剧名中间不允许有空格'
-
+    # 剧名只做两端去空格，中间空格保留（例如 "hello kitty" 原样保存）。
+    # 这里不再校验格式，保留函数与调用点以便将来扩展其它规则。
     return None
 
 
@@ -1944,6 +1936,7 @@ def submit_uc_form():
                 work_batch_files.append(batch_path)
                 batch_meta = {
                     'batch_no': batch_no_global,
+                    'work_name': work_name,
                     'filename': batch_filename,
                     'start_row': chunk_start + 1,
                     'end_row': chunk_end,
@@ -2967,22 +2960,42 @@ def uc_export_excel(submission_id):
         if not sub:
             return jsonify({'success': False, 'error': '记录不存在'}), 404
 
-        # 解析作品名称列表
-        work_name_str = sub.work_name or ''
-        if ',' in work_name_str:
-            work_names = [w.strip() for w in work_name_str.split(',') if w.strip()]
-        elif '，' in work_name_str:
-            work_names = [w.strip() for w in work_name_str.split('，') if w.strip()]
-        else:
-            work_names = [work_name_str] if work_name_str else []
-
-        # 解析投诉单号
+        # 解析投诉单号（按批次顺序：单号是按每200条一片产生的，一部作品可能占多个单号）
         complaint_numbers = []
         if sub.complaint_numbers_json:
             try:
                 complaint_numbers = json.loads(sub.complaint_numbers_json)
             except:
                 pass
+
+        # 重建「每个单号属于哪部作品」：用 submission.json 的 works_config，
+        # 它每条都有 work_name + batch_count（新老记录都在）。把每部作品名按 batch_count
+        # 展开，拼成与 complaint_numbers 等长的作品名序列，再逐行配对。
+        # 例：宦妃天下(3批)+开局一座山(2批) → [宦妃,宦妃,宦妃,开局,开局] zip 5个单号。
+        expanded_work_names = []
+        try:
+            submission_file = os.path.join(
+                app.config['UC_SUBMISSION_FOLDER'], submission_id, 'submission.json'
+            )
+            if os.path.exists(submission_file):
+                with open(submission_file, 'r', encoding='utf-8') as f:
+                    sub_meta = json.load(f)
+                for w in sub_meta.get('works_config', []):
+                    wn = (w.get('work_name') or '').strip()
+                    bc = w.get('batch_count') or len(w.get('excel_files', [])) or 1
+                    expanded_work_names.extend([wn] * int(bc))
+        except Exception:
+            expanded_work_names = []
+
+        # 兜底：读不到 works_config 时，退回按逗号拆分的作品名（旧逻辑）
+        if not expanded_work_names:
+            work_name_str = sub.work_name or ''
+            if ',' in work_name_str:
+                expanded_work_names = [w.strip() for w in work_name_str.split(',') if w.strip()]
+            elif '，' in work_name_str:
+                expanded_work_names = [w.strip() for w in work_name_str.split('，') if w.strip()]
+            else:
+                expanded_work_names = [work_name_str] if work_name_str else []
 
         # 提交时间格式化
         submitted_at = ''
@@ -2997,9 +3010,11 @@ def uc_export_excel(submission_id):
         for cell in ws[1]:
             cell.font = Font(bold=True)
 
-        max_rows = max(len(work_names), len(complaint_numbers))
+        # complaint_numbers 末尾可能追加了 skipped_works 的占位串（形如「作品名：原因」），
+        # 这些超出 expanded_work_names 长度的行，作品名留空、单号列原样写占位串。
+        max_rows = max(len(expanded_work_names), len(complaint_numbers))
         for i in range(max_rows):
-            wn = work_names[i] if i < len(work_names) else ''
+            wn = expanded_work_names[i] if i < len(expanded_work_names) else ''
             fn = complaint_numbers[i] if i < len(complaint_numbers) else ''
             ws.append([submitted_at, sub.collect_account, wn, str(fn)])
 
@@ -3798,9 +3813,10 @@ def baidu_export_excel(submission_id):
         if not sub:
             return jsonify({'success': False, 'error': '记录不存在'}), 404
 
-        # 获取作品列表（包含跳过的）
+        # 获取作品列表（包含跳过的）。feedback_numbers 为每作品自己的单号列表，
+        # 一部作品多批次时会有多个单号——这是正确配对的权威来源。
         works = session.execute(text("""
-            SELECT work_name, status, error_message FROM submission_works
+            SELECT work_name, status, error_message, feedback_numbers FROM submission_works
             WHERE complaint_id = :sid ORDER BY work_index
         """), {'sid': submission_id}).fetchall()
 
@@ -3824,15 +3840,31 @@ def baidu_export_excel(submission_id):
         for cell in ws[1]:
             cell.font = Font(bold=True)
 
-        # 按作品顺序逐行写入
-        # 可投诉的作品从 complaint_numbers 中按顺序取单号
-        # 跳过的作品直接写 error_message
+        # 优先用每作品自己的 feedback_numbers（一作品多批次 → 多行）。
+        # 老记录该列为空，退回旧的「逐作品从扁平 complaint_numbers 取一个」兜底。
+        has_per_work = any(getattr(w, 'feedback_numbers', None) for w in works)
         number_idx = 0
         for work in works:
             if work.status == 'skipped':
                 ws.append([submitted_at, sub.collect_account, work.work_name,
                            work.error_message or '未找到已通过审核的权属记录，请在百度投诉原平台进行投诉'])
+                continue
+
+            if has_per_work:
+                # 用本作品自己的单号列表，逐个单号一行
+                nums = []
+                raw = getattr(work, 'feedback_numbers', None)
+                if raw:
+                    try:
+                        nums = json.loads(raw) if isinstance(raw, str) else list(raw)
+                    except (TypeError, json.JSONDecodeError):
+                        nums = []
+                if not nums:
+                    nums = ['']
+                for fn in nums:
+                    ws.append([submitted_at, sub.collect_account, work.work_name, str(fn)])
             else:
+                # 兜底（老记录）：扁平列表按顺序取一个
                 fn = complaint_numbers[number_idx] if number_idx < len(complaint_numbers) else ''
                 ws.append([submitted_at, sub.collect_account, work.work_name, str(fn)])
                 number_idx += 1
@@ -3972,6 +4004,19 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
                         'err': wd.get('error'),
                         'sid': submission_id,
                         'widx': wd.get('work_index', 0),
+                    })
+
+                # 写入每作品的反馈单号分组（供导出时「一作品多批次=多单号」正确配对）。
+                # 后端按 work_name 分组，这里按 work_name 匹配回各 submission_works 行。
+                for grp in result_data.get('feedback_numbers_by_work', []):
+                    session.execute(text("""
+                        UPDATE submission_works
+                        SET feedback_numbers=:nums
+                        WHERE complaint_id=:sid AND work_name=:wname
+                    """), {
+                        'nums': json.dumps(grp.get('numbers', []), ensure_ascii=False),
+                        'sid': submission_id,
+                        'wname': grp.get('work_name', ''),
                     })
             else:
                 session.execute(text("""

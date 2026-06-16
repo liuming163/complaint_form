@@ -226,12 +226,7 @@ function validateWorkAssetFilenames(workName, proofFile, otherFiles) {
 }
 
 function validateWorkNameFormat(workName) {
-    if (!workName) return '';
-    const trimmed = workName.trim();
-    if (!trimmed) return '';
-    if (/\s/.test(trimmed)) {
-        return '剧名中间不允许有空格';
-    }
+    // 剧名只做两端去空格，中间空格保留（例如 "hello kitty" 原样保存）。
     return '';
 }
 

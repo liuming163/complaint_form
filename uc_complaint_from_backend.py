@@ -99,17 +99,34 @@ def update_batch_result(result, batch_no, status, error=None):
 
 def upload_batch_excel(page, excel_file):
     print(f"📎 导入批次文件: {excel_file}")
-    batch_btn = page.get_by_text("批量导入", exact=True)
-    if batch_btn.count() == 0:
-        batch_btn = page.get_by_role("button", name="批量导入")
-    if batch_btn.count() == 0:
-        raise RuntimeError("未找到批量导入按钮...")
+    # 注意：UC 平台关闭批量导入弹窗后，弹窗 DOM 节点并不会被移除，只是隐藏。
+    # 该隐藏弹窗里带有标题 <div class="ant-modal-title">批量导入</div>，
+    # 会与页面上真正的「批量导入」触发按钮文本重复。分批时必须只匹配“可见”元素，
+    # 否则 .first 可能命中上一批遗留的隐藏标题。
+    #
+    # 更关键：上一批提交+点「继续」后，表单要重新挂载/清空表格才会重新渲染出
+    # 「批量导入」触发按钮。当上一批有 200 行时，清表+重渲染较慢，固定等待不够，
+    # 此刻页面上唯一的「批量导入」文本只剩隐藏弹窗标题 —— 因此小批次（如 2 行）
+    # 必成功、大批次（200 行）第 2 批起必失败。这里显式等待“可见的触发按钮”出现。
+    batch_btn = page.locator(
+        "button:visible:has-text('批量导入'), "
+        ":text-is('批量导入'):visible"
+    )
+    try:
+        batch_btn.first.wait_for(state="visible", timeout=30000)
+    except Exception:
+        raise RuntimeError(
+            "等待『批量导入』触发按钮可见超时——上一批表单可能尚未重新渲染完成"
+        )
 
     human_click(page, batch_btn.first)
     print("✅ 已点击批量导入，等待弹窗...")
     human_delay(1500, 2500)
 
-    dialog = page.locator(".el-dialog, .ant-modal, [role='dialog']").first
+    # 同理，弹窗也只取“可见”的那个，避免抓到上一批遗留的隐藏弹窗。
+    dialog = page.locator(
+        ".el-dialog:visible, .ant-modal:visible, [role='dialog']:visible"
+    ).first
     dialog.wait_for(state="visible", timeout=10000)
     print("✅ 弹窗已打开")
 
@@ -206,6 +223,23 @@ def click_list_in_success_dialog(page):
     human_click(page, list_btn.first)
     print("✅ 已点击投诉列表")
     human_delay(2000, 3000)
+
+
+def verify_submit_success(page):
+    """提交后确认出现『提交成功』对话框。失败时抛出，避免误判为已投诉。
+
+    不点击对话框里的任何按钮——后续批次靠重新打开表单（reload）来重置页面，
+    比依赖 UC 自身的『继续创建』在 200 行表格下原地重置可靠得多。
+    """
+    dialog = get_success_dialog(page)
+    try:
+        text = dialog.inner_text(timeout=5000)
+    except Exception:
+        text = ""
+    if "提交成功" not in text:
+        snippet = re.sub(r"\s+", " ", text)[:200]
+        raise RuntimeError(f"提交后未出现『提交成功』提示，对话框内容：{snippet or '（空）'}")
+    print("✅ 已确认提交成功")
 
 
 def read_latest_complaint_numbers(page, count):
@@ -920,53 +954,53 @@ def main(args):
             current_step = "打开投诉表单"
             open_complaint_form(page)
 
-            # 第一个作品：完整填表
-            first_work = works_config[0]
-            current_step = f"填写初始表单（{first_work['work_name']}）"
-            fill_initial_form(
-                page, identity, agent, rights_holder, complaint_type, copyright_type,
-                module, content_type, description,
-                first_work['proof_file'], first_work.get('other_proof_files', []),
-                task_id=task_id, batch_no=0
-            )
+            # 把所有作品的分片拍平成统一的批次列表，逐批独立处理。
+            # 关键改动：不再依赖 UC 的「继续创建」原地重置表单——它在上一批
+            # 表格有 200 行时清不掉，导致「批量导入」按钮再也不出现、第 2 批起必败。
+            # 改为每批都重新打开表单（reload）并完整重填，保证每批都是干净的可导入状态。
+            flat_batches = []
+            for work in works_config:
+                for excel_idx, excel_file in enumerate(work.get('excel_files', [])):
+                    flat_batches.append((work, excel_idx, excel_file))
 
-            # 双层循环：作品 → 分片
-            batch_no_global = 0
-            is_first_batch_overall = True
-
-            for work_idx, work in enumerate(works_config):
+            for batch_idx, (work, excel_idx, excel_file) in enumerate(flat_batches):
                 work_name = work['work_name']
-                excel_files = work.get('excel_files', [])
-                print(f"\n===== [{work_idx+1}/{len(works_config)}] 作品: {work_name} ({len(excel_files)}批) =====")
+                batch_no_global = batch_idx + 1
+                result["current_batch"] = batch_no_global
+                print(f"\n  --- 批次 {batch_no_global}/{total_batches}: "
+                      f"{work_name} 第{excel_idx+1}片 ---")
 
-                # 非第一个作品：替换证明文件
-                if work_idx > 0:
-                    current_step = f"替换证明文件（{work_name}）"
-                    replace_proof_files(page, work['proof_file'], work.get('other_proof_files', []))
+                # 第一批用初始已填好的表单；从第二批起，重新打开并重填表单，
+                # 用“当前这一批所属作品”的证明文件，彻底规避原地重置失效的问题。
+                if batch_idx == 0:
+                    current_step = f"填写初始表单（{work_name}）"
+                    fill_initial_form(
+                        page, identity, agent, rights_holder, complaint_type, copyright_type,
+                        module, content_type, description,
+                        work['proof_file'], work.get('other_proof_files', []),
+                        task_id=task_id, batch_no=0
+                    )
+                else:
+                    current_step = f"批次{batch_no_global}重新打开表单"
+                    open_complaint_form(page)
+                    current_step = f"批次{batch_no_global}重填表单（{work_name}）"
+                    fill_initial_form(
+                        page, identity, agent, rights_holder, complaint_type, copyright_type,
+                        module, content_type, description,
+                        work['proof_file'], work.get('other_proof_files', []),
+                        task_id=task_id, batch_no=batch_no_global
+                    )
 
-                # 该作品的 Excel 分片循环
-                for excel_idx, excel_file in enumerate(excel_files):
-                    batch_no_global += 1
-                    result["current_batch"] = batch_no_global
-                    print(f"\n  --- 批次 {batch_no_global}/{total_batches}: {work_name} 第{excel_idx+1}片 ---")
+                current_step = f"批次{batch_no_global}导入Excel"
+                upload_batch_excel(page, excel_file)
 
-                    current_step = f"批次{batch_no_global}导入Excel"
-                    upload_batch_excel(page, excel_file)
+                current_step = f"批次{batch_no_global}提交投诉"
+                submit_form(page, task_id, batch_no_global)
 
-                    current_step = f"批次{batch_no_global}提交投诉"
-                    submit_form(page, task_id, batch_no_global)
-
-                    is_last_batch_overall = (batch_no_global == total_batches)
-
-                    if not is_last_batch_overall:
-                        current_step = f"批次{batch_no_global}点击继续"
-                        click_continue_in_success_dialog(page)
-                        update_batch_result(result, batch_no_global, "completed")
-                        human_delay(1500, 2500)
-                    else:
-                        current_step = "跳转投诉列表"
-                        click_list_in_success_dialog(page)
-                        update_batch_result(result, batch_no_global, "completed")
+                current_step = f"批次{batch_no_global}确认提交成功"
+                verify_submit_success(page)
+                update_batch_result(result, batch_no_global, "completed")
+                human_delay(1500, 2500)
 
             # 查询投诉单号（按作品逐个查询）
             current_step = "查询投诉单号"

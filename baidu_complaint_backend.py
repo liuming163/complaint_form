@@ -405,17 +405,27 @@ def main():
 
         # 按作品顺序组装反馈单号列表（失败的标记为"投诉失败"）
         ordered_numbers = []
+        # 同时按作品分组保存，供导出时「一部作品多批次=多单号」正确配对。
+        # 与 ordered_numbers 内容一致，只是按作品聚合（保持 works_config 顺序）。
+        feedback_numbers_by_work = []
         for work in works_config:
             work_name = work['work_name']
             if work_name in failed_works:
                 ordered_numbers.append(f"投诉失败:{work_name}")
+                work_numbers = [f"投诉失败:{work_name}"]
             elif work_name in matched_by_work:
-                for fn in matched_by_work[work_name]:
-                    ordered_numbers.append(str(fn))
+                work_numbers = [str(fn) for fn in matched_by_work[work_name]]
+                ordered_numbers.extend(work_numbers)
             else:
                 ordered_numbers.append(f"未获取到单号:{work_name}")
+                work_numbers = [f"未获取到单号:{work_name}"]
+            feedback_numbers_by_work.append({
+                'work_name': work_name,
+                'numbers': work_numbers,
+            })
 
         result['feedback_numbers'] = ordered_numbers
+        result['feedback_numbers_by_work'] = feedback_numbers_by_work
         if total_matched < expected_count:
             log(f'  警告: 预期{expected_count}个反馈单号，实际匹配到{total_matched}个')
         else:
