@@ -753,6 +753,13 @@ def verify_file_input_has_file(page, locator, expected_name, label):
 def open_complaint_form(page):
     print("📂 打开UC侵权投诉平台...")
     page.goto("https://ipp.uc.cn/#/home", wait_until="load")
+    # 关键：goto 到“仅 hash 不同/相同”的 URL 不会触发真正的页面重载（同文档导航），
+    # 分批重投时页面已停留在 #/home 的表单视图，goto 是空操作，表单不会重置、
+    # “发起侵权投诉”按钮也不出现。这里显式 reload 强制 SPA 重新加载回首页落地页。
+    try:
+        page.reload(wait_until="load")
+    except Exception as e:
+        print(f"⚠️ 页面reload失败，继续尝试: {e}")
     human_delay(2000, 3000)
 
     print("🔐 检查登录状态...")
