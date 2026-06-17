@@ -3306,7 +3306,7 @@ def baidu_download_template():
     ws1 = wb.active
     ws1.title = '投诉配置'
     ws1.append(['字段', '值', '可选值'])
-    ws1.append(['投诉产品', '百度网盘', '百度网盘 / 百度搜索 / 百度APP'])
+    ws1.append(['投诉产品', '', '百度网盘 / 百度搜索 / 百度APP'])
     header_font = Font(bold=True)
     for cell in ws1[1]:
         cell.font = header_font
