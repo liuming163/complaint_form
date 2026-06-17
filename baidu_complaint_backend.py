@@ -300,10 +300,11 @@ def main():
     parser.add_argument('--task-id', required=True)
     parser.add_argument('--cookie', required=True)
     parser.add_argument('--complaint-type-code', required=True, type=int)
-    parser.add_argument('--works-config', required=True)
+    parser.add_argument('--works-config-file', required=True)
     args = parser.parse_args()
 
-    works_config = json.loads(args.works_config)
+    with open(args.works_config_file, encoding='utf-8') as _f:
+        works_config = json.load(_f)
     cookie = args.cookie
     complaint_type_code = args.complaint_type_code
 

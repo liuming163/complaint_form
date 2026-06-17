@@ -3975,12 +3975,19 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
     tasks[task_id]['status'] = 'running'
     tasks[task_id]['started_at'] = datetime.now().isoformat()
 
+    import tempfile
+    works_config_file = tempfile.NamedTemporaryFile(
+        mode='w', suffix='.json', delete=False, encoding='utf-8'
+    )
+    works_config_file.write(json.dumps(works_config, ensure_ascii=False))
+    works_config_file.close()
+
     cmd = [
         sys.executable, script_path,
         '--task-id', task_id,
         '--cookie', cookie,
         '--complaint-type-code', str(complaint_type_code),
-        '--works-config', json.dumps(works_config, ensure_ascii=False),
+        '--works-config-file', works_config_file.name,
     ]
 
     timeout_seconds = max(120, total_batches * 30)
@@ -3993,6 +4000,10 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
             timeout=timeout_seconds,
             cwd=os.path.dirname(__file__),
         )
+        try:
+            os.unlink(works_config_file.name)
+        except Exception:
+            pass
 
         stdout = proc.stdout or ''
         stderr = proc.stderr or ''
