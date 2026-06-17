@@ -3914,6 +3914,46 @@ def baidu_export_excel(submission_id):
         session.close()
 
 
+def _recover_baidu_partial(task_id, submission_id, reason):
+    """百度脚本被超时/异常杀掉时，从增量文件 task_results/<task_id>.json 回收
+    已成功作品的反馈单号，写回 complaints + submission_works，状态记 partial_failed。
+    返回回收到的单号个数（0 表示没有可回收的）。"""
+    recovered = load_task_result(f'baidu_{submission_id}') or load_task_result(task_id)
+    if not recovered:
+        return 0
+    numbers = recovered.get('feedback_numbers') or []
+    by_work = recovered.get('feedback_numbers_by_work') or []
+    real_numbers = [n for n in numbers if not (isinstance(n, str) and (n.startswith('未获取到单号:') or n.startswith('投诉失败:')))]
+    if not real_numbers and not by_work:
+        return 0
+    session = get_db_session()
+    try:
+        session.execute(text("""
+            UPDATE complaints SET status='partial_failed', completed_at=NOW(),
+                complaint_numbers_json=:nums, error_message=:err
+            WHERE task_id=:tid
+        """), {
+            'nums': json.dumps(numbers, ensure_ascii=False) if numbers else None,
+            'err': reason,
+            'tid': task_id,
+        })
+        for grp in by_work:
+            session.execute(text("""
+                UPDATE submission_works SET feedback_numbers=:nums
+                WHERE complaint_id=:sid AND work_name=:wname
+            """), {
+                'nums': json.dumps(grp.get('numbers', []), ensure_ascii=False),
+                'sid': submission_id,
+                'wname': grp.get('work_name', ''),
+            })
+        session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
+    return len(real_numbers)
+
+
 def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_type_code, works_config, total_batches):
     import sys
 
@@ -4073,19 +4113,25 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
             tasks[task_id]['error'] = f'退出码：{proc.returncode}'
 
     except subprocess.TimeoutExpired:
-        session = get_db_session()
-        try:
-            session.execute(text("""
-                UPDATE complaints SET status='failed', completed_at=NOW(),
-                error_message='脚本执行超时' WHERE task_id=:tid
-            """), {'tid': task_id})
-            session.commit()
-        except:
-            session.rollback()
-        finally:
-            session.close()
-        tasks[task_id]['status'] = 'failed'
-        tasks[task_id]['error'] = '执行超时'
+        # 超时被杀：先尝试从增量文件回收已成功作品的单号
+        recovered_n = _recover_baidu_partial(task_id, submission_id, '脚本执行超时')
+        if recovered_n > 0:
+            tasks[task_id]['status'] = 'partial_failed'
+            tasks[task_id]['error'] = f'执行超时（已回收{recovered_n}个单号）'
+        else:
+            session = get_db_session()
+            try:
+                session.execute(text("""
+                    UPDATE complaints SET status='failed', completed_at=NOW(),
+                    error_message='脚本执行超时' WHERE task_id=:tid
+                """), {'tid': task_id})
+                session.commit()
+            except:
+                session.rollback()
+            finally:
+                session.close()
+            tasks[task_id]['status'] = 'failed'
+            tasks[task_id]['error'] = '执行超时'
 
     except Exception as e:
         session = get_db_session()
