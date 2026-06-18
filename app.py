@@ -1030,7 +1030,7 @@ def map_task_status_label(status):
     return status or '未知'
 
 
-def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holder, operator=''):
+def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holder, operator='', upload_filename=''):
     submitted_at = datetime.fromisoformat(payload['submitted_at'])
     work_name = payload['form'].get('作品名称') or ''
     with get_db_session() as session:
@@ -1040,13 +1040,13 @@ def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holde
                 identity_type, agent_name, principal_name,
                 complaint_category, complaint_type, module_name, content_type,
                 description_text, work_name, total_links, batch_size, batch_count,
-                status, submitted_at, operator
+                status, submitted_at, operator, upload_filename
             ) VALUES (
                 :complaint_id, :task_id, :platform_code, :collect_account, :cookie_snapshot,
                 :identity_type, :agent_name, :principal_name,
                 :complaint_category, :complaint_type, :module_name, :content_type,
                 :description_text, :work_name, :total_links, :batch_size, :batch_count,
-                :status, :submitted_at, :operator
+                :status, :submitted_at, :operator, :upload_filename
             )
         """), {
             'complaint_id': complaint_id,
@@ -1069,6 +1069,7 @@ def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holde
             'status': 'queued',
             'submitted_at': submitted_at,
             'operator': operator,
+            'upload_filename': upload_filename,
         })
         session.commit()
 
@@ -1876,6 +1877,7 @@ def submit_uc_form():
 
     works_config = data.get('works', [])
     skipped_works = data.get('skipped_works', [])
+    upload_filename = data.get('upload_filename', '').strip()
     if not works_config and not skipped_works:
         missing_fields.append('作品列表')
 
@@ -2006,7 +2008,22 @@ def submit_uc_form():
         }
         tasks[task_id] = task_state
 
-        insert_complaint(submission_id, task_id, 'uc', payload, rights_holder, operator=get_current_user())
+        # 防重复：同账号+同文件名已有非失败记录则拒绝
+        if upload_filename:
+            _sess = get_db_session()
+            try:
+                dup = _sess.execute(text("""
+                    SELECT task_id FROM complaints
+                    WHERE collect_account=:acc AND upload_filename=:fn
+                      AND platform_code='uc' AND status NOT IN ('failed')
+                    LIMIT 1
+                """), {'acc': data.get('collect_account', ''), 'fn': upload_filename}).fetchone()
+            finally:
+                _sess.close()
+            if dup:
+                return jsonify({'success': False, 'error': f'文件「{upload_filename}」已投诉过（任务 {dup[0]}），请勿重复提交'}), 400
+
+        insert_complaint(submission_id, task_id, 'uc', payload, rights_holder, operator=get_current_user(), upload_filename=upload_filename)
         insert_complaint_task(task_id, submission_id, payload['submitted_at'], total_batches, total_links)
         insert_complaint_batches(submission_id, all_batches)
 
@@ -2565,6 +2582,7 @@ def upload_custom_template():
         result = {
             'success': True,
             'template_id': template_id,
+            'upload_filename': Path(excel_file.filename).name,
             'form_data': form_data,
             'works': [{
                 'work_name': w['work_name'],
@@ -3510,6 +3528,7 @@ def baidu_upload_template():
         'success': True,
         'complaint_product': complaint_product,
         'complaint_type_code': BAIDU_COMPLAINT_TYPE_MAP[complaint_product],
+        'upload_filename': Path(file.filename).name,
         'works': works_config,
         'total_works': len(works_config),
         'total_links': total_links,
@@ -3531,6 +3550,7 @@ def baidu_submit():
     complaint_type_code = data.get('complaint_type_code')
     works_config = data.get('works', [])
     skipped_works = data.get('skipped_works', [])
+    upload_filename = data.get('upload_filename', '').strip()
 
     if not cookie:
         return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
@@ -3538,6 +3558,21 @@ def baidu_submit():
         return jsonify({'success': False, 'error': '请选择投诉账号'}), 400
     if not complaint_product:
         return jsonify({'success': False, 'error': '投诉产品不能为空'}), 400
+
+    # 防重复：同账号+同文件名已有非失败记录则拒绝
+    if upload_filename:
+        _sess = get_db_session()
+        try:
+            dup = _sess.execute(text("""
+                SELECT task_id FROM complaints
+                WHERE collect_account=:acc AND upload_filename=:fn
+                  AND platform_code='baidu' AND status NOT IN ('failed')
+                LIMIT 1
+            """), {'acc': collect_account, 'fn': upload_filename}).fetchone()
+        finally:
+            _sess.close()
+        if dup:
+            return jsonify({'success': False, 'error': f'文件「{upload_filename}」已投诉过（任务 {dup[0]}），请勿重复提交'}), 400
     if not works_config and not skipped_works:
         return jsonify({'success': False, 'error': '作品列表不能为空'}), 400
 
@@ -3600,11 +3635,11 @@ def baidu_submit():
             (complaint_id, task_id, platform_code, collect_account, cookie_snapshot,
              identity_type, agent_name, principal_name,
              complaint_category, complaint_type, module_name, content_type,
-             description_text, work_name, total_links, batch_size, batch_count, status, submitted_at, operator)
+             description_text, work_name, total_links, batch_size, batch_count, status, submitted_at, operator, upload_filename)
             VALUES (:sid, :tid, 'baidu', :account, :cookie,
                     :identity_type, :agent_name, '',
                     :complaint_category, :complaint_type, :module_name, :content_type,
-                    :desc, :work_name, :rows, 200, :batches, 'queued', NOW(), :operator)
+                    :desc, :work_name, :rows, 200, :batches, 'queued', NOW(), :operator, :upload_filename)
         """), {
             'sid': submission_id,
             'tid': task_id,
@@ -3621,6 +3656,7 @@ def baidu_submit():
             'rows': total_links,
             'batches': total_batches,
             'operator': get_current_user(),
+            'upload_filename': upload_filename,
         })
 
         batch_no = 0

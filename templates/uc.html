@@ -1059,6 +1059,7 @@ document.getElementById('ucForm').addEventListener('submit', async function(e) {
             description: document.querySelector('textarea[name="description"]')?.value.trim() || '',
             works: works,
             skipped_works: skippedWorks,
+            upload_filename: currentUploadFilename,
         };
 
         const response = await fetch('/api/uc/submit', {
@@ -1256,6 +1257,7 @@ function downloadCustomTemplate() {
 
 // 处理自定义模版上传
 let currentTemplateId = null;
+let currentUploadFilename = '';
 window.currentTemplatePrincipal = null;
 
 document.getElementById('currentPrincipalSelect')?.addEventListener('change', function() {
@@ -1298,6 +1300,7 @@ function handleCustomTemplateUpload(input) {
     .then(res => {
         if (res.success) {
             currentTemplateId = res.template_id;
+            currentUploadFilename = res.upload_filename || '';
             enableLockedFields();
             applyCustomTemplateData(res);
             lockAllFieldsExceptAccount();

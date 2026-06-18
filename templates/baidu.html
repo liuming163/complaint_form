@@ -322,6 +322,7 @@ async function submitComplaint() {
                 collect_account: acc.user,
                 complaint_product: templateData.complaint_product,
                 complaint_type_code: templateData.complaint_type_code,
+                upload_filename: templateData.upload_filename || '',
                 works: worksToSubmit,
                 skipped_works: skippedWorks,
             })
