@@ -1722,6 +1722,7 @@ def works_complaint_types():
 @app.route('/api/works/list')
 @login_required
 def works_list():
+    can_update = can_update_principal_authorization()
     with get_db_session() as session:
         rows = session.execute(text("""
             SELECT w.id, w.work_name, w.used_company, w.principal_name, w.operator_name,
@@ -1752,6 +1753,7 @@ def works_list():
                 'proof_file': proof_file,
                 'other_proof_files': other_files,
                 'other_proof_count': len(other_files),
+                'can_update': can_update,
             })
     return jsonify({'success': True, 'data': results})
 
@@ -1849,6 +1851,71 @@ def check_excel():
     finally:
         if os.path.exists(save_path):
             os.remove(save_path)
+
+
+@app.route('/api/works/check_active/<work_name>')
+@login_required
+def works_check_active(work_name):
+    with get_db_session() as session:
+        row = session.execute(text("""
+            SELECT task_id FROM complaints
+            WHERE work_name LIKE :pattern AND status IN ('running', 'queued')
+            LIMIT 1
+        """), {'pattern': f'%{work_name}%'}).fetchone()
+    return jsonify({'active': bool(row), 'task_id': row[0] if row else None})
+
+
+@app.route('/api/works/update_proof', methods=['POST'])
+@login_required
+def works_update_proof():
+    if not can_update_principal_authorization():
+        return jsonify({'success': False, 'error': '当前账号无权限更新作品权属文件'}), 403
+
+    work_id = request.form.get('work_id', '').strip()
+    if not work_id:
+        return jsonify({'success': False, 'error': 'work_id 不能为空'}), 400
+
+    proof_file = request.files.get('proof_file')
+    other_files = [f for f in request.files.getlist('other_proof_file') if f and f.filename]
+
+    if not proof_file or not proof_file.filename:
+        return jsonify({'success': False, 'error': '证明文件不能为空'}), 400
+
+    with get_db_session() as session:
+        row = session.execute(text("""
+            SELECT w.id, w.work_name, w.used_company, ct.dict_name AS content_type_name, cpt.dict_name AS complaint_type_name
+            FROM works w
+            JOIN dictionaries ct ON ct.dict_type='content_type' AND ct.dict_code=CAST(w.content_type_id AS CHAR)
+            JOIN dictionaries cpt ON cpt.dict_type='complaint_type' AND cpt.dict_code=CAST(w.complaint_type_id AS CHAR)
+            WHERE w.id=:wid
+        """), {'wid': work_id}).mappings().first()
+        if not row:
+            return jsonify({'success': False, 'error': '作品不存在'}), 404
+
+        normalized_work_name = normalize_work_path_part(row['work_name'])
+        work_dir_name = f"{normalized_work_name}_{normalize_work_path_part(row['used_company'])}_{normalize_work_path_part(row['content_type_name'])}_{normalize_work_path_part(row['complaint_type_name'])}"
+        work_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '剧名', work_dir_name)
+        ensure_dir(work_dir)
+
+        proof_filename, _ = save_work_asset_file(proof_file, work_dir, f'证明文件_{normalized_work_name}')
+        other_saved = []
+        for idx, f in enumerate(other_files[:2], start=1):
+            name, _ = save_work_asset_file(f, work_dir, f'其他证明_{normalized_work_name}_{idx}')
+            if name:
+                other_saved.append(name)
+
+        session.execute(text("""
+            UPDATE works SET proof_file=:pf, other_proof_files=:opf, operator_name=:op, updated_at=NOW()
+            WHERE id=:wid
+        """), {
+            'pf': proof_filename,
+            'opf': json.dumps(other_saved, ensure_ascii=False) if other_saved else None,
+            'op': get_current_user(),
+            'wid': work_id,
+        })
+        session.commit()
+
+    return jsonify({'success': True, 'proof_file': proof_filename, 'other_proof_files': other_saved})
 
 
 @app.route('/api/uc/submit', methods=['POST'])

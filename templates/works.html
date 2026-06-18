@@ -43,10 +43,11 @@
                         <th>投诉类型</th>
                         <th>作品权属文件</th>
                         <th>其他证明</th>
+                        <th>操作</th>
                     </tr>
                 </thead>
                 <tbody id="worksTableBody">
-                    <tr><td colspan="8" class="text-center text-muted py-4">加载中...</td></tr>
+                    <tr><td colspan="9" class="text-center text-muted py-4">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -175,6 +176,7 @@ let fuse = null;
 let debounceTimer = null;
 let addWorkModal = null;
 let otherProofModal = null;
+let updateProofModal = null;
 const WORK_FILE_SIZE_LIMIT = 5 * 1024 * 1024;
 
 function normalizeWorkFilenamePart(value) {
@@ -432,6 +434,7 @@ function renderWorks(works) {
             <td>${escapeHtml(item.complaint_type)}</td>
             <td>${proofCell}</td>
             <td>${otherCell}</td>
+            <td>${item.can_update ? `<button type="button" class="btn btn-sm btn-outline-warning" onclick="openUpdateProofModal(${item.id}, '${escapeHtml(item.work_name)}')">更新作品权属</button>` : '-'}</td>
         `;
         tbody.appendChild(tr);
     });
@@ -517,6 +520,7 @@ document.getElementById('searchInput').addEventListener('input', function(e) {
 document.addEventListener('DOMContentLoaded', () => {
     addWorkModal = new bootstrap.Modal(document.getElementById('addWorkModal'));
     otherProofModal = new bootstrap.Modal(document.getElementById('otherProofModal'));
+    updateProofModal = new bootstrap.Modal(document.getElementById('updateProofModal'));
     loadWorkDictionaries();
     loadPrincipalOptionsForWork();
     loadWorks();
@@ -529,7 +533,83 @@ document.addEventListener('DOMContentLoaded', () => {
         validateOtherProofFilesImmediately();
     });
 });
+
+let _updateProofWorkId = null;
+
+async function openUpdateProofModal(workId, workName) {
+    document.getElementById('updateProofError').textContent = '';
+    document.getElementById('updateProofFile').value = '';
+    document.getElementById('updateOtherProofFiles').value = '';
+    document.getElementById('updateProofWorkName').textContent = `作品：${workName}`;
+    document.getElementById('updateProofSubmitBtn').disabled = false;
+
+    // 检查是否正在投诉中
+    const resp = await fetch(`/api/works/check_active/${encodeURIComponent(workName)}`);
+    const data = await resp.json();
+    if (data.active) {
+        alert(`该作品正在投诉中（任务 ${data.task_id}），请稍后再试`);
+        return;
+    }
+
+    _updateProofWorkId = workId;
+    updateProofModal.show();
+}
+
+async function submitUpdateProof() {
+    const proofFile = document.getElementById('updateProofFile').files[0];
+    if (!proofFile) {
+        document.getElementById('updateProofError').textContent = '请选择证明文件';
+        return;
+    }
+    const btn = document.getElementById('updateProofSubmitBtn');
+    btn.disabled = true;
+    document.getElementById('updateProofError').textContent = '';
+
+    const fd = new FormData();
+    fd.append('work_id', _updateProofWorkId);
+    fd.append('proof_file', proofFile);
+    const otherFiles = document.getElementById('updateOtherProofFiles').files;
+    for (let i = 0; i < Math.min(otherFiles.length, 2); i++) fd.append('other_proof_file', otherFiles[i]);
+
+    const resp = await fetch('/api/works/update_proof', {method: 'POST', body: fd});
+    const data = await resp.json();
+    if (data.success) {
+        updateProofModal.hide();
+        loadWorks();
+    } else {
+        document.getElementById('updateProofError').textContent = data.error || '更新失败';
+        btn.disabled = false;
+    }
+}
 </script>
 <script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+
+<!-- 更新作品权属弹窗 -->
+<div class="modal fade" id="updateProofModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fas fa-sync-alt me-2"></i>更新作品权属</div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-2 text-muted" id="updateProofWorkName"></div>
+                <div class="mb-3">
+                    <label class="form-label">证明文件 <span class="text-danger">*</span></label>
+                    <input type="file" class="form-control" id="updateProofFile" accept=".jpg,.jpeg,.png,.pdf,.zip,.rar">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">其他证明（最多2个，全量替换）</label>
+                    <input type="file" class="form-control" id="updateOtherProofFiles" accept=".jpg,.jpeg,.png,.pdf,.zip,.rar" multiple>
+                </div>
+                <div id="updateProofError" class="text-danger small"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-warning" id="updateProofSubmitBtn" onclick="submitUpdateProof()">确认更新</button>
+            </div>
+        </div>
+    </div>
+</div>
 </body>
 </html>
