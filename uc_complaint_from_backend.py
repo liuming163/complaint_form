@@ -1030,11 +1030,12 @@ def main(args):
 
                 # 第一批用初始已填好的表单；从第二批起，重新打开并重填表单，
                 # 用“当前这一批所属作品”的证明文件，彻底规避原地重置失效的问题。
+                work_description = description.replace('${work_title}', work_name)
                 if batch_idx == 0:
                     current_step = f"填写初始表单（{work_name}）"
                     fill_initial_form(
                         page, identity, agent, rights_holder, complaint_type, copyright_type,
-                        module, content_type, description,
+                        module, content_type, work_description,
                         work['proof_file'], work.get('other_proof_files', []),
                         task_id=task_id, batch_no=0
                     )
@@ -1044,7 +1045,7 @@ def main(args):
                     current_step = f"批次{batch_no_global}重填表单（{work_name}）"
                     fill_initial_form(
                         page, identity, agent, rights_holder, complaint_type, copyright_type,
-                        module, content_type, description,
+                        module, content_type, work_description,
                         work['proof_file'], work.get('other_proof_files', []),
                         task_id=task_id, batch_no=batch_no_global
                     )
