@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>夸克投诉表单</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+<header class="main-header shadow-sm">
+    <div class="logo-area"><i class="fas fa-search"></i> 夸克投诉</div>
+    <div>
+        <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i> 返回首页</a>
+        <span class="user-info" style="margin-left:16px"><i class="fas fa-user"></i> {{ current_user }}</span>
+        <button class="btn btn-sm btn-outline-secondary" style="margin-left:8px" onclick="logout()"><i class="fas fa-sign-out-alt"></i> 登出</button>
+    </div>
+</header>
+
+<div class="form-page-wrap">
+
+    <!-- 账号信息 -->
+    <div class="form-card">
+        <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
+        <div class="mb-3">
+            <label class="form-label">采集账号</label>
+            <select class="form-select" id="collectAccountSelect" required onchange="onCollectAccountChange()">
+                <option value="">请选择采集账号</option>
+            </select>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Cookie</label>
+            <textarea class="form-control" id="cookieTextarea" rows="3" placeholder="请从上方选择采集账号，自动填充Cookie" required disabled></textarea>
+        </div>
+    </div>
+
+    <!-- 投诉模版 -->
+    <div class="form-card mb-4">
+        <div class="section-title"><i class="fas fa-clone"></i> 投诉模版</div>
+        <div class="d-flex gap-3">
+            <button type="button" class="btn btn-outline-primary" onclick="downloadTemplate()">
+                <i class="fas fa-download"></i> 下载模版
+            </button>
+            <input type="file" id="templateFile" accept=".xlsx,.xls" style="display:none" onchange="handleTemplateUpload(this)">
+            <button type="button" class="btn btn-outline-success" onclick="document.getElementById('templateFile').click()">
+                <i class="fas fa-upload"></i> 上传模版
+            </button>
+        </div>
+        <div id="templateInfo" class="file-info mt-2"></div>
+        <div id="templateError" class="file-error mt-1"></div>
+    </div>
+
+    <!-- 身份信息 -->
+    <div class="form-card locked-section">
+        <div class="section-title"><i class="fas fa-user"></i> 身份信息</div>
+        <div id="identityDisplay" style="color:#666;font-size:13px;">上传模版后自动填充</div>
+    </div>
+
+    <form id="quarkForm">
+
+        <!-- 功能模块 -->
+        <div class="form-card locked-section">
+            <div class="section-title"><i class="fas fa-th-large"></i> 功能模块</div>
+            <div id="moduleDisplay" style="color:#666;font-size:13px;">上传模版后自动填充</div>
+        </div>
+
+        <!-- 内容类型 -->
+        <div class="form-card locked-section">
+            <div class="section-title"><i class="fas fa-film"></i> 内容类型</div>
+            <div id="contentTypeDisplay" style="color:#666;font-size:13px;">上传模版后自动填充</div>
+        </div>
+
+        <!-- 投诉类型 -->
+        <div class="form-card locked-section">
+            <div class="section-title"><i class="fas fa-tag"></i> 投诉类型</div>
+            <div id="complaintTypeDisplay" style="color:#666;font-size:13px;">上传模版后自动填充</div>
+        </div>
+
+        <!-- 投诉内容 -->
+        <div class="form-card locked-section">
+            <div class="section-title"><i class="fas fa-file-import"></i> 投诉内容</div>
+            <div id="templatePreview" style="color:#666;font-size:13px;">请先上传模版文件</div>
+        </div>
+
+        <div class="text-center mt-3">
+            <button type="submit" id="submitBtn" class="btn btn-brown px-5" disabled>提交投诉</button>
+            <a href="/" id="goHomeBtn" class="btn btn-outline-primary px-4 ms-3" style="display:none">回到首页查看投诉状态</a>
+        </div>
+
+    </form>
+</div>
+
+<script>
+let quarkAccountsMap = {};
+let quarkWorksConfig = null;
+let currentUploadFilename = '';
+let quarkModule = 3;
+let quarkContentType = 6;
+
+document.addEventListener('DOMContentLoaded', loadQuarkAccounts);
+
+function loadQuarkAccounts() {
+    fetch('/api/accounts/list?platform_code=quark')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const select = document.getElementById('collectAccountSelect');
+            data.data.forEach(acc => {
+                const opt = document.createElement('option');
+                opt.value = acc.user;
+                opt.textContent = acc.user + (acc.account_purpose ? ' - ' + acc.account_purpose : '');
+                select.appendChild(opt);
+                quarkAccountsMap[acc.user] = acc;
+            });
+        });
+}
+
+function onCollectAccountChange() {
+    const user = document.getElementById('collectAccountSelect').value;
+    const cookieEl = document.getElementById('cookieTextarea');
+    cookieEl.value = (user && quarkAccountsMap[user]) ? (quarkAccountsMap[user].cookie || '') : '';
+    resetTemplate();
+}
+
+function resetTemplate() {
+    quarkWorksConfig = null;
+    currentUploadFilename = '';
+    document.getElementById('templateInfo').textContent = '';
+    document.getElementById('templateError').textContent = '';
+    document.getElementById('templatePreview').textContent = '请先上传模版文件';
+    document.getElementById('identityDisplay').textContent = '上传模版后自动填充';
+    document.getElementById('moduleDisplay').textContent = '上传模版后自动填充';
+    document.getElementById('contentTypeDisplay').textContent = '上传模版后自动填充';
+    document.getElementById('complaintTypeDisplay').textContent = '上传模版后自动填充';
+    document.getElementById('submitBtn').disabled = true;
+}
+
+function downloadTemplate() {
+    window.location.href = '/api/quark/download_template';
+}
+
+function handleTemplateUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const collectAccount = document.getElementById('collectAccountSelect').value;
+    if (!collectAccount) {
+        alert('请先选择采集账号，再上传模版');
+        input.value = '';
+        return;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('collect_account', collectAccount);
+
+    document.getElementById('templateInfo').textContent = '解析中...';
+    document.getElementById('templateError').textContent = '';
+
+    fetch('/api/quark/upload_template', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(res => {
+            if (res.success) {
+                quarkWorksConfig = res.works;
+                quarkModule = res.module;
+                quarkContentType = res.content_type;
+                currentUploadFilename = res.filename || '';
+                document.getElementById('identityDisplay').textContent = res.identity + '｜' + res.agent_name + (res.proxy_name ? ' → ' + res.proxy_name : '');
+                document.getElementById('moduleDisplay').textContent = res.module_name;
+                document.getElementById('contentTypeDisplay').textContent = res.content_type_name;
+                document.getElementById('complaintTypeDisplay').textContent = res.type_name + ' → ' + res.sub_type_name;
+                const warn = res.warnings ? '\n⚠️ 部分作品匹配失败：' + res.warnings.join('；') : '';
+                document.getElementById('templateInfo').textContent =
+                    '已加载：' + res.works.length + ' 部作品，共 ' + res.total_links + ' 条链接，' + res.total_batches + ' 个批次' + warn;
+                document.getElementById('templatePreview').innerHTML =
+                    res.works.map(w => '<div>📄 ' + w.work_name + '（' + w.proxy_name + '）— ' + w.links.length + ' 条链接</div>').join('');
+                document.getElementById('submitBtn').disabled = false;
+            } else {
+                alert('加载失败：' + res.error);
+                document.getElementById('templateError').textContent = res.error;
+                document.getElementById('templateInfo').textContent = '';
+                resetTemplate();
+                input.value = '';
+            }
+        })
+        .catch(function(err) {
+            document.getElementById('templateError').textContent = '上传失败：' + err.message;
+            input.value = '';
+        });
+}
+
+document.getElementById('quarkForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    if (!quarkWorksConfig || quarkWorksConfig.length === 0) {
+        alert('请先上传模版文件');
+        return;
+    }
+    const collectAccount = document.getElementById('collectAccountSelect').value;
+    const cookie = document.getElementById('cookieTextarea').value.trim();
+    if (!collectAccount || !cookie) {
+        alert('请选择采集账号');
+        return;
+    }
+
+    const submitBtn = document.getElementById('submitBtn');
+    submitBtn.disabled = true;
+    submitBtn.textContent = '验证Cookie...';
+
+    try {
+        const verifyResp = await fetch('/api/quark/verify_cookie', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cookie: cookie})
+        });
+        const verifyResult = await verifyResp.json();
+        if (!verifyResult.success) {
+            alert('Cookie验证失败：' + verifyResult.error);
+            return;
+        }
+
+        submitBtn.textContent = '提交中...';
+        const payload = {
+            collect_account: collectAccount,
+            cookie: cookie,
+            module: quarkModule,
+            content_type: quarkContentType,
+            works: quarkWorksConfig,
+            upload_filename: currentUploadFilename,
+        };
+        const resp = await fetch('/api/quark/submit', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const result = await resp.json();
+        if (!resp.ok || !result.success) throw new Error(result.error || '提交失败');
+
+        alert('提交成功\n任务编号：' + result.task_id + '\n共 ' + quarkWorksConfig.length + ' 部作品');
+        document.getElementById('goHomeBtn').style.display = '';
+        resetTemplate();
+    } catch(err) {
+        alert(err.message || '提交失败');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '提交投诉';
+    }
+});
+</script>
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+</body>
+</html>

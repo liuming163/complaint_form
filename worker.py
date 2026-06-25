@@ -13,6 +13,7 @@ from app import (
     release_worker_lock,
     run_baidu_complaint_script,
     run_complaint_script,
+    run_quark_complaint_script,
 )
 
 
@@ -70,6 +71,16 @@ def run_redis_worker():
                     task_payload['cookie'],
                     task_payload['complaint_product'],
                     task_payload['complaint_type_code'],
+                    task_payload['works_config'],
+                    task_payload['total_batches'],
+                )
+            elif platform == 'quark':
+                print(f"[Quark] 执行任务: {task_payload.get('task_id')}")
+                run_quark_complaint_script(
+                    task_payload['task_id'],
+                    task_payload['cookie'],
+                    task_payload['module'],
+                    task_payload['content_type'],
                     task_payload['works_config'],
                     task_payload['total_batches'],
                 )
