@@ -157,7 +157,9 @@ def submit_batch(cookie: str, links: list, originals: list, work_name: str,
 def fetch_complaint_number(cookie: str, work_name: str, after_ts: float,
                            submitted_links: list = None, retries: int = 3) -> str:
     """提交后查询列表，按作品名+前2条侵权链接匹配，返回 complain_id"""
-    check_links = set((submitted_links or [])[:2])
+    if not submitted_links:
+        return ''
+    check_links = set(submitted_links[:2])
     headers = {**make_headers(cookie), 'Content-Type': 'application/json;charset=UTF-8'}
     for _ in range(retries):
         time.sleep(2)
@@ -176,10 +178,9 @@ def fetch_complaint_number(cookie: str, work_name: str, after_ts: float,
                     continue
                 if contents[0].get('work', {}).get('url', '') != work_name:
                     continue
-                if check_links:
-                    item_links = {c.get('plagiarize', {}).get('url', '') for c in contents}
-                    if not check_links.issubset(item_links):
-                        continue
+                item_links = {c.get('plagiarize', {}).get('url', '') for c in contents}
+                if not check_links.issubset(item_links):
+                    continue
                 return str(item.get('complain_id', ''))
         except Exception:
             pass

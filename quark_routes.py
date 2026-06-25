@@ -583,6 +583,120 @@ def quark_submit():
     return jsonify({'success': True, 'task_id': task_id, 'submission_id': submission_id})
 
 
+# ── status list ───────────────────────────────────────────────────────────────
+
+@quark_bp.route('/status_list', methods=['GET'])
+@login_required
+def quark_status_list():
+    db = get_db_session()
+    try:
+        rows = db.execute(text("""
+            SELECT complaint_id AS submission_id, task_id, collect_account, work_name,
+                   total_links, batch_count, submitted_at, status,
+                   complaint_numbers_json, error_message, operator
+            FROM complaints
+            WHERE platform_code = 'quark'
+            ORDER BY submitted_at DESC
+            LIMIT 50
+        """)).fetchall()
+        status_map = {
+            'queued': '等待中', 'running': '执行中', 'completed': '已完成',
+            'failed': '失败', 'partial_failed': '部分失败',
+        }
+        result = []
+        for row in rows:
+            complaint_numbers = []
+            if row.complaint_numbers_json:
+                try:
+                    complaint_numbers = json.loads(row.complaint_numbers_json)
+                except Exception:
+                    pass
+            result.append({
+                'submission_id': row.submission_id,
+                'task_id': row.task_id,
+                'collect_account': row.collect_account,
+                'work_name': row.work_name,
+                'total_links': row.total_links,
+                'batch_count': row.batch_count,
+                'submitted_at': normalize_datetime(row.submitted_at),
+                'status': status_map.get(row.status, row.status or '等待中'),
+                'complaint_numbers': complaint_numbers,
+                'operator': row.operator or '',
+            })
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    finally:
+        db.close()
+
+
+# ── export excel ──────────────────────────────────────────────────────────────
+
+@quark_bp.route('/export_excel/<submission_id>', methods=['GET'])
+@login_required
+def quark_export_excel(submission_id):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    db = get_db_session()
+    try:
+        sub = db.execute(text("""
+            SELECT complaint_id, collect_account, submitted_at, complaint_numbers_json
+            FROM complaints WHERE complaint_id = :sid AND platform_code = 'quark'
+        """), {'sid': submission_id}).fetchone()
+        if not sub:
+            return jsonify({'success': False, 'error': '记录不存在'}), 404
+
+        works = db.execute(text("""
+            SELECT work_name, status, feedback_numbers FROM submission_works
+            WHERE complaint_id = :sid ORDER BY work_index
+        """), {'sid': submission_id}).fetchall()
+
+        complaint_numbers = []
+        if sub.complaint_numbers_json:
+            try:
+                complaint_numbers = json.loads(sub.complaint_numbers_json)
+            except Exception:
+                pass
+
+        submitted_at = ''
+        if sub.submitted_at:
+            submitted_at = sub.submitted_at.strftime('%Y-%m-%d %H:%M:%S') if hasattr(sub.submitted_at, 'strftime') else str(sub.submitted_at)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = '投诉结果'
+        ws.append(['采集时间', '采集账号', '作品名称', '投诉单号'])
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+
+        has_per_work = any(getattr(w, 'feedback_numbers', None) for w in works)
+        number_idx = 0
+        for work in works:
+            if has_per_work and work.feedback_numbers:
+                try:
+                    nums = json.loads(work.feedback_numbers)
+                except Exception:
+                    nums = [work.feedback_numbers]
+                for num in (nums or ['']):
+                    ws.append([submitted_at, sub.collect_account, work.work_name, num])
+            else:
+                num = complaint_numbers[number_idx] if number_idx < len(complaint_numbers) else ''
+                number_idx += 1
+                ws.append([submitted_at, sub.collect_account, work.work_name, num])
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        filename = f'quark_{submission_id}.xlsx'
+        return send_file(buf,
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                         as_attachment=True,
+                         download_name=filename)
+    finally:
+        db.close()
+
+
 # ── task status ────────────────────────────────────────────────────────────────
 
 @quark_bp.route('/task/<task_id>', methods=['GET'])

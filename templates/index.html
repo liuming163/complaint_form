@@ -97,11 +97,15 @@
                     <div class="status-card-header">
                         <div class="icon"><i class="fas fa-search"></i></div>
                         <div class="name">夸克状态查询</div>
+                        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="refreshQuarkStatus()">
+                            <i class="fas fa-sync-alt"></i> 刷新
+                        </button>
                     </div>
                     <div class="status-card-body">
-                        <div class="status-empty">
-                            <i class="fas fa-inbox fa-2x mb-2"></i>
-                            <div>暂无数据</div>
+                        <div id="quarkStatusTable" class="status-table-wrap">
+                            <div class="status-loading">
+                                <i class="fas fa-spinner fa-spin"></i> 加载中...
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -336,12 +340,92 @@ function refreshUcStatus() {
         });
 }
 
-// 页面加载时自动刷新UC状态
+function refreshQuarkStatus() {
+    const container = document.getElementById('quarkStatusTable');
+    const refreshBtn = container.closest('.status-card').querySelector('button');
+
+    container.innerHTML = '<div class="status-loading"><i class="fas fa-spinner fa-spin"></i> 刷新中...</div>';
+    if (refreshBtn) refreshBtn.disabled = true;
+
+    fetch('/api/quark/status_list')
+        .then(res => res.json())
+        .then(data => {
+            if (data.success && data.data.length > 0) {
+                let html = `
+                    <table class="status-table">
+                        <thead><tr>
+                            <th>时间</th><th>操作人</th><th>采集账号</th>
+                            <th>作品名称</th><th>投诉单号</th><th>状态</th>
+                            <th>预估完成时间</th><th>操作</th>
+                        </tr></thead><tbody>`;
+                data.data.forEach(item => {
+                    let timeStr = '-';
+                    if (item.submitted_at) {
+                        const d = new Date(item.submitted_at);
+                        const pad = n => String(n).padStart(2, '0');
+                        timeStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                    }
+                    let workParts = (item.work_name || '-').split(/[,，]/).map(s => s.trim()).filter(s => s);
+                    let workStr = workParts.length > 2
+                        ? workParts.slice(0,2).join('<br>') + `<br>...共${workParts.length}部`
+                        : workParts.join('<br>') || '-';
+                    let complaintStr = '-';
+                    if (item.complaint_numbers && item.complaint_numbers.length > 0) {
+                        complaintStr = item.complaint_numbers.length > 2
+                            ? item.complaint_numbers.slice(0,2).join('<br>') + `<br>...共${item.complaint_numbers.length}条`
+                            : item.complaint_numbers.join('<br>');
+                    }
+                    let statusClass = 'status-default';
+                    if (item.status === '已完成') statusClass = 'status-success';
+                    else if (item.status === '执行中') statusClass = 'status-running';
+                    else if (item.status === '失败' || item.status === '部分失败') statusClass = 'status-failed';
+                    let estStr = '-';
+                    if (item.status === '等待中' || item.status === '执行中') {
+                        estStr = getEstimatedTime(`quark_${item.submission_id}`);
+                    }
+                    let logUrl = `/uc/task/${item.task_id}/log`;
+                    let opsCell = '';
+                    if (item.status === '等待中') {
+                        opsCell = '<span class="log-pending">待执行</span>';
+                    } else {
+                        let ops = [];
+                        ops.push(`<a href="${logUrl}" target="_blank" class="log-link">查看日志</a>`);
+                        if (item.status === '已完成' || item.status === '部分失败') {
+                            ops.push(`<a href="/api/quark/export_excel/${item.submission_id}" class="log-link">导出单号</a>`);
+                        }
+                        opsCell = ops.join(' | ');
+                    }
+                    html += `<tr>
+                        <td>${timeStr}</td>
+                        <td>${item.operator || '-'}</td>
+                        <td>${item.collect_account || '-'}</td>
+                        <td style="white-space:normal">${workStr}</td>
+                        <td style="white-space:normal">${complaintStr}</td>
+                        <td><span class="status-badge ${statusClass}">${item.status}</span></td>
+                        <td>${estStr}</td>
+                        <td>${opsCell}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } else {
+                container.innerHTML = `<div class="status-empty"><i class="fas fa-inbox fa-2x mb-2"></i><div>暂无数据</div></div>`;
+            }
+        })
+        .catch(err => {
+            container.innerHTML = `<div class="status-error"><i class="fas fa-exclamation-triangle"></i> 加载失败: ${err}</div>`;
+        })
+        .finally(() => {
+            setTimeout(() => { if (refreshBtn) refreshBtn.disabled = false; }, 2000);
+        });
+}
+
 document.addEventListener('DOMContentLoaded', async function() {
     authorizationExpiryModal = new bootstrap.Modal(document.getElementById('authorizationExpiryModal'));
     await loadGlobalQueue();
     refreshUcStatus();
     refreshBaiduStatus();
+    refreshQuarkStatus();
     setTimeout(() => {
         checkAuthorizationExpiryAlertsOnce();
     }, 1000);
