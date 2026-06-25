@@ -670,20 +670,32 @@ def quark_export_excel(submission_id):
         for cell in ws[1]:
             cell.font = Font(bold=True)
 
+        # 优先用每作品自己的 feedback_numbers（成功=单号，失败=「投诉失败: 原因」，
+        # 一作品多批次→多行）。老记录该列为空，退回扁平列表按顺序取一个兜底。
         has_per_work = any(getattr(w, 'feedback_numbers', None) for w in works)
         number_idx = 0
         for work in works:
-            if has_per_work and work.feedback_numbers:
-                try:
-                    nums = json.loads(work.feedback_numbers)
-                except Exception:
-                    nums = [work.feedback_numbers]
-                for num in (nums or ['']):
-                    ws.append([submitted_at, sub.collect_account, work.work_name, num])
+            if has_per_work:
+                nums = []
+                raw = getattr(work, 'feedback_numbers', None)
+                if raw:
+                    try:
+                        nums = json.loads(raw) if isinstance(raw, str) else list(raw)
+                    except (TypeError, json.JSONDecodeError):
+                        nums = []
+                if not nums:
+                    nums = ['']
+                for num in nums:
+                    ws.append([submitted_at, sub.collect_account, work.work_name, str(num)])
             else:
                 num = complaint_numbers[number_idx] if number_idx < len(complaint_numbers) else ''
                 number_idx += 1
-                ws.append([submitted_at, sub.collect_account, work.work_name, num])
+                ws.append([submitted_at, sub.collect_account, work.work_name, str(num)])
+
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 18
+        ws.column_dimensions['C'].width = 35
+        ws.column_dimensions['D'].width = 55
 
         buf = io.BytesIO()
         wb.save(buf)

@@ -149,7 +149,16 @@ def submit_batch(cookie: str, links: list, originals: list, work_name: str,
     resp = requests.post(f'{BASE_URL}/api/complain/accuse', headers=headers, json=payload, timeout=30)
     data = resp.json()
     if data.get('code') != 200:
-        raise RuntimeError(f"提交失败: {data.get('message', '')} code={data.get('code')}")
+        # 错误信息可能在 data.data.error.message（如"该投诉已存在,请勿重复提交"），
+        # 也可能在顶层 message/msg，逐层兜底提取。
+        nested = ''
+        d = data.get('data')
+        if isinstance(d, dict):
+            err = d.get('error')
+            if isinstance(err, dict):
+                nested = err.get('message', '') or ''
+        err_msg = nested or data.get('message', '') or data.get('msg', '') or ''
+        raise RuntimeError(f"提交失败: {err_msg} code={data.get('code')}")
     complaint_no = str(data.get('data', {}).get('complaint_no', '') or data.get('data', '') or '')
     return complaint_no
 
@@ -205,6 +214,7 @@ def main():
         'completed_batches': 0,
         'failed_batches': 0,
         'feedback_numbers': [],
+        'feedback_numbers_by_work': [],
         'batch_results': [],
         'error_message': '',
     }
@@ -225,16 +235,22 @@ def main():
     proxy_map = identities['proxy_map']
 
     batch_no = 0
-    for work in works_config:
+    for work_index, work in enumerate(works_config):
         work_name = work['work_name']
         proxy_name = work.get('proxy_name', '')
         links = work.get('links', [])
         image_paths = work.get('image_paths', [])
 
+        # 本作品自己的单号/失败原因聚合（供导出时按作品正确配对）。
+        # 成功存纯单号，失败存「投诉失败: 原因」，与导出展示对齐。
+        work_numbers = []
+        work_failed = False
+
         # 匹配被代理人
         proxy_info = proxy_map.get(proxy_name)
         if proxy_info is None:
             available = '、'.join(proxy_map.keys()) or '无'
+            reason = f"未找到被代理人「{proxy_name}」，可用：{available}"
             for chunk_start in range(0, max(len(links), 1), MAX_LINKS_PER_BATCH):
                 batch_no += 1
                 result['failed_batches'] += 1
@@ -242,8 +258,12 @@ def main():
                     'batch_no': batch_no,
                     'work_name': work_name,
                     'status': 'failed',
-                    'error': f"未找到被代理人「{proxy_name}」，可用：{available}",
+                    'error': reason,
                 })
+            work_numbers.append(f"投诉失败: {reason}")
+            result['feedback_numbers_by_work'].append({
+                'work_index': work_index, 'work_name': work_name, 'numbers': work_numbers, 'status': 'failed',
+            })
             log(f"[{work_name}] 跳过：未找到被代理人「{proxy_name}」")
             continue
 
@@ -274,6 +294,7 @@ def main():
                 log(f"其他证明上传失败（跳过）: {p} — {e}")
 
         if not copyright_url:
+            reason = '版权证明文件上传失败，无法提交'
             for chunk_start in range(0, max(len(links), 1), MAX_LINKS_PER_BATCH):
                 batch_no += 1
                 result['failed_batches'] += 1
@@ -281,8 +302,12 @@ def main():
                     'batch_no': batch_no,
                     'work_name': work_name,
                     'status': 'failed',
-                    'error': '版权证明文件上传失败，无法提交',
+                    'error': reason,
                 })
+            work_numbers.append(f"投诉失败: {reason}")
+            result['feedback_numbers_by_work'].append({
+                'work_index': work_index, 'work_name': work_name, 'numbers': work_numbers, 'status': 'failed',
+            })
             log(f"[{work_name}] 跳过：版权证明上传失败")
             continue
 
@@ -302,6 +327,7 @@ def main():
                 complaint_no = fetch_complaint_number(args.cookie, work_name, submit_ts, chunk)
                 result['completed_batches'] += 1
                 result['feedback_numbers'].append(complaint_no)
+                work_numbers.append(complaint_no)
                 result['batch_results'].append({
                     'batch_no': batch_no,
                     'work_name': work_name,
@@ -311,6 +337,8 @@ def main():
                 log(f"[{work_name}] 第{batch_no}批成功，单号: {complaint_no}")
             except Exception as e:
                 result['failed_batches'] += 1
+                work_failed = True
+                work_numbers.append(f"投诉失败: {e}")
                 result['batch_results'].append({
                     'batch_no': batch_no,
                     'work_name': work_name,
@@ -319,6 +347,13 @@ def main():
                 })
                 log(f"[{work_name}] 第{batch_no}批失败: {e}")
             time.sleep(2)
+
+        result['feedback_numbers_by_work'].append({
+            'work_index': work_index,
+            'work_name': work_name,
+            'numbers': work_numbers,
+            'status': 'partial_failed' if (work_failed and any(not str(n).startswith('投诉失败:') for n in work_numbers)) else ('failed' if work_failed else 'completed'),
+        })
 
     if result['failed_batches'] > 0:
         result['status'] = 'partial_failed' if result['completed_batches'] > 0 else 'failed'

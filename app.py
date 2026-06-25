@@ -4354,6 +4354,19 @@ def run_quark_complaint_script(task_id, cookie, module, content_type, works_conf
                         'sid': submission_id,
                         'bno': br.get('batch_no'),
                     })
+                # 按作品写回单号分组（成功=单号，失败=「投诉失败: 原因」），
+                # 供导出时一作品多批次正确配对、失败原因直接显示在单号列。
+                for grp in result_data.get('feedback_numbers_by_work', []):
+                    db.execute(text("""
+                        UPDATE submission_works
+                        SET feedback_numbers=:nums, status=:st
+                        WHERE complaint_id=:sid AND work_name=:wname
+                    """), {
+                        'nums': json.dumps(grp.get('numbers', []), ensure_ascii=False),
+                        'st': grp.get('status', 'completed'),
+                        'sid': submission_id,
+                        'wname': grp.get('work_name', ''),
+                    })
                 tasks[task_id]['status'] = result_data.get('status', 'completed')
             else:
                 db.execute(text("UPDATE complaints SET status='failed', completed_at=NOW(), error_message=:err WHERE task_id=:tid"),
