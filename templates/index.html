@@ -150,7 +150,7 @@ function getEstimatedTime(taskId) {
     for (let i = 0; i <= idx; i++) {
         const q = globalQueue[i];
         // 每批次预估耗时：百度 20 秒；UC 每批要 reload+重填+重传证明文件，实测约 5 分钟（300 秒）
-        const secPerBatch = q.platform_code === 'baidu' ? 20 : 300;
+        const secPerBatch = (q.platform_code === 'baidu' || q.platform_code === 'quark') ? 20 : 300;
         cumulativeSeconds += (q.batch_count || 1) * secPerBatch;
     }
 
