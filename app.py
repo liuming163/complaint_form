@@ -190,7 +190,7 @@ def api_logout():
 
 @app.context_processor
 def inject_user():
-    return {'current_user': session.get('username', '')}
+    return {'current_user': session.get('username', ''), 'current_token': session.get('token', '')}
 
 
 @app.after_request
