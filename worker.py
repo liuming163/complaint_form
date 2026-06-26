@@ -73,6 +73,7 @@ def run_redis_worker():
                     task_payload['complaint_type_code'],
                     task_payload['works_config'],
                     task_payload['total_batches'],
+                    task_payload.get('infringe_type'),
                 )
             elif platform == 'quark':
                 print(f"[Quark] 执行任务: {task_payload.get('task_id')}")

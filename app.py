@@ -78,6 +78,10 @@ BAIDU_COMPLAINT_TYPE_MAP = {
     '度小视': 1409,
     '百度手机浏览器': 1412,
 }
+BAIDU_INFRINGE_TYPE_MAP = {
+    '影视版权': 1, '综艺版权': 2, '动漫动画版权': 3, '音乐版权': 4,
+    '游戏版权': 5, '体育赛事版权': 6, '新闻媒体版权': 7, '自媒体版权': 8,
+}
 BAIDU_WORKS_CATEGORY_MAP = {
     1: '文字', 2: '图片', 3: '音乐', 4: '软件',
     5: '视听作品(影视)', 6: '视听作品(综艺)', 7: '视听作品(动漫)',
@@ -3397,7 +3401,8 @@ def baidu_download_template():
     ws1 = wb.active
     ws1.title = '投诉配置'
     ws1.append(['字段', '值', '可选值'])
-    ws1.append(['投诉产品', '', '百度网盘 / 百度搜索 / 百度APP / 百家号 / 百度贴吧'])
+    ws1.append(['投诉产品', '', '百度网盘 / 百度搜索 / 百度APP / 百家号 / 百度贴吧 / 好看视频'])
+    ws1.append(['侵权类型', '', '影视版权 / 综艺版权 / 动漫动画版权 / 音乐版权 / 游戏版权 / 体育赛事版权 / 新闻媒体版权 / 自媒体版权（仅投诉产品为"好看视频"时需填写）'])
     header_font = Font(bold=True)
     for cell in ws1[1]:
         cell.font = header_font
@@ -3473,6 +3478,15 @@ def baidu_upload_template():
         return jsonify({'success': False, 'error': '投诉配置中"投诉产品"不能为空'}), 400
     if complaint_product not in BAIDU_COMPLAINT_TYPE_MAP:
         return jsonify({'success': False, 'error': f'不支持的投诉产品：{complaint_product}，可选：{", ".join(BAIDU_COMPLAINT_TYPE_MAP.keys())}'}), 400
+
+    infringe_type = None
+    if complaint_product == '好看视频':
+        infringe_type_str = config.get('侵权类型', '').strip()
+        if not infringe_type_str:
+            return jsonify({'success': False, 'error': '投诉产品为"好看视频"时，"侵权类型"不能为空'}), 400
+        if infringe_type_str not in BAIDU_INFRINGE_TYPE_MAP:
+            return jsonify({'success': False, 'error': f'不支持的侵权类型：{infringe_type_str}，可选：{", ".join(BAIDU_INFRINGE_TYPE_MAP.keys())}'}), 400
+        infringe_type = BAIDU_INFRINGE_TYPE_MAP[infringe_type_str]
 
     # 解析 Sheet2: 作品列表
     ws_works = wb['作品列表']
@@ -3601,6 +3615,7 @@ def baidu_upload_template():
         'success': True,
         'complaint_product': complaint_product,
         'complaint_type_code': BAIDU_COMPLAINT_TYPE_MAP[complaint_product],
+        'infringe_type': infringe_type,
         'upload_filename': Path(file.filename).name,
         'works': works_config,
         'total_works': len(works_config),
@@ -3621,6 +3636,7 @@ def baidu_submit():
     collect_account = data.get('collect_account', '').strip()
     complaint_product = data.get('complaint_product', '').strip()
     complaint_type_code = data.get('complaint_type_code')
+    infringe_type = data.get('infringe_type')
     works_config = data.get('works', [])
     skipped_works = data.get('skipped_works', [])
     upload_filename = data.get('upload_filename', '').strip()
@@ -3806,6 +3822,7 @@ def baidu_submit():
             'cookie': cookie,
             'complaint_product': complaint_product,
             'complaint_type_code': complaint_type_code,
+            'infringe_type': infringe_type,
             'works_config': works_config,
             'total_batches': total_batches,
         }
@@ -4063,7 +4080,7 @@ def _recover_baidu_partial(task_id, submission_id, reason):
     return len(real_numbers)
 
 
-def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_type_code, works_config, total_batches):
+def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_type_code, works_config, total_batches, infringe_type=None):
     import sys
 
     script_path = os.path.join(os.path.dirname(__file__), 'baidu_complaint_backend.py')
@@ -4098,6 +4115,8 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
         '--complaint-type-code', str(complaint_type_code),
         '--works-config-file', works_config_file.name,
     ]
+    if infringe_type is not None:
+        cmd += ['--infringe-type', str(infringe_type)]
 
     timeout_seconds = max(120, total_batches * 30)
 

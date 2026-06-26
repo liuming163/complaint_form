@@ -134,14 +134,14 @@ def build_ownership_form(ownership_detail):
     }
 
 
-def build_complaint_form(complaint_type_code, description, url_list, actual_name, actual_url):
+def build_complaint_form(complaint_type_code, description, url_list, actual_name, actual_url, infringe_type=None):
     return {
         'complaint_type': complaint_type_code,
         'description': description,
         'url_list': url_list,
         'actual_name': actual_name,
         'actual_url': actual_url,
-        'infringe_type': None,
+        'infringe_type': infringe_type,
     }
 
 
@@ -300,6 +300,7 @@ def main():
     parser.add_argument('--task-id', required=True)
     parser.add_argument('--cookie', required=True)
     parser.add_argument('--complaint-type-code', required=True, type=int)
+    parser.add_argument('--infringe-type', type=int, default=None)
     parser.add_argument('--works-config-file', required=True)
     args = parser.parse_args()
 
@@ -307,6 +308,7 @@ def main():
         works_config = json.load(_f)
     cookie = args.cookie
     complaint_type_code = args.complaint_type_code
+    infringe_type = args.infringe_type
 
     result = {
         'task_id': args.task_id,
@@ -417,7 +419,7 @@ def main():
                     log(f"  提交批次 {batch_no}: {len(chunk)}条链接 (行{chunk_start+1}-{chunk_start+len(chunk)})")
 
                     complaint_form = build_complaint_form(
-                        complaint_type_code, description, url_list, actual_name, actual_url
+                        complaint_type_code, description, url_list, actual_name, actual_url, infringe_type
                     )
 
                     try:
