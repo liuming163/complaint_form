@@ -1288,7 +1288,7 @@ def accounts_add():
     cookie = data.get('cookie', '').strip()
     if not platform_code or not used_company or not user or not cookie:
         return jsonify({'success': False, 'error': '使用的公司、平台名称、投诉账号、Cookie都不能为空'}), 400
-    if used_company not in {'和晞科技', '柏蒙文化'}:
+    if used_company not in {'和晞科技', '柏蒙文化', '中惠信科'}:
         return jsonify({'success': False, 'error': '使用的公司无效'}), 400
     if platform_code not in PLATFORM_MAP:
         return jsonify({'success': False, 'error': '平台编码无效'}), 400
@@ -2360,6 +2360,7 @@ def upload_custom_template():
             mapping = {
                 '北京和晞科技有限公司': '和晞科技',
                 '北京柏蒙文化传媒有限公司': '柏蒙文化',
+                '北京中惠信科科技有限公司': '中惠信科',
             }
             return mapping.get((agent_name or '').strip(), '')
 

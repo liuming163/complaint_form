@@ -262,7 +262,7 @@ function onIdentityChange() {
     const principal = document.querySelector('select[name="principal"]');
 
     select.innerHTML = isAgent
-        ? '<option value="北京和晞科技有限公司">北京和晞科技有限公司</option>'
+        ? `<option value="${getAgentNameForCurrentAccount()}">${getAgentNameForCurrentAccount()}</option>`
         : '<option value="刘明">刘明</option>';
 
     principalWrap.style.display = isAgent ? 'block' : 'none';
@@ -418,6 +418,20 @@ document.addEventListener('DOMContentLoaded', loadUcAccounts);
 // 存储当前uc账号列表，供自动填充使用
 let ucAccountsMap = {};
 
+// 代理主体(司内)短名 -> 投诉平台代理人全称
+const USED_COMPANY_TO_AGENT = {
+    '和晞科技': '北京和晞科技有限公司',
+    '柏蒙文化': '北京柏蒙文化传媒有限公司',
+    '中惠信科': '北京中惠信科科技有限公司',
+};
+
+// 根据当前采集账号的代理主体返回代理人全称，找不到时回退到和晞
+function getAgentNameForCurrentAccount() {
+    const user = document.getElementById('collectAccountSelect')?.value;
+    const acc = user ? ucAccountsMap[user] : null;
+    return USED_COMPANY_TO_AGENT[acc?.used_company] || '北京和晞科技有限公司';
+}
+
 function loadUcAccounts() {
     fetch('/api/accounts/list?platform_code=uc')
         .then(r => r.json())
@@ -450,6 +464,12 @@ function onCollectAccountChange() {
     } else {
         cookieTextarea.value = '';
         currentPrincipalSelect.innerHTML = '<option value="">请先选择采集账号</option>';
+    }
+    // 采集账号变更后，按其代理主体刷新代理人下拉框
+    const agentSelect = document.getElementById('identitySelect');
+    if (agentSelect && document.getElementById('id_agent')?.checked) {
+        const agentName = getAgentNameForCurrentAccount();
+        agentSelect.innerHTML = `<option value="${agentName}">${agentName}</option>`;
     }
 }
 

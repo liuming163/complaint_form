@@ -45,6 +45,8 @@
             <div class="mb-3">
                 <select class="form-select" name="agent" id="identitySelect" required>
                     <option value="北京和晞科技有限公司">北京和晞科技有限公司</option>
+                    <option value="北京柏蒙文化传媒有限公司">北京柏蒙文化传媒有限公司</option>
+                    <option value="北京中惠信科科技有限公司">北京中惠信科科技有限公司</option>
                 </select>
             </div>
             <div id="principalWrap">
@@ -238,6 +240,8 @@ function onIdentityChange() {
 
     select.innerHTML = isAgent
         ? '<option value="北京和晞科技有限公司">北京和晞科技有限公司</option>'
+          + '<option value="北京柏蒙文化传媒有限公司">北京柏蒙文化传媒有限公司</option>'
+          + '<option value="北京中惠信科科技有限公司">北京中惠信科科技有限公司</option>'
         : '<option value="刘明">刘明</option>';
 
     principalWrap.style.display = isAgent ? 'block' : 'none';
