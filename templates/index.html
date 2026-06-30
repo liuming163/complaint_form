@@ -502,9 +502,18 @@ function refreshBaiduStatus() {
                         baiduEstTimeStr = getEstimatedTime(`baidu_${item.submission_id}`);
                     }
 
-                    let exportCell = '';
-                    if (item.status === '已完成' || item.status === '部分失败') {
-                        exportCell = `<a href="/api/baidu/export_excel/${item.submission_id}" class="log-link">导出Excel</a>`;
+                    // 操作列：查看日志 + 导出Excel（与夸克状态查询一致）
+                    const baiduLogUrl = `/uc/task/${item.task_id}/log`;
+                    let opsCell = '';
+                    if (item.status === '等待中') {
+                        opsCell = '<span class="log-pending">待执行</span>';
+                    } else {
+                        let ops = [];
+                        ops.push(`<a href="${baiduLogUrl}" target="_blank" class="log-link">查看日志</a>`);
+                        if (item.status === '已完成' || item.status === '部分失败') {
+                            ops.push(`<a href="/api/baidu/export_excel/${item.submission_id}" class="log-link">导出Excel</a>`);
+                        }
+                        opsCell = ops.join(' | ');
                     }
 
                     html += `
@@ -516,7 +525,7 @@ function refreshBaiduStatus() {
                             <td>${complaintStr}</td>
                             <td><span class="status-badge ${statusClass}">${item.status}</span></td>
                             <td>${baiduEstTimeStr}</td>
-                            <td>${exportCell}</td>
+                            <td>${opsCell}</td>
                         </tr>
                     `;
                 });
