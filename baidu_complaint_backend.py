@@ -157,7 +157,14 @@ def submit_complaint(cookie, user_form, ownership_form, complaint_form):
         json=payload,
         timeout=30,
     )
-    data = resp.json()
+    # 保留 HTTP 状态码与原始响应体：百度失败时返回的 JSON 可能不含 message，
+    # 只看解析后的 data 会丢失真实原因（如重复投诉、限流、字段校验等业务码）。
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
+    data['_http_status'] = resp.status_code
+    data['_raw_text'] = resp.text
     return data
 
 
@@ -435,8 +442,13 @@ def main():
                             result['completed_batches'] += 1
                             work_completed_batches += 1
                         else:
-                            error_msg = resp_data.get('message', '提交失败')
-                            log(f"  批次 {batch_no} 失败: {error_msg}")
+                            biz_code = resp_data.get('code')
+                            http_status = resp_data.get('_http_status')
+                            raw_text = (resp_data.get('_raw_text') or '')[:500]
+                            error_msg = resp_data.get('message') or resp_data.get('msg') or '提交失败'
+                            log(f"  批次 {batch_no} 失败: {error_msg} "
+                                f"(业务code={biz_code}, HTTP={http_status})")
+                            log(f"  批次 {batch_no} 百度原始响应: {raw_text}")
                             result['batch_results'].append({
                                 'batch_no': batch_no,
                                 'work_name': work_name,
