@@ -560,6 +560,55 @@ def normalize_filename_part(value):
     return re.sub(r'[/:*?"<>|\\：＊？＂＜＞｜＼／]', '', normalized)
 
 
+# 真 emoji 的 Unicode 区段（窄匹配，只动真 emoji，不碰正常标点/CJK/英数）。
+# 百度 /upload 的 link_name 含 emoji 会直接返回 code=500「提交失败」。
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"  # 表情/图形/交通/补充符号等（😂🥵🥰😭…）
+    "\U0001F1E6-\U0001F1FF"  # 区域指示符（国旗）
+    "\U00002600-\U000026FF"  # 杂项符号（☀☂…）
+    "\U00002700-\U000027BF"  # 装饰符 Dingbats（✂✅…）
+    "\U00002B00-\U00002BFF"  # 箭头/星标（⭐⬆…）
+    "\U0000FE00-\U0000FE0F"  # 变体选择符（emoji 变体）
+    "\U0000200D"             # 零宽连接符 ZWJ（组合 emoji）
+    "\U000020E3"             # keycap 组合符
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def strip_emoji(value):
+    """移除字符串中的 emoji（窄匹配，仅真 emoji）。
+    返回 (清洗后文本, 是否有改动)。清洗后合并多余空格并去首尾空白。"""
+    if not value or not isinstance(value, str):
+        return value, False
+    cleaned = _EMOJI_PATTERN.sub('', value)
+    if cleaned == value:
+        return value, False
+    cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
+    return cleaned, True
+
+
+# 链接地址(Sheet3 C列)非法字符：汉字 + 全角标点。含这些说明链接本身有误，
+# 不能自动改，须用户删除后重传。percent 编码(%E7%99%BD…)是纯 ASCII，不受影响。
+_URL_ILLEGAL_PATTERN = re.compile(
+    "["
+    "一-鿿"   # CJK 汉字
+    "㐀-䶿"   # CJK 扩展A（生僻字）
+    "　-〿"   # CJK 标点（。、《》「」 等，含全角空格）
+    "＀-￯"   # 全角 ASCII/标点（，！？（）：； 等）
+    "]"
+)
+
+
+def find_illegal_url_chars(url):
+    """返回链接地址中出现的汉字/全角标点（去重保序），无则返回空字符串。"""
+    if not url:
+        return ''
+    found = _URL_ILLEGAL_PATTERN.findall(url)
+    return ''.join(dict.fromkeys(found))
+
+
 def get_principal_document_record(platform_code, used_company, principal_name):
     normalized_company = normalize_company_name(used_company)
     normalized_principal = normalize_company_name(principal_name)
@@ -3528,7 +3577,9 @@ def baidu_upload_template():
     # 解析 Sheet3: 侵权链接
     ws_links = wb['侵权链接']
     all_links = []
-    for row in ws_links.iter_rows(min_row=2, max_col=4, values_only=True):
+    emoji_cleaned = []  # 链接名称含 emoji 被自动清洗的行：{row, original, cleaned}
+    illegal_url_rows = []  # 链接地址含汉字/全角标点的行：{row, chars}
+    for row_idx, row in enumerate(ws_links.iter_rows(min_row=2, max_col=4, values_only=True), start=2):
         if not row[2]:
             continue
         link_name = str(row[1]).strip() if row[1] else ''
@@ -3536,13 +3587,30 @@ def baidu_upload_template():
         work_name = str(row[3]).strip() if row[3] else ''
         if not link_url.startswith(('http://', 'https://')):
             return jsonify({'success': False, 'error': f'链接地址格式错误（必须以http://或https://开头）：{link_url}'}), 400
+        # 链接地址含汉字/全角标点：链接本身有误，收集所有问题行后统一报错（不自动改）
+        illegal_chars = find_illegal_url_chars(link_url)
+        if illegal_chars:
+            illegal_url_rows.append({'row': row_idx, 'chars': illegal_chars})
+            continue
         if not work_name:
             return jsonify({'success': False, 'error': f'侵权链接"{link_url}"缺少作品名称'}), 400
+        # 清洗链接名称中的 emoji：百度 /upload 含 emoji 会返回 code=500，必须先去掉
+        cleaned_name, changed = strip_emoji(link_name)
+        if changed:
+            emoji_cleaned.append({'row': row_idx, 'original': link_name, 'cleaned': cleaned_name})
+            link_name = cleaned_name
         all_links.append({
             'link_name': link_name,
             'link_url': link_url,
             'work_name': work_name,
         })
+
+    # 链接地址含汉字/全角标点：禁止投诉，列出所有问题行让用户删除后重传
+    if illegal_url_rows:
+        detail = '；'.join(f"第{r['row']}行（含「{r['chars']}」）" for r in illegal_url_rows[:10])
+        more = f"，等共{len(illegal_url_rows)}行" if len(illegal_url_rows) > 10 else ''
+        return jsonify({'success': False, 'error':
+            f'以下行的链接地址含汉字或全角标点，链接无法投诉，请删除这些字符后重新上传：\n{detail}{more}'}), 400
 
     if not all_links:
         return jsonify({'success': False, 'error': '"侵权链接"中没有有效数据'}), 400
@@ -3623,6 +3691,7 @@ def baidu_upload_template():
         'total_links': total_links,
         'total_batches': total_batches,
         'skipped_works': extra_links_warnings,
+        'emoji_cleaned': emoji_cleaned,
     })
 
 

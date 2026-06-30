@@ -205,7 +205,17 @@ async function uploadTemplate(input) {
         const data = await resp.json();
         if (data.success) {
             templateData = data;
-            statusEl.innerHTML = `<span class="text-success"><i class="fas fa-check"></i> 模版解析成功</span>`;
+            let okMsg = `<span class="text-success"><i class="fas fa-check"></i> 模版解析成功</span>`;
+            if (data.emoji_cleaned && data.emoji_cleaned.length > 0) {
+                const rows = data.emoji_cleaned.map(e => e.row);
+                const shown = rows.slice(0, 20).join('、');
+                const more = rows.length > 20 ? ` 等${rows.length}行` : '';
+                okMsg += `<div class="alert alert-warning mt-2 mb-0">`
+                    + `<i class="fas fa-exclamation-triangle"></i> 检测到「链接名称」含表情符号，已自动移除`
+                    + `（百度提交含表情符号会失败）。<br>涉及第 ${shown}${more} 行。`
+                    + `</div>`;
+            }
+            statusEl.innerHTML = okMsg;
             renderWorksPreview(data);
         } else {
             statusEl.innerHTML = `<span class="text-danger"><i class="fas fa-times"></i> ${data.error}</span>`;
