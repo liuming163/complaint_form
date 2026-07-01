@@ -15,5 +15,8 @@ werkzeug>=2.3
 
 pycryptodome>=3.18
 
+# 微博投诉验证码识别（onnxruntime 由其自动带入）
+ddddocr>=1.4
+
 # 监控/调试用，可选
 psutil>=5.9
