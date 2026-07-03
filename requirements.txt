@@ -15,6 +15,9 @@ werkzeug>=2.3
 
 pycryptodome>=3.18
 
+# 被代理人/作品上传文件超5MB时自动压缩（图片）；PDF压缩另需系统安装 ghostscript
+Pillow>=10.0
+
 # 微博投诉验证码识别（onnxruntime 由其自动带入）
 ddddocr>=1.4
 

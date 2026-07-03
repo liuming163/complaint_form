@@ -1,6 +1,7 @@
 # !/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import base64
 import json
 import math
 import os
@@ -8,6 +9,7 @@ import queue
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import zipfile
 import html
@@ -30,6 +32,12 @@ try:
     from dotenv import load_dotenv
 except ImportError:
     load_dotenv = None
+
+try:
+    from PIL import Image, ImageOps
+except ImportError:
+    Image = None
+    ImageOps = None
 
 BASE_DIR = os.path.dirname(__file__)
 if load_dotenv:
@@ -738,17 +746,180 @@ def check_principal_authorization_blocked(principal_name, platform_code='uc', ac
     return None
 
 
-def save_named_upload(file_storage, target_dir, target_name_without_ext):
-    if not file_storage or not file_storage.filename:
+PRINCIPAL_UPLOAD_MAX_SIZE = 5 * 1024 * 1024
+IMAGE_UPLOAD_SUFFIXES = {'.png', '.jpg', '.jpeg', '.bmp'}
+PDF_UPLOAD_SUFFIX = '.pdf'
+def _compress_image_bytes(data, max_size):
+    """把图片压到 max_size 以内。
+
+    返回 (压缩后字节, 新后缀) 或 None（无法压到限制内）。统一转 JPEG。
+    """
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
         return None
-    suffix = Path(file_storage.filename).suffix.lower()
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img = ImageOps.exif_transpose(img)  # 按 EXIF 方向摆正
+        if img.mode in ('RGBA', 'LA', 'P'):
+            # JPEG 不支持透明通道，用白底铺平
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            rgba = img.convert('RGBA')
+            background.paste(rgba, mask=rgba.split()[-1])
+            img = background
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+    except Exception:
+        return None
+
+    long_edge = max(img.size)
+    # 先按原始尺寸尝试降质，再逐级缩小长边
+    candidate_edges = [long_edge, 2400, 2000, 1600, 1200]
+    candidate_edges = [e for e in candidate_edges if e <= long_edge]
+    if not candidate_edges:
+        candidate_edges = [long_edge]
+
+    for edge in candidate_edges:
+        work = img
+        if edge < long_edge:
+            ratio = edge / float(long_edge)
+            new_size = (max(1, int(img.size[0] * ratio)), max(1, int(img.size[1] * ratio)))
+            work = img.resize(new_size, Image.LANCZOS)
+        for quality in (85, 75, 65, 55):
+            buffer = io.BytesIO()
+            work.save(buffer, format='JPEG', quality=quality, optimize=True)
+            if buffer.tell() <= max_size:
+                return buffer.getvalue(), '.jpg'
+
+    return None
+
+
+def _compress_pdf_bytes(data, max_size):
+    """用 Ghostscript 把 PDF 压到 max_size 以内。
+
+    返回 (压缩后字节, '.pdf') 或 None（未安装 gs 或压不下去）。
+    """
+    gs_binary = _find_ghostscript_binary()
+    if not gs_binary:
+        return None
+
+    src_path = out_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as src:
+            src.write(data)
+            src_path = src.name
+        for setting in ('/ebook', '/screen'):
+            out_fd, out_path = tempfile.mkstemp(suffix='.pdf')
+            os.close(out_fd)
+            cmd = [
+                gs_binary, '-sDEVICE=pdfwrite', '-dCompatibilityLevel=1.4',
+                f'-dPDFSETTINGS={setting}', '-dNOPAUSE', '-dQUIET', '-dBATCH',
+                f'-sOutputFile={out_path}', src_path,
+            ]
+            try:
+                subprocess.run(cmd, check=True, timeout=120,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                continue
+            if os.path.exists(out_path) and os.path.getsize(out_path) <= max_size:
+                with open(out_path, 'rb') as f:
+                    return f.read(), '.pdf'
+        return None
+    finally:
+        for p in (src_path, out_path):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+
+def prepare_upload_file(file_storage, max_size=PRINCIPAL_UPLOAD_MAX_SIZE):
+    """检查上传文件大小；超限则自动压缩（图片转JPEG，PDF走Ghostscript）。
+
+    返回 dict：
+      {'skip': True}                         无文件，跳过
+      {'error': '...'}                       无法压缩到限制内
+      {'data': bytes, 'suffix': str,
+       'compressed': bool, 'original_size': int,
+       'final_size': int, 'original_suffix': str}
+    """
+    if not file_storage or not file_storage.filename:
+        return {'skip': True}
+
+    original_suffix = Path(file_storage.filename).suffix.lower()
+    data = _read_file_storage_bytes(file_storage)
+    original_size = len(data)
+
+    if original_size <= max_size:
+        return {
+            'data': data, 'suffix': original_suffix, 'compressed': False,
+            'original_size': original_size, 'final_size': original_size,
+            'original_suffix': original_suffix,
+        }
+
+    if original_suffix in IMAGE_UPLOAD_SUFFIXES:
+        result = _compress_image_bytes(data, max_size)
+        fail_msg = '文件压缩后仍超过5MB，请自行压缩后重新上传。'
+    elif original_suffix == PDF_UPLOAD_SUFFIX:
+        if not _find_ghostscript_binary():
+            return {'error': 'PDF文件超过5MB，且服务器未安装PDF压缩组件，请自行压缩后重新上传。'}
+        result = _compress_pdf_bytes(data, max_size)
+        fail_msg = 'PDF文件压缩后仍超过5MB，请自行压缩后重新上传。'
+    else:
+        return {'error': '文件超过5MB且格式不支持自动压缩，请自行压缩后重新上传。'}
+
+    if not result:
+        return {'error': fail_msg}
+
+    compressed_data, new_suffix = result
+    return {
+        'data': compressed_data, 'suffix': new_suffix, 'compressed': True,
+        'original_size': original_size, 'final_size': len(compressed_data),
+        'original_suffix': original_suffix,
+    }
+
+
+def save_named_bytes(data, suffix, target_dir, target_name_without_ext):
+    """把内存中的字节按规范文件名写入磁盘，返回最终文件名。"""
     filename = f"{target_name_without_ext}{suffix}"
     save_path = os.path.join(target_dir, filename)
-    file_storage.save(save_path)
+    with open(save_path, 'wb') as f:
+        f.write(data)
     return filename
 
 
-PRINCIPAL_UPLOAD_MAX_SIZE = 5 * 1024 * 1024
+def format_file_size(num_bytes):
+    if num_bytes >= 1024 * 1024:
+        return f'{num_bytes / (1024 * 1024):.1f}MB'
+    if num_bytes >= 1024:
+        return f'{num_bytes / 1024:.0f}KB'
+    return f'{num_bytes}B'
+
+
+def build_compression_notice(label, original_name, prep, saved_filename, view_relpath):
+    """构造前端压缩提示对象。view_relpath 为相对 static/imgs 的路径，前端据此拼查看链接。"""
+    return {
+        'label': label,
+        'original_name': original_name,
+        'original_size': format_file_size(prep['original_size']),
+        'final_size': format_file_size(prep['final_size']),
+        'compressed_name': saved_filename,
+        'view_path': view_relpath,
+    }
+
+
+def _read_file_storage_bytes(file_storage):
+    current_pos = file_storage.stream.tell()
+    file_storage.stream.seek(0)
+    data = file_storage.stream.read()
+    file_storage.stream.seek(current_pos)
+    return data
+
+
+def _find_ghostscript_binary():
+    return shutil.which('gs') or shutil.which('gswin64c') or shutil.which('gswin32c')
 
 
 def validate_principal_upload_filenames(principal_name, used_company, authorization_expires_on,
@@ -768,24 +939,6 @@ def validate_principal_upload_filenames(principal_name, used_company, authorizat
         expected_authorization_stem = f'授权委托书_{normalized_principal}_{normalized_used_company}_截止日期{expires_yyyymmdd}'
         if authorization_stem != expected_authorization_stem:
             return f'授权委托书文件名不符合要求，请上传命名为“{expected_authorization_stem}.文件后缀”的文件'
-
-    return None
-
-
-def validate_principal_upload_file_sizes(business_license_file=None, authorization_file=None):
-    files_to_check = []
-    if business_license_file and business_license_file.filename:
-        files_to_check.append(('被代理人营业执照文件', business_license_file))
-    if authorization_file and authorization_file.filename:
-        files_to_check.append(('授权委托书文件', authorization_file))
-
-    for label, file_storage in files_to_check:
-        current_pos = file_storage.stream.tell()
-        file_storage.stream.seek(0, os.SEEK_END)
-        size = file_storage.stream.tell()
-        file_storage.stream.seek(current_pos)
-        if size > PRINCIPAL_UPLOAD_MAX_SIZE:
-            return f'{label}不能超过5MB'
 
     return None
 
@@ -889,26 +1042,6 @@ def validate_work_asset_filenames(work_name, proof_file=None, other_proof_files=
     return None
 
 
-def validate_work_asset_file_sizes(proof_file=None, other_proof_files=None):
-    files_to_check = []
-    if proof_file and proof_file.filename:
-        files_to_check.append(('作品权属文件', proof_file))
-
-    for idx, file_storage in enumerate(other_proof_files or [], start=1):
-        if file_storage and file_storage.filename:
-            files_to_check.append((f'其他证明文件#{idx}', file_storage))
-
-    for label, file_storage in files_to_check:
-        current_pos = file_storage.stream.tell()
-        file_storage.stream.seek(0, os.SEEK_END)
-        size = file_storage.stream.tell()
-        file_storage.stream.seek(current_pos)
-        if size > WORK_ASSET_MAX_SIZE:
-            return f'{label}不能超过5MB'
-
-    return None
-
-
 def migrate_works_principal_name_if_needed():
     with get_db_session() as session:
         columns = {row[0] for row in session.execute(text("SHOW COLUMNS FROM works")).all()}
@@ -965,6 +1098,16 @@ def save_work_asset_file(file_storage, target_dir, filename_prefix):
     return filename, save_path
 
 
+def save_work_asset_bytes(data, suffix, target_dir, filename_prefix):
+    """把内存中的字节（可能已压缩）按作品资产命名规则写入磁盘。"""
+    random_suffix = uuid4().hex[:8]
+    filename = f"{filename_prefix}_{random_suffix}{suffix}"
+    save_path = os.path.join(target_dir, filename)
+    with open(save_path, 'wb') as f:
+        f.write(data)
+    return filename, save_path
+
+
 def create_work_with_assets(work_name, used_company, principal_name, content_type_id, complaint_type_id, proof_file, other_proof_files, operator_name=''):
     normalized_work_name = normalize_work_path_part(work_name)
     with get_db_session() as session:
@@ -997,15 +1140,35 @@ def create_work_with_assets(work_name, used_company, principal_name, content_typ
         work_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '剧名', work_dir_name)
         ensure_dir(work_dir)
 
-        proof_filename, proof_path = save_work_asset_file(proof_file, work_dir, f'证明文件_{normalized_work_name}')
-        if not proof_filename:
+        compression_notices = []
+
+        # 权属证明：读入内容，超过5MB自动压缩
+        proof_prep = prepare_upload_file(proof_file, WORK_ASSET_MAX_SIZE)
+        if proof_prep.get('skip'):
             return None, '请上传作品权属文件'
+        if proof_prep.get('error'):
+            return None, f'作品权属文件{proof_prep["error"]}'
+        proof_filename, proof_path = save_work_asset_bytes(
+            proof_prep['data'], proof_prep['suffix'], work_dir, f'证明文件_{normalized_work_name}')
+        if proof_prep.get('compressed'):
+            compression_notices.append(build_compression_notice(
+                '作品权属文件', proof_file.filename, proof_prep,
+                proof_filename, f'剧名/{work_dir_name}/{proof_filename}'))
 
         other_saved = []
         for idx, file_storage in enumerate(other_proof_files[:2], start=1):
-            saved_name, saved_path = save_work_asset_file(file_storage, work_dir, f'其他证明_{normalized_work_name}_{idx}')
-            if saved_name:
-                other_saved.append((saved_name, saved_path))
+            other_prep = prepare_upload_file(file_storage, WORK_ASSET_MAX_SIZE)
+            if other_prep.get('skip'):
+                continue
+            if other_prep.get('error'):
+                return None, f'其他证明文件#{idx}{other_prep["error"]}'
+            saved_name, saved_path = save_work_asset_bytes(
+                other_prep['data'], other_prep['suffix'], work_dir, f'其他证明_{normalized_work_name}_{idx}')
+            other_saved.append((saved_name, saved_path))
+            if other_prep.get('compressed'):
+                compression_notices.append(build_compression_notice(
+                    f'其他证明文件#{idx}', file_storage.filename, other_prep,
+                    saved_name, f'剧名/{work_dir_name}/{saved_name}'))
 
         now = datetime.now()
         session.execute(text("""
@@ -1047,6 +1210,7 @@ def create_work_with_assets(work_name, used_company, principal_name, content_typ
             'complaint_type': complaint_type['name'],
             'proof_file': proof_filename,
             'other_proof_count': len(other_saved),
+            'compression_notices': compression_notices,
         }, None
 
 
@@ -1567,13 +1731,6 @@ def principals_add():
             else:
                 authorization_file = None
 
-            size_error = validate_principal_upload_file_sizes(
-                business_license_file=business_license_file,
-                authorization_file=authorization_file,
-            )
-            if size_error:
-                return jsonify({'success': False, 'error': size_error}), 400
-
             filename_error = validate_principal_upload_filenames(
                 normalized_principal_name,
                 normalized_used_company,
@@ -1583,6 +1740,14 @@ def principals_add():
             )
             if filename_error:
                 return jsonify({'success': False, 'error': filename_error}), 400
+
+            # 读入内容，超过5MB自动压缩；压不下去才报错
+            business_prep = prepare_upload_file(business_license_file)
+            if business_prep.get('error'):
+                return jsonify({'success': False, 'error': f'被代理人营业执照文件{business_prep["error"]}'}), 400
+            authorization_prep = prepare_upload_file(authorization_file)
+            if authorization_prep.get('error'):
+                return jsonify({'success': False, 'error': f'授权委托书文件{authorization_prep["error"]}'}), 400
 
         # 检查是否已存在
         exists = session.execute(text("""
@@ -1613,6 +1778,7 @@ def principals_add():
         })
         session.commit()
 
+    compression_notices = []
     if not request.is_json:
         business_license_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '营业执照')
         auth_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '授权委托书')
@@ -1623,11 +1789,23 @@ def principals_add():
         business_license_filename = existing_docs.get('business_license_filename')
         authorization_filename = existing_docs.get('authorization_filename')
         authorization_expires_value = existing_docs.get('authorization_expires_on')
-        if business_license_file:
-            business_license_filename = save_named_upload(business_license_file, business_license_dir, f'营业执照_{normalized_principal_name}')
-        if authorization_file:
-            authorization_filename = save_named_upload(authorization_file, auth_dir, f'授权委托书_{normalized_principal_name}_{normalized_used_company}_截止日期{expires_yyyymmdd}')
+        if not business_prep.get('skip'):
+            business_license_filename = save_named_bytes(
+                business_prep['data'], business_prep['suffix'],
+                business_license_dir, f'营业执照_{normalized_principal_name}')
+            if business_prep.get('compressed'):
+                compression_notices.append(build_compression_notice(
+                    '被代理人营业执照', business_license_file.filename, business_prep,
+                    business_license_filename, f'营业执照/{business_license_filename}'))
+        if not authorization_prep.get('skip'):
+            authorization_filename = save_named_bytes(
+                authorization_prep['data'], authorization_prep['suffix'],
+                auth_dir, f'授权委托书_{normalized_principal_name}_{normalized_used_company}_截止日期{expires_yyyymmdd}')
             authorization_expires_value = authorization_expires_on
+            if authorization_prep.get('compressed'):
+                compression_notices.append(build_compression_notice(
+                    '授权委托书', authorization_file.filename, authorization_prep,
+                    authorization_filename, f'授权委托书/{authorization_filename}'))
         upsert_principal_documents(
             platform_code,
             normalized_used_company,
@@ -1638,7 +1816,7 @@ def principals_add():
             authorization_expires_value,
         )
 
-    return jsonify({'success': True, 'data': {
+    return jsonify({'success': True, 'compression_notices': compression_notices, 'data': {
         'platform_code': platform_code,
         'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
         'used_company': account_exists.get('used_company', normalized_used_company),
@@ -1702,12 +1880,6 @@ def principals_update():
         if not principal_exists:
             return jsonify({'success': False, 'error': '被代理人信息不存在'}), 404
 
-    size_error = validate_principal_upload_file_sizes(
-        authorization_file=authorization_file,
-    )
-    if size_error:
-        return jsonify({'success': False, 'error': size_error}), 400
-
     filename_error = validate_principal_upload_filenames(
         normalized_principal_name,
         normalized_used_company,
@@ -1716,6 +1888,11 @@ def principals_update():
     )
     if filename_error:
         return jsonify({'success': False, 'error': filename_error}), 400
+
+    # 读入内容，超过5MB自动压缩；压不下去才报错
+    authorization_prep = prepare_upload_file(authorization_file)
+    if authorization_prep.get('error'):
+        return jsonify({'success': False, 'error': f'授权委托书文件{authorization_prep["error"]}'}), 400
 
     business_license_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '营业执照')
     auth_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '授权委托书')
@@ -1727,11 +1904,17 @@ def principals_update():
         return jsonify({'success': False, 'error': '被代理人资料不存在'}), 404
 
     expires_yyyymmdd = authorization_expires_on.replace('-', '')
-    authorization_filename = save_named_upload(
-        authorization_file,
+    authorization_filename = save_named_bytes(
+        authorization_prep['data'],
+        authorization_prep['suffix'],
         auth_dir,
         f'授权委托书_{normalized_principal_name}_{normalized_used_company}_截止日期{expires_yyyymmdd}'
     )
+    compression_notices = []
+    if authorization_prep.get('compressed'):
+        compression_notices.append(build_compression_notice(
+            '授权委托书', authorization_file.filename, authorization_prep,
+            authorization_filename, f'授权委托书/{authorization_filename}'))
     upsert_principal_documents(
         platform_code,
         normalized_used_company,
@@ -1742,7 +1925,7 @@ def principals_update():
         authorization_expires_on,
     )
 
-    return jsonify({'success': True, 'data': {
+    return jsonify({'success': True, 'compression_notices': compression_notices, 'data': {
         'platform_code': platform_code,
         'platform_name': PLATFORM_MAP[platform_code]['platform_name'],
         'used_company': normalized_used_company,
@@ -1837,10 +2020,6 @@ def works_add():
     if len(other_files) > 2:
         return jsonify({'success': False, 'error': '其他证明文件最多上传2个'}), 400
 
-    size_error = validate_work_asset_file_sizes(proof_file=proof_file, other_proof_files=other_files)
-    if size_error:
-        return jsonify({'success': False, 'error': size_error}), 400
-
     filename_error = validate_work_asset_filenames(work_name, proof_file=proof_file, other_proof_files=other_files)
     if filename_error:
         return jsonify({'success': False, 'error': filename_error}), 400
@@ -1857,7 +2036,8 @@ def works_add():
     )
     if error:
         return jsonify({'success': False, 'error': error}), 400
-    return jsonify({'success': True, 'data': data})
+    compression_notices = data.pop('compression_notices', []) if data else []
+    return jsonify({'success': True, 'compression_notices': compression_notices, 'data': data})
 
 
 @app.route('/kuake')
@@ -1950,12 +2130,35 @@ def works_update_proof():
         work_dir = os.path.join(os.path.dirname(__file__), 'static', 'imgs', '剧名', work_dir_name)
         ensure_dir(work_dir)
 
-        proof_filename, _ = save_work_asset_file(proof_file, work_dir, f'证明文件_{normalized_work_name}')
+        compression_notices = []
+
+        # 权属证明：读入内容，超过5MB自动压缩
+        proof_prep = prepare_upload_file(proof_file, WORK_ASSET_MAX_SIZE)
+        if proof_prep.get('skip'):
+            return jsonify({'success': False, 'error': '证明文件不能为空'}), 400
+        if proof_prep.get('error'):
+            return jsonify({'success': False, 'error': f'作品权属文件{proof_prep["error"]}'}), 400
+        proof_filename, _ = save_work_asset_bytes(
+            proof_prep['data'], proof_prep['suffix'], work_dir, f'证明文件_{normalized_work_name}')
+        if proof_prep.get('compressed'):
+            compression_notices.append(build_compression_notice(
+                '作品权属文件', proof_file.filename, proof_prep,
+                proof_filename, f'剧名/{work_dir_name}/{proof_filename}'))
+
         other_saved = []
         for idx, f in enumerate(other_files[:2], start=1):
-            name, _ = save_work_asset_file(f, work_dir, f'其他证明_{normalized_work_name}_{idx}')
-            if name:
-                other_saved.append(name)
+            other_prep = prepare_upload_file(f, WORK_ASSET_MAX_SIZE)
+            if other_prep.get('skip'):
+                continue
+            if other_prep.get('error'):
+                return jsonify({'success': False, 'error': f'其他证明文件#{idx}{other_prep["error"]}'}), 400
+            name, _ = save_work_asset_bytes(
+                other_prep['data'], other_prep['suffix'], work_dir, f'其他证明_{normalized_work_name}_{idx}')
+            other_saved.append(name)
+            if other_prep.get('compressed'):
+                compression_notices.append(build_compression_notice(
+                    f'其他证明文件#{idx}', f.filename, other_prep,
+                    name, f'剧名/{work_dir_name}/{name}'))
 
         session.execute(text("""
             UPDATE works SET proof_file=:pf, other_proof_files=:opf, operator_name=:op, updated_at=NOW()
@@ -1968,7 +2171,51 @@ def works_update_proof():
         })
         session.commit()
 
-    return jsonify({'success': True, 'proof_file': proof_filename, 'other_proof_files': other_saved})
+    return jsonify({'success': True, 'compression_notices': compression_notices,
+                    'proof_file': proof_filename, 'other_proof_files': other_saved})
+
+
+@app.route('/api/compress_preview', methods=['POST'])
+@login_required
+def compress_preview():
+    """选文件后即时预压缩：>5MB 时压缩并把结果返回给前端（不落库、不存盘）。
+
+    前端据此弹确认框；用户确认后用返回的压缩数据替换待提交文件。
+    请求：multipart，字段 file；可选 max_size（字节，默认5MB）。
+    返回：need_compress / original_size(字节) / final_size(字节) /
+          original_name / compressed_name / data_base64 / mime
+    """
+    file_storage = request.files.get('file')
+    if not file_storage or not file_storage.filename:
+        return jsonify({'success': False, 'error': '未收到文件'}), 400
+
+    try:
+        max_size = int(request.form.get('max_size', PRINCIPAL_UPLOAD_MAX_SIZE))
+    except (TypeError, ValueError):
+        max_size = PRINCIPAL_UPLOAD_MAX_SIZE
+
+    original_name = file_storage.filename
+    prep = prepare_upload_file(file_storage, max_size)
+    if prep.get('error'):
+        return jsonify({'success': False, 'error': prep['error']}), 400
+
+    if not prep.get('compressed'):
+        # ≤5MB 或无需压缩，前端直接用原文件
+        return jsonify({'success': True, 'need_compress': False})
+
+    new_suffix = prep['suffix']
+    compressed_name = f'{Path(original_name).stem}{new_suffix}'
+    mime = 'application/pdf' if new_suffix == '.pdf' else 'image/jpeg'
+    return jsonify({
+        'success': True,
+        'need_compress': True,
+        'original_size': prep['original_size'],
+        'final_size': prep['final_size'],
+        'original_name': original_name,
+        'compressed_name': compressed_name,
+        'mime': mime,
+        'data_base64': base64.b64encode(prep['data']).decode('ascii'),
+    })
 
 
 @app.route('/api/uc/submit', methods=['POST'])

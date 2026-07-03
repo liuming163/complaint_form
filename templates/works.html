@@ -125,13 +125,13 @@
                 <div class="mb-3">
                     <label class="form-label">请上传作品权属（此处上传的文件用于投诉时的证明文件） </label>
                     <input type="file" class="form-control" id="inputProofFile" accept=".png,.jpg,.jpeg,.bmp,.pdf">
-                    <div class="form-text">上传文件原始名称需以：证明文件_作品名称 开头，例如：证明文件_铳火.png、证明文件_铳火_file.jpg；单文件不得超过5MB</div>
+                    <div class="form-text">上传文件原始名称需以：证明文件_作品名称 开头，例如：证明文件_铳火.png、证明文件_铳火_file.jpg；单文件超过5MB时系统将自动压缩</div>
                     <div class="invalid-feedback d-block" id="proofFileNameError" style="display:none !important;"></div>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">是否还有其他证明文件（最多2个，此处上传的文件用于投诉时的其他证明，除两执照一委托外）</label>
                     <input type="file" class="form-control" id="inputOtherProofFiles" accept=".png,.jpg,.jpeg,.bmp,.pdf" multiple>
-                    <div class="form-text">上传文件原始名称需符合：其他证明_作品名称_序号.xxx，例如：其他证明_铳火_1.png；单文件不得超过5MB</div>
+                    <div class="form-text">上传文件原始名称需符合：其他证明_作品名称_序号.xxx，例如：其他证明_铳火_1.png；单文件超过5MB时系统将自动压缩</div>
                     <div class="invalid-feedback d-block" id="otherProofFilesNameError" style="display:none !important;"></div>
                 </div>
             </div>
@@ -276,10 +276,7 @@ function validateProofFileImmediately() {
     const proofFile = document.getElementById('inputProofFile').files[0];
     clearWorkFileNameError('inputProofFile', 'proofFileNameError');
     if (!proofFile) return true;
-    if (proofFile.size > WORK_FILE_SIZE_LIMIT) {
-        showWorkFileNameError('inputProofFile', 'proofFileNameError', '作品权属文件不能超过5MB');
-        return false;
-    }
+    // 超过5MB不再拦截，交由后端自动压缩
     if (!workName) return true;
     const msg = validateWorkAssetFilenames(workName, proofFile, []);
     if (msg) {
@@ -294,11 +291,7 @@ function validateOtherProofFilesImmediately() {
     const otherFiles = Array.from(document.getElementById('inputOtherProofFiles').files || []);
     clearWorkFileNameError('inputOtherProofFiles', 'otherProofFilesNameError');
     if (!otherFiles.length) return true;
-    const oversizeFile = otherFiles.find(file => file.size > WORK_FILE_SIZE_LIMIT);
-    if (oversizeFile) {
-        showWorkFileNameError('inputOtherProofFiles', 'otherProofFilesNameError', `其他证明文件不能超过5MB：${oversizeFile.name}`);
-        return false;
-    }
+    // 超过5MB不再拦截，交由后端自动压缩
     if (!workName) return true;
     const msg = validateWorkAssetFilenames(workName, null, otherFiles);
     if (msg) {
@@ -447,6 +440,137 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// ===== 选文件即时预压缩 =====
+const COMPRESS_MAX_SIZE = 5 * 1024 * 1024;
+// 已确认的最终提交文件，键为 input id，值为 File 数组
+const confirmedFiles = {};
+
+function base64ToBlob(b64, mime) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+}
+
+function humanFileSize(bytes) {
+    if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + 'MB';
+    if (bytes >= 1024) return Math.round(bytes / 1024) + 'KB';
+    return bytes + 'B';
+}
+
+// 弹出压缩确认框，返回 Promise<boolean>（true=使用压缩后的文件）
+function showCompressConfirmModal(info) {
+    return new Promise(resolve => {
+        const typeWord = info.mime === 'application/pdf' ? 'PDF文件' : '图片';
+        const clearWord = info.mime === 'application/pdf' ? '内容清晰' : '清晰';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'modal fade';
+        wrapper.tabIndex = -1;
+        wrapper.setAttribute('data-bs-backdrop', 'static');
+        wrapper.innerHTML = `
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="fas fa-compress-alt me-2"></i>${typeWord}超过5MB，已自动压缩</h5>
+                    </div>
+                    <div class="modal-body">
+                        <p class="mb-2">您选择的「${escapeHtml(info.originalName)}」为 ${escapeHtml(info.originalSize)}，超过 5MB 上限，系统已自动压缩至 ${escapeHtml(info.finalSize)}。</p>
+                        <p class="mb-2">压缩后文件：${escapeHtml(info.compressedName)}　<a href="${info.blobUrl}" target="_blank">点击查看</a></p>
+                        <div class="alert alert-warning mb-0" style="font-size:13px;">
+                            请确认压缩后的${typeWord}是否${clearWord}可用：<br>
+                            · ${clearWord}可用 → 点「使用压缩后的文件」，将以此文件提交<br>
+                            · 不够${clearWord} → 点「取消」，请自行压缩后重新上传（本次不会上传）
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-role="cancel">取消</button>
+                        <button type="button" class="btn btn-primary" data-role="confirm">使用压缩后的文件</button>
+                    </div>
+                </div>
+            </div>`;
+        document.body.appendChild(wrapper);
+        const modal = new bootstrap.Modal(wrapper);
+        let result = false;
+        wrapper.querySelector('[data-role="confirm"]').addEventListener('click', () => { result = true; modal.hide(); });
+        wrapper.querySelector('[data-role="cancel"]').addEventListener('click', () => { result = false; modal.hide(); });
+        wrapper.addEventListener('hidden.bs.modal', () => { wrapper.remove(); resolve(result); });
+        modal.show();
+    });
+}
+
+// 对单个 File 做预压缩+确认。返回：要提交的 File（可能是压缩版或原文件），或 null（用户取消/失败，不提交此文件）
+async function processOneFile(file) {
+    if (!file || file.size <= COMPRESS_MAX_SIZE) return file;
+    const fd = new FormData();
+    fd.append('file', file);
+    let data;
+    try {
+        const resp = await fetch('/api/compress_preview', { method: 'POST', body: fd });
+        data = await resp.json();
+    } catch (e) {
+        alert(`「${file.name}」压缩失败，请重试或自行压缩后上传`);
+        return null;
+    }
+    if (!data.success) {
+        alert(data.error || `「${file.name}」过大且无法自动压缩，请自行压缩后上传`);
+        return null;
+    }
+    if (!data.need_compress) return file;
+
+    const blob = base64ToBlob(data.data_base64, data.mime);
+    const blobUrl = URL.createObjectURL(blob);
+    const confirmed = await showCompressConfirmModal({
+        originalName: data.original_name,
+        originalSize: humanFileSize(data.original_size),
+        finalSize: humanFileSize(data.final_size),
+        compressedName: data.compressed_name,
+        mime: data.mime,
+        blobUrl,
+    });
+    if (confirmed) {
+        return new File([blob], data.compressed_name, { type: data.mime });
+    }
+    URL.revokeObjectURL(blobUrl);
+    return null;
+}
+
+// 处理一个文件框（单选或多选）：逐个预压缩，结果存入 confirmedFiles[inputId]
+async function handleFilesCompress(inputId) {
+    const input = document.getElementById(inputId);
+    delete confirmedFiles[inputId];
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    // 没有任何超限文件则无需处理，提交时直接用 input.files
+    if (!files.some(f => f.size > COMPRESS_MAX_SIZE)) return;
+
+    const finalFiles = [];
+    let anyDropped = false;
+    for (const f of files) {
+        const result = await processOneFile(f);
+        if (result) finalFiles.push(result);
+        else anyDropped = true;
+    }
+    confirmedFiles[inputId] = finalFiles;
+    if (anyDropped) {
+        if (!finalFiles.length) {
+            input.value = '';
+            delete confirmedFiles[inputId];
+        }
+        showWorkToast('部分文件未采用，请确认或重新选择');
+    }
+}
+
+// 取最终提交文件数组（优先已确认的压缩集）
+function getUploadFiles(inputId) {
+    if (confirmedFiles[inputId]) return confirmedFiles[inputId];
+    return Array.from(document.getElementById(inputId).files || []);
+}
+
+function showWorkToast(msg) {
+    // works 页无 toast 容器，用轻量提示
+    alert(msg);
+}
+
 function openAddWorkModal() {
     document.getElementById('inputWorkName').value = '';
     document.getElementById('inputUsedCompany').value = '和晞科技';
@@ -455,6 +579,8 @@ function openAddWorkModal() {
     document.getElementById('inputComplaintType').value = '';
     document.getElementById('inputProofFile').value = '';
     document.getElementById('inputOtherProofFiles').value = '';
+    delete confirmedFiles['inputProofFile'];
+    delete confirmedFiles['inputOtherProofFiles'];
     clearWorkFileNameError('inputWorkName', 'workNameError');
     clearWorkFileNameError('inputProofFile', 'proofFileNameError');
     clearWorkFileNameError('inputOtherProofFiles', 'otherProofFilesNameError');
@@ -468,8 +594,8 @@ async function submitAddWork() {
     const principalName = document.getElementById('inputPrincipalName').value.trim();
     const contentTypeId = document.getElementById('inputContentType').value;
     const complaintTypeId = document.getElementById('inputComplaintType').value;
-    const proofFile = document.getElementById('inputProofFile').files[0];
-    const otherFiles = Array.from(document.getElementById('inputOtherProofFiles').files || []);
+    const proofFile = getUploadFiles('inputProofFile')[0] || null;
+    const otherFiles = getUploadFiles('inputOtherProofFiles');
 
     if (!workName || !usedCompany || !principalName || !contentTypeId || !complaintTypeId || !proofFile) {
         alert('请填写所有必填项并上传作品权属文件');
@@ -526,12 +652,24 @@ document.addEventListener('DOMContentLoaded', () => {
     loadPrincipalOptionsForWork();
     loadWorks();
 
-    document.getElementById('inputProofFile').addEventListener('change', validateProofFileImmediately);
-    document.getElementById('inputOtherProofFiles').addEventListener('change', validateOtherProofFilesImmediately);
+    document.getElementById('inputProofFile').addEventListener('change', async () => {
+        validateProofFileImmediately();
+        await handleFilesCompress('inputProofFile');
+    });
+    document.getElementById('inputOtherProofFiles').addEventListener('change', async () => {
+        validateOtherProofFilesImmediately();
+        await handleFilesCompress('inputOtherProofFiles');
+    });
     document.getElementById('inputWorkName').addEventListener('blur', () => {
         validateWorkNameImmediately();
         validateProofFileImmediately();
         validateOtherProofFilesImmediately();
+    });
+    document.getElementById('updateProofFile').addEventListener('change', async () => {
+        await handleFilesCompress('updateProofFile');
+    });
+    document.getElementById('updateOtherProofFiles').addEventListener('change', async () => {
+        await handleFilesCompress('updateOtherProofFiles');
     });
 });
 
@@ -541,6 +679,8 @@ async function openUpdateProofModal(workId, workName) {
     document.getElementById('updateProofError').textContent = '';
     document.getElementById('updateProofFile').value = '';
     document.getElementById('updateOtherProofFiles').value = '';
+    delete confirmedFiles['updateProofFile'];
+    delete confirmedFiles['updateOtherProofFiles'];
     document.getElementById('updateProofWorkName').textContent = `作品：${workName}`;
     document.getElementById('updateProofSubmitBtn').disabled = false;
 
@@ -557,7 +697,7 @@ async function openUpdateProofModal(workId, workName) {
 }
 
 async function submitUpdateProof() {
-    const proofFile = document.getElementById('updateProofFile').files[0];
+    const proofFile = getUploadFiles('updateProofFile')[0] || null;
     if (!proofFile) {
         document.getElementById('updateProofError').textContent = '请选择证明文件';
         return;
@@ -569,7 +709,7 @@ async function submitUpdateProof() {
     const fd = new FormData();
     fd.append('work_id', _updateProofWorkId);
     fd.append('proof_file', proofFile);
-    const otherFiles = document.getElementById('updateOtherProofFiles').files;
+    const otherFiles = getUploadFiles('updateOtherProofFiles');
     for (let i = 0; i < Math.min(otherFiles.length, 2); i++) fd.append('other_proof_file', otherFiles[i]);
 
     const resp = await fetch('/api/works/update_proof', {method: 'POST', body: fd});
@@ -597,11 +737,13 @@ async function submitUpdateProof() {
                 <div class="mb-2 text-muted" id="updateProofWorkName"></div>
                 <div class="mb-3">
                     <label class="form-label">证明文件 <span class="text-danger">*</span></label>
-                    <input type="file" class="form-control" id="updateProofFile" accept=".jpg,.jpeg,.png,.pdf,.zip,.rar">
+                    <input type="file" class="form-control" id="updateProofFile" accept=".png,.jpg,.jpeg,.bmp,.pdf">
+                    <div class="form-text">单文件超过5MB时系统将自动压缩</div>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">其他证明（最多2个，全量替换）</label>
-                    <input type="file" class="form-control" id="updateOtherProofFiles" accept=".jpg,.jpeg,.png,.pdf,.zip,.rar" multiple>
+                    <input type="file" class="form-control" id="updateOtherProofFiles" accept=".png,.jpg,.jpeg,.bmp,.pdf" multiple>
+                    <div class="form-text">单文件超过5MB时系统将自动压缩</div>
                 </div>
                 <div id="updateProofError" class="text-danger small"></div>
             </div>

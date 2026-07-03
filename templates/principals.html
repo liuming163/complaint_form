@@ -97,7 +97,7 @@
                     <div class="mb-3">
                         <label class="form-label">上传被代理人营业执照</label>
                         <input type="file" class="form-control" id="inputBusinessLicense" accept=".png,.jpg,.jpeg,.bmp,.pdf">
-                        <div class="form-text">上传文件原始名称需符合：营业执照_被代理人信息.xxx；单文件不得超过5MB</div>
+                        <div class="form-text">上传文件原始名称需符合：营业执照_被代理人信息.xxx；单文件超过5MB时系统将自动压缩</div>
                         <div class="invalid-feedback d-block" id="businessLicenseFilenameError" style="display:none !important;"></div>
                     </div>
                 </div>
@@ -105,7 +105,7 @@
                     <div class="mb-3">
                         <label class="form-label">上传授权委托书</label>
                         <input type="file" class="form-control" id="inputAuthorization" accept=".png,.jpg,.jpeg,.bmp,.pdf">
-                        <div class="form-text" id="authorizationUploadHint">上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx；单文件不得超过5MB</div>
+                        <div class="form-text" id="authorizationUploadHint">上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx；单文件超过5MB时系统将自动压缩</div>
                         <div class="invalid-feedback d-block" id="authorizationFilenameError" style="display:none !important;"></div>
                     </div>
                     <div class="mb-3">
@@ -232,7 +232,7 @@ function setPrincipalModalMode(mode, record = null) {
     if (mode === 'update') {
         title.innerHTML = '<i class="fas fa-pen me-2"></i>更新授权委托书';
         submitButton.textContent = '确认更新';
-        hint.textContent = '更新时必须上传新的授权委托书，文件名需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx；单文件不得超过5MB';
+        hint.textContent = '更新时必须上传新的授权委托书，文件名需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx；单文件超过5MB时系统将自动压缩';
         usedCompanyInput.disabled = true;
         platformInput.disabled = true;
         accountInput.disabled = true;
@@ -240,7 +240,7 @@ function setPrincipalModalMode(mode, record = null) {
     } else {
         title.innerHTML = '<i class="fas fa-plus me-2"></i>添加被代理人';
         submitButton.textContent = '确认添加';
-        hint.textContent = '上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx；单文件不得超过5MB';
+        hint.textContent = '上传文件原始名称需符合：授权委托书_被代理人信息_代理主体(司内)_截止日期YYYYMMDD.xxx；单文件超过5MB时系统将自动压缩';
         usedCompanyInput.disabled = false;
         platformInput.disabled = false;
         accountInput.disabled = false;
@@ -254,10 +254,6 @@ function validateBusinessLicenseFileImmediately() {
     const file = document.getElementById('inputBusinessLicense').files[0];
     clearFileNameError('inputBusinessLicense', 'businessLicenseFilenameError');
     if (!file) return true;
-    if (file.size > PRINCIPAL_FILE_SIZE_LIMIT) {
-        showFileNameError('inputBusinessLicense', 'businessLicenseFilenameError', '被代理人营业执照文件不能超过5MB');
-        return false;
-    }
     if (!principalName) return true;
     const msg = validatePrincipalUploadFilenames(principalName, usedCompany, '', file, null);
     if (msg) {
@@ -274,10 +270,6 @@ function validateAuthorizationFileImmediately() {
     const file = document.getElementById('inputAuthorization').files[0];
     clearFileNameError('inputAuthorization', 'authorizationFilenameError');
     if (!file) return true;
-    if (file.size > PRINCIPAL_FILE_SIZE_LIMIT) {
-        showFileNameError('inputAuthorization', 'authorizationFilenameError', '授权委托书文件不能超过5MB');
-        return false;
-    }
     if (!principalName || !usedCompany || !expires) return true;
     const msg = validatePrincipalUploadFilenames(principalName, usedCompany, expires, null, file);
     if (msg) {
@@ -499,6 +491,118 @@ function showToast(message, isError = false) {
     }, 5000);
 }
 
+// ===== 选文件即时预压缩 =====
+const COMPRESS_MAX_SIZE = 5 * 1024 * 1024;
+// 已确认的压缩文件，键为 input 元素 id
+const confirmedCompressed = {};
+
+function base64ToBlob(b64, mime) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+}
+
+function humanFileSize(bytes) {
+    if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + 'MB';
+    if (bytes >= 1024) return Math.round(bytes / 1024) + 'KB';
+    return bytes + 'B';
+}
+
+// 弹出压缩确认框，返回 Promise<boolean>（true=使用压缩后的文件）
+function showCompressConfirmModal(info) {
+    return new Promise(resolve => {
+        const typeWord = info.mime === 'application/pdf' ? 'PDF文件' : '图片';
+        const clearWord = info.mime === 'application/pdf' ? '内容清晰' : '清晰';
+        const wrapper = document.createElement('div');
+        wrapper.className = 'modal fade';
+        wrapper.tabIndex = -1;
+        wrapper.setAttribute('data-bs-backdrop', 'static');
+        wrapper.innerHTML = `
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="fas fa-compress-alt me-2"></i>${typeWord}超过5MB，已自动压缩</h5>
+                    </div>
+                    <div class="modal-body">
+                        <p class="mb-2">您选择的「${escapeHtml(info.originalName)}」为 ${escapeHtml(info.originalSize)}，超过 5MB 上限，系统已自动压缩至 ${escapeHtml(info.finalSize)}。</p>
+                        <p class="mb-2">压缩后文件：${escapeHtml(info.compressedName)}　<a href="${info.blobUrl}" target="_blank">点击查看</a></p>
+                        <div class="alert alert-warning mb-0" style="font-size:13px;">
+                            请确认压缩后的${typeWord}是否${clearWord}可用：<br>
+                            · ${clearWord}可用 → 点「使用压缩后的文件」，将以此文件提交<br>
+                            · 不够${clearWord} → 点「取消」，请自行压缩后重新上传（本次不会上传）
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-role="cancel">取消</button>
+                        <button type="button" class="btn btn-primary" data-role="confirm">使用压缩后的文件</button>
+                    </div>
+                </div>
+            </div>`;
+        document.body.appendChild(wrapper);
+        const modal = new bootstrap.Modal(wrapper);
+        let result = false;
+        wrapper.querySelector('[data-role="confirm"]').addEventListener('click', () => { result = true; modal.hide(); });
+        wrapper.querySelector('[data-role="cancel"]').addEventListener('click', () => { result = false; modal.hide(); });
+        wrapper.addEventListener('hidden.bs.modal', () => { wrapper.remove(); resolve(result); });
+        modal.show();
+    });
+}
+
+// 选文件后处理单个文件框：>5MB 调预压缩并弹确认框
+async function handleFileCompress(inputId, label) {
+    const input = document.getElementById(inputId);
+    delete confirmedCompressed[inputId];
+    const file = input.files[0];
+    if (!file || file.size <= COMPRESS_MAX_SIZE) return;
+
+    const fd = new FormData();
+    fd.append('file', file);
+    let data;
+    try {
+        const resp = await fetch('/api/compress_preview', { method: 'POST', body: fd });
+        data = await resp.json();
+    } catch (e) {
+        showToast('压缩失败，请重试或自行压缩后上传', true);
+        input.value = '';
+        return;
+    }
+    if (!data.success) {
+        showToast(data.error || '文件过大且无法自动压缩，请自行压缩后上传', true);
+        input.value = '';
+        return;
+    }
+    if (!data.need_compress) return;
+
+    const blob = base64ToBlob(data.data_base64, data.mime);
+    const compressedFile = new File([blob], data.compressed_name, { type: data.mime });
+    const blobUrl = URL.createObjectURL(blob);
+    const confirmed = await showCompressConfirmModal({
+        label,
+        originalName: data.original_name,
+        originalSize: humanFileSize(data.original_size),
+        finalSize: humanFileSize(data.final_size),
+        compressedName: data.compressed_name,
+        mime: data.mime,
+        blobUrl,
+    });
+    if (confirmed) {
+        confirmedCompressed[inputId] = compressedFile;
+    } else {
+        input.value = '';
+        delete confirmedCompressed[inputId];
+        URL.revokeObjectURL(blobUrl);
+        showToast('已取消，请重新选择文件', true);
+    }
+}
+
+// 取最终提交文件（优先已确认的压缩版）
+function getUploadFile(inputId) {
+    if (confirmedCompressed[inputId]) return confirmedCompressed[inputId];
+    const input = document.getElementById(inputId);
+    return input.files[0] || null;
+}
+
 function fuzzyMatch(text, keyword) {
     if (!keyword) return true;
     text = text.toLowerCase();
@@ -519,6 +623,8 @@ function resetPrincipalModalForm() {
     document.getElementById('inputBusinessLicense').value = '';
     document.getElementById('inputAuthorization').value = '';
     document.getElementById('inputAuthorizationExpiresOn').value = '';
+    delete confirmedCompressed['inputBusinessLicense'];
+    delete confirmedCompressed['inputAuthorization'];
     document.getElementById('principalDocsExisting').style.display = 'none';
     document.getElementById('principalDocsExisting').innerHTML = '';
     document.getElementById('principalBusinessLicenseSection').style.display = '';
@@ -555,8 +661,8 @@ async function submitPrincipalForm() {
     const platform_code = document.getElementById('inputPlatform').value;
     const account_user = document.getElementById('inputAccount').value.trim();
     const principal_name = document.getElementById('inputPrincipal').value.trim();
-    const business_license_file = document.getElementById('inputBusinessLicense').files[0];
-    const authorization_file = document.getElementById('inputAuthorization').files[0];
+    const business_license_file = getUploadFile('inputBusinessLicense');
+    const authorization_file = getUploadFile('inputAuthorization');
     const authorization_expires_on = document.getElementById('inputAuthorizationExpiresOn').value;
     const businessLicenseVisible = document.getElementById('principalBusinessLicenseSection').style.display !== 'none';
     const authorizationVisible = document.getElementById('principalAuthorizationSection').style.display !== 'none';
@@ -631,8 +737,14 @@ document.getElementById('addModal').addEventListener('hidden.bs.modal', () => {
     loadPrincipals();
 });
 
-document.getElementById('inputBusinessLicense').addEventListener('change', validateBusinessLicenseFileImmediately);
-document.getElementById('inputAuthorization').addEventListener('change', validateAuthorizationFileImmediately);
+document.getElementById('inputBusinessLicense').addEventListener('change', async () => {
+    validateBusinessLicenseFileImmediately();
+    await handleFileCompress('inputBusinessLicense', '被代理人营业执照');
+});
+document.getElementById('inputAuthorization').addEventListener('change', async () => {
+    validateAuthorizationFileImmediately();
+    await handleFileCompress('inputAuthorization', '授权委托书');
+});
 document.getElementById('inputPrincipal').addEventListener('blur', () => {
     validateBusinessLicenseFileImmediately();
     validateAuthorizationFileImmediately();
