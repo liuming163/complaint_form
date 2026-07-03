@@ -15,7 +15,7 @@ import zipfile
 import html
 import io
 import redis
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from openpyxl import load_workbook
 from uuid import uuid4
@@ -1056,10 +1056,23 @@ def migrate_works_principal_name_if_needed():
             session.commit()
 
 
+def migrate_complaints_estimated_finish_if_needed():
+    with get_db_session() as session:
+        columns = {row[0] for row in session.execute(text("SHOW COLUMNS FROM complaints")).all()}
+        if 'estimated_finish_at' not in columns:
+            session.execute(text("ALTER TABLE complaints ADD COLUMN estimated_finish_at DATETIME NULL AFTER submitted_at"))
+            session.commit()
+
+
 try:
     migrate_works_principal_name_if_needed()
 except Exception as exc:
     print(f'works schema migration skipped: {exc}')
+
+try:
+    migrate_complaints_estimated_finish_if_needed()
+except Exception as exc:
+    print(f'complaints estimated_finish_at migration skipped: {exc}')
 
 
 def get_work_content_types():
@@ -1247,23 +1260,55 @@ def map_task_status_label(status):
     return status or '未知'
 
 
+# 每批预估耗时（秒）：百度/夸克 20；微博含验证码识别+重试约 60；UC 每批 reload+重填+重传约 300
+PLATFORM_SEC_PER_BATCH = {'uc': 300, 'weibo': 60, 'baidu': 20, 'quark': 20}
+
+
+def compute_estimated_finish(session, new_batch_count, new_platform_code, new_submitted_at):
+    """在提交任务时算一次预估完成时间并冻结。
+
+    基准 = max(现在, 前面所有 queued/running 任务已冻结的 estimated_finish_at 的最大值)，
+    即"前面任务预计全部跑完的时刻"；再加上本任务自己的耗时。
+    这样新任务的预估完成时间必然排在前面任务之后，且前面任务完成出队后也不会往前提。
+    返回 datetime；算完即写死，后续队列变化不再影响它。
+    """
+    rows = session.execute(text("""
+        SELECT estimated_finish_at
+        FROM complaints
+        WHERE status IN ('queued', 'running')
+    """)).mappings().all()
+
+    # 前面任务里已冻结的预估完成时间的最大值（有旧数据可能为 NULL，忽略）
+    prior_finishes = [r.get('estimated_finish_at') for r in rows if r.get('estimated_finish_at')]
+    anchor = new_submitted_at
+    if prior_finishes:
+        anchor = max(anchor, max(prior_finishes))
+
+    sec = PLATFORM_SEC_PER_BATCH.get(new_platform_code, 300)
+    own_seconds = (new_batch_count or 1) * sec
+
+    return anchor + timedelta(seconds=own_seconds)
+
+
 def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holder, operator='', upload_filename=''):
     submitted_at = datetime.fromisoformat(payload['submitted_at'])
     work_name = payload['form'].get('作品名称') or ''
+    batch_count = payload.get('batch_count', 0)
     with get_db_session() as session:
+        estimated_finish_at = compute_estimated_finish(session, batch_count, platform_code, submitted_at)
         session.execute(text("""
             INSERT INTO complaints (
                 complaint_id, task_id, platform_code, collect_account, cookie_snapshot,
                 identity_type, agent_name, principal_name,
                 complaint_category, complaint_type, module_name, content_type,
                 description_text, work_name, total_links, batch_size, batch_count,
-                status, submitted_at, operator, upload_filename
+                status, submitted_at, estimated_finish_at, operator, upload_filename
             ) VALUES (
                 :complaint_id, :task_id, :platform_code, :collect_account, :cookie_snapshot,
                 :identity_type, :agent_name, :principal_name,
                 :complaint_category, :complaint_type, :module_name, :content_type,
                 :description_text, :work_name, :total_links, :batch_size, :batch_count,
-                :status, :submitted_at, :operator, :upload_filename
+                :status, :submitted_at, :estimated_finish_at, :operator, :upload_filename
             )
         """), {
             'complaint_id': complaint_id,
@@ -1282,9 +1327,10 @@ def insert_complaint(complaint_id, task_id, platform_code, payload, rights_holde
             'work_name': work_name,
             'total_links': payload.get('excel_rows', 0),
             'batch_size': payload.get('batch_size', 200),
-            'batch_count': payload.get('batch_count', 0),
+            'batch_count': batch_count,
             'status': 'queued',
             'submitted_at': submitted_at,
+            'estimated_finish_at': estimated_finish_at,
             'operator': operator,
             'upload_filename': upload_filename,
         })
@@ -1418,7 +1464,7 @@ def get_complaint_task(task_id):
 def get_submission_status_list():
     with get_db_session() as session:
         rows = session.execute(text("""
-            SELECT complaint_id, submitted_at, collect_account, work_name,
+            SELECT complaint_id, submitted_at, estimated_finish_at, collect_account, work_name,
                    total_links, batch_count, status, complaint_numbers_json, operator
             FROM complaints
             WHERE platform_code = 'uc'
@@ -1431,6 +1477,7 @@ def get_submission_status_list():
         items.append({
             'submission_id': row['complaint_id'],
             'submitted_at': normalize_datetime(row.get('submitted_at')),
+            'estimated_finish_at': normalize_datetime(row.get('estimated_finish_at')),
             'collect_account': row.get('collect_account') or '',
             'work_name': row.get('work_name') or '',
             'excel_rows': row.get('total_links') or 0,
@@ -4042,16 +4089,18 @@ def baidu_submit():
     session = get_db_session()
     try:
         work_names_str = ', '.join(all_work_names)
+        submitted_at = datetime.now()
+        estimated_finish_at = compute_estimated_finish(session, total_batches, 'baidu', submitted_at)
         session.execute(text("""
             INSERT INTO complaints
             (complaint_id, task_id, platform_code, collect_account, cookie_snapshot,
              identity_type, agent_name, principal_name,
              complaint_category, complaint_type, module_name, content_type,
-             description_text, work_name, total_links, batch_size, batch_count, status, submitted_at, operator, upload_filename)
+             description_text, work_name, total_links, batch_size, batch_count, status, submitted_at, estimated_finish_at, operator, upload_filename)
             VALUES (:sid, :tid, 'baidu', :account, :cookie,
                     :identity_type, :agent_name, '',
                     :complaint_category, :complaint_type, :module_name, :content_type,
-                    :desc, :work_name, :rows, 200, :batches, 'queued', NOW(), :operator, :upload_filename)
+                    :desc, :work_name, :rows, 200, :batches, 'queued', :submitted_at, :estimated_finish_at, :operator, :upload_filename)
         """), {
             'sid': submission_id,
             'tid': task_id,
@@ -4067,6 +4116,8 @@ def baidu_submit():
             'work_name': work_names_str[:5000],
             'rows': total_links,
             'batches': total_batches,
+            'submitted_at': submitted_at,
+            'estimated_finish_at': estimated_finish_at,
             'operator': get_current_user(),
             'upload_filename': upload_filename,
         })
@@ -4227,7 +4278,7 @@ def baidu_status_list():
     try:
         rows = session.execute(text("""
             SELECT complaint_id AS submission_id, collect_account, work_name, total_links AS excel_rows,
-                   batch_count, submitted_at,
+                   batch_count, submitted_at, estimated_finish_at,
                    task_id, status, complaint_numbers_json, error_message,
                    completed_at, operator
             FROM complaints
@@ -4263,6 +4314,7 @@ def baidu_status_list():
                 'complaint_numbers': complaint_numbers,
                 'error_message': row.error_message,
                 'submitted_at': normalize_datetime(row.submitted_at),
+                'estimated_finish_at': normalize_datetime(row.estimated_finish_at),
                 'completed_at': normalize_datetime(row.completed_at),
                 'operator': row.operator or '',
             })

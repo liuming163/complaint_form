@@ -499,18 +499,20 @@ def quark_submit():
     # 写入数据库
     db = get_db_session()
     try:
+        submitted_at = datetime.now()
+        estimated_finish_at = _app().compute_estimated_finish(db, total_batches, 'quark', submitted_at)
         db.execute(text("""
             INSERT INTO complaints
             (complaint_id, task_id, platform_code, collect_account, cookie_snapshot,
              identity_type, agent_name, principal_name,
              complaint_category, complaint_type, module_name, content_type,
              description_text, work_name, total_links, batch_size, batch_count,
-             status, submitted_at, operator, upload_filename)
+             status, submitted_at, estimated_finish_at, operator, upload_filename)
             VALUES (:sid, :tid, 'quark', :account, :cookie,
                     '代理人', :account, '',
                     '知识产权', :module_name, :module_name, :content_type_name,
                     :module_name, :work_name, :rows, 200, :batches,
-                    'queued', NOW(), :operator, :upload_filename)
+                    'queued', :submitted_at, :estimated_finish_at, :operator, :upload_filename)
         """), {
             'sid': submission_id,
             'tid': task_id,
@@ -521,6 +523,8 @@ def quark_submit():
             'work_name': ', '.join(all_work_names)[:5000],
             'rows': total_links,
             'batches': total_batches,
+            'submitted_at': submitted_at,
+            'estimated_finish_at': estimated_finish_at,
             'operator': get_current_user(),
             'upload_filename': upload_filename,
         })
@@ -592,7 +596,7 @@ def quark_status_list():
     try:
         rows = db.execute(text("""
             SELECT complaint_id AS submission_id, task_id, collect_account, work_name,
-                   total_links, batch_count, submitted_at, status,
+                   total_links, batch_count, submitted_at, estimated_finish_at, status,
                    complaint_numbers_json, error_message, operator
             FROM complaints
             WHERE platform_code = 'quark'
@@ -619,6 +623,7 @@ def quark_status_list():
                 'total_links': row.total_links,
                 'batch_count': row.batch_count,
                 'submitted_at': normalize_datetime(row.submitted_at),
+                'estimated_finish_at': normalize_datetime(row.estimated_finish_at),
                 'status': status_map.get(row.status, row.status or '等待中'),
                 'complaint_numbers': complaint_numbers,
                 'operator': row.operator or '',
