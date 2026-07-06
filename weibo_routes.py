@@ -28,6 +28,36 @@ weibo_bp = Blueprint('weibo', __name__, url_prefix='/api/weibo')
 WEIBO_API_BASE = 'https://service.account.weibo.com'
 LOGIN_EXPIRE_SECONDS = 43200
 
+# 微博投诉表单 4 组单选项的「名称 → 编码」映射（2026-07-01 从投诉页面抓取）。
+# 让用户在模板里填中文名，系统转成提交用的编码。
+# 【重要】权利作品类型/投诉内容 的选项随「权利类型分组」联动变化，当前 3 张映射
+# 对应的是「著作权」组的下级选项。故 v1 只放开著作权组（各项加「著作权-」前缀，
+# 与商标权/专利权分离）；如需商标权/专利权，须另抓其下级选项映射再放开。
+WEIBO_RIGHTS_TYPE_MAP = {
+    '著作权-资源买卖分享下载': '4',
+    '著作权-未经授权播放或发布': '5',
+    '著作权-抄袭或未经授权搬运': '6',
+    '著作权-盗版软件': '7',
+    '著作权-其他': '1',
+    # 以下商标权/专利权组暂不开放（下级选项不同，未抓取映射）：
+    # '商标权-假货推广': '8', '商标权-盗用或仿冒注册商标': '9', '商标权-其他': '2', '专利权': '3',
+}
+# 权利作品类型（提交字段 class_id）
+WEIBO_CLASS_ID_MAP = {
+    '电影': '0', '电视剧': '1', '综艺': '2', '音乐': '3', '动漫': '4',
+    '体育节目': '5', '短视频': '7', '游戏': '8', '图片': '9', '文章': '10', '其他': '6',
+}
+# 权利来源（提交字段 empower_type）
+WEIBO_EMPOWER_TYPE_MAP = {
+    '原始权利': '3', '独家授权': '1', '非独家授权': '2',
+}
+# 投诉内容（提交字段 c_content）
+WEIBO_C_CONTENT_MAP = {
+    '视频': '1', '音乐': '2', '图片': '3', '文章': '4', '微博内容': '6', '其他': '5',
+}
+# rights_type 中「需要填原作品链接」的编码：著作权类抄袭/未经授权搬运
+WEIBO_RIGHTS_NEED_ORIGINAL = {'6'}
+
 
 # ── 懒加载 app 模块符号（避免循环引用）────────────────────────────────────────
 
@@ -123,6 +153,7 @@ def weibo_verify_cookie():
 
 # Sheet1 字段定义：(字段名, 默认值, 说明)。投诉场景编码目前仅实测过"著作权-搬运"这套，
 # 故以数字编码+默认值+说明呈现，不做易错的中文映射。
+# Sheet1 字段定义：(字段名, 默认值, 说明)。投诉场景 4 项填「中文名称」，系统转编码。
 WEIBO_SHEET1_FIELDS = [
     ('被代理人名称', '', '必填，须与被代理人营业执照/证明文件目录一致'),
     ('被代理人法人', '', '必填，被代理人营业执照上的法定代表人'),
@@ -133,12 +164,16 @@ WEIBO_SHEET1_FIELDS = [
     ('机构联系人姓名', '', '必填'),
     ('机构联系人电话', '', '必填'),
     ('机构联系人身份证号', '', '必填'),
-    ('权利类型编码(rights_type)', '6', '必填，6=著作权(抄袭或未经授权搬运，需填原作品链接)。其它编码请在微博页面核对'),
-    ('作品类型编码(class_id)', '2', '必填，实测2。其它编码请在微博页面核对'),
-    ('投诉内容编码(c_content)', '6', '必填，实测6。其它编码请在微博页面核对'),
-    ('授权方式编码(empower_type)', '1', '必填，实测1'),
-    ('投诉理由(dpt_reason)', '链接涉及上传分享传播独播作品存在侵权行为 请尽快处理', '必填'),
-    ('处理要求(deal_req)', '删除', '必填'),
+    ('权利类型', '著作权-抄袭或未经授权搬运',
+     '必填。当前仅支持著作权类，可选：著作权-资源买卖分享下载/著作权-未经授权播放或发布/'
+     '著作权-抄袭或未经授权搬运/著作权-盗版软件/著作权-其他。'
+     '（选「著作权-抄袭或未经授权搬运」时需填原作品链接）'),
+    ('权利作品类型', '综艺',
+     '必填。可选：电影/电视剧/综艺/音乐/动漫/体育节目/短视频/游戏/图片/文章/其他'),
+    ('权利来源', '独家授权', '必填。可选：原始权利/独家授权/非独家授权'),
+    ('投诉内容', '微博内容', '必填。可选：视频/音乐/图片/文章/微博内容/其他'),
+    ('投诉理由', '链接涉及上传分享传播独播作品存在侵权行为 请尽快处理', '必填'),
+    ('处理要求', '删除', '必填'),
 ]
 
 
@@ -180,12 +215,16 @@ def weibo_download_template():
         [''],
         ['Sheet1 表单内容'],
         ['身份文本字段全部在 Sheet1 填写（数据库不存这些）'],
-        ['投诉场景编码目前仅实测「著作权-未经授权搬运」一套，已预填默认值；'],
-        ['如需其它场景，请在微博投诉页面核对对应数字编码后填入'],
+        ['投诉场景 4 项填「中文名称」，系统自动转编码，无需填数字：'],
+        ['  权利类型（当前仅支持著作权类）：著作权-资源买卖分享下载/著作权-未经授权播放或发布/'],
+        ['           著作权-抄袭或未经授权搬运/著作权-盗版软件/著作权-其他'],
+        ['  权利作品类型：电影/电视剧/综艺/音乐/动漫/体育节目/短视频/游戏/图片/文章/其他'],
+        ['  权利来源：原始权利/独家授权/非独家授权'],
+        ['  投诉内容：视频/音乐/图片/文章/微博内容/其他'],
         [''],
         ['Sheet2 批量导入Excel'],
         ['侵权链接：必填，微博链接。一部作品超过100条会自动拆成多单提交'],
-        ['原作品链接：权利类型为「搬运」(rights_type=6)时必填'],
+        ['原作品链接：权利类型为「抄袭或未经授权搬运」时必填'],
         ['作品名称：必填，支持多部作品混合，系统按作品名分组；提交时自动用《》包裹'],
         [''],
         ['证明文件说明（沿用夸克约定，放 static/imgs/ 下）'],
@@ -256,6 +295,12 @@ def weibo_upload_template():
     principal_name = _g('被代理人名称')
     agent_org = _g('代理机构名称')
     org_agt_name = _g('机构联系人姓名')
+
+    rights_type_name = _g('权利类型')
+    class_name = _g('权利作品类型')
+    empower_name = _g('权利来源')
+    c_content_name = _g('投诉内容')
+
     required = {
         '被代理人名称': principal_name, '被代理人法人': _g('被代理人法人'),
         '被代理人统一社会信用代码': _g('被代理人统一社会信用代码'),
@@ -263,11 +308,31 @@ def weibo_upload_template():
         '代理机构统一社会信用代码': _g('代理机构统一社会信用代码'),
         '机构联系人姓名': org_agt_name, '机构联系人电话': _g('机构联系人电话'),
         '机构联系人身份证号': _g('机构联系人身份证号'),
-        '权利类型编码(rights_type)': _g('权利类型编码(rights_type)'),
+        '权利类型': rights_type_name, '权利作品类型': class_name,
+        '权利来源': empower_name, '投诉内容': c_content_name,
     }
     missing = [k for k, v in required.items() if not v]
     if missing:
         return jsonify({'success': False, 'error': 'Sheet1 缺少必填项：' + '、'.join(missing)}), 400
+
+    # 中文名称 → 编码。名称无效则报错，附可选项，避免提交时才被微博拒。
+    def _to_code(name, mapping, field_cn):
+        code = mapping.get(name)
+        if code is None:
+            return None, f'{field_cn}「{name}」无效，可选：' + '、'.join(mapping.keys())
+        return code, ''
+
+    code_errors = []
+    rights_type, e = _to_code(rights_type_name, WEIBO_RIGHTS_TYPE_MAP, '权利类型')
+    if e: code_errors.append(e)
+    class_id, e = _to_code(class_name, WEIBO_CLASS_ID_MAP, '权利作品类型')
+    if e: code_errors.append(e)
+    empower_type, e = _to_code(empower_name, WEIBO_EMPOWER_TYPE_MAP, '权利来源')
+    if e: code_errors.append(e)
+    c_content, e = _to_code(c_content_name, WEIBO_C_CONTENT_MAP, '投诉内容')
+    if e: code_errors.append(e)
+    if code_errors:
+        return jsonify({'success': False, 'error': '\n'.join(code_errors)}), 400
 
     # 组装后端 form（文本字段 + 场景编码），picid 由后端上传获得
     form = {
@@ -280,14 +345,19 @@ def weibo_upload_template():
         'org_agt_name': org_agt_name,
         'org_agt_tel': _g('机构联系人电话'),
         'org_agt_idnum': _g('机构联系人身份证号'),
-        'rights_type': _g('权利类型编码(rights_type)'),
-        'class_id': _g('作品类型编码(class_id)') or '2',
-        'c_content': _g('投诉内容编码(c_content)') or '6',
-        'empower_type': _g('授权方式编码(empower_type)') or '1',
-        'dpt_reason': _g('投诉理由(dpt_reason)'),
-        'deal_req': _g('处理要求(deal_req)') or '删除',
+        'rights_type': rights_type,
+        'class_id': class_id,
+        'c_content': c_content,
+        'empower_type': empower_type,
+        'dpt_reason': _g('投诉理由'),
+        'deal_req': _g('处理要求') or '删除',
+        # 回显用（前端展示名称，不参与提交）
+        '_rights_type_name': rights_type_name,
+        '_class_name': class_name,
+        '_empower_name': empower_name,
+        '_c_content_name': c_content_name,
     }
-    need_original = (form['rights_type'] == '6')
+    need_original = (rights_type in WEIBO_RIGHTS_NEED_ORIGINAL)
 
     # 解析 Sheet2（侵权链接 | 原作品链接 | 作品名称）
     works_map, work_order, empty_rows = {}, [], 0
@@ -306,7 +376,7 @@ def weibo_upload_template():
         if not wn:
             return jsonify({'success': False, 'error': f'存在链接但作品名为空（链接：{link[:60]}）'}), 400
         if need_original and not original:
-            return jsonify({'success': False, 'error': f'权利类型为搬运(6)时原作品链接必填（作品：{wn}）'}), 400
+            return jsonify({'success': False, 'error': f'权利类型「{rights_type_name}」需填原作品链接（作品：{wn}）'}), 400
         if wn not in works_map:
             works_map[wn] = {'links': [], 'originals': []}
             work_order.append(wn)
@@ -397,7 +467,11 @@ def weibo_upload_template():
         'total_batches': total_batches,
         'principal_name': principal_name,
         'agent_org': agent_org,
-        'rights_type': form['rights_type'],
+        # 前端展示用名称（非编码）
+        'rights_type_name': rights_type_name,
+        'class_name': class_name,
+        'empower_name': empower_name,
+        'c_content_name': c_content_name,
     }
     if match_errors:
         resp_data['warnings'] = match_errors

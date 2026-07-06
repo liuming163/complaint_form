@@ -154,9 +154,10 @@ function handleTemplateUpload(input) {
                 document.getElementById('identityDisplay').textContent =
                     '机构代理｜代理机构：' + weiboAgentOrg + ' → 被代理人：' + weiboPrincipal;
                 document.getElementById('scenarioDisplay').textContent =
-                    '权利类型编码：' + (res.rights_type || '') +
-                    '｜作品类型：' + (res.form.class_id || '') +
-                    '｜投诉内容：' + (res.form.c_content || '') +
+                    '权利类型：' + (res.rights_type_name || '') +
+                    '｜权利作品类型：' + (res.class_name || '') +
+                    '｜权利来源：' + (res.empower_name || '') +
+                    '｜投诉内容：' + (res.c_content_name || '') +
                     '｜处理要求：' + (res.form.deal_req || '');
                 const warn = res.warnings ? '\n⚠️ 部分作品匹配失败：' + res.warnings.join('；') : '';
                 document.getElementById('templateInfo').textContent =
