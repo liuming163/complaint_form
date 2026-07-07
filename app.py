@@ -1767,6 +1767,9 @@ def principals_add():
             if not existing_docs or not existing_docs.get('business_license_locked'):
                 if not business_license_file or not business_license_file.filename:
                     return jsonify({'success': False, 'error': '请上传被代理人营业执照'}), 400
+                _bl_ext = os.path.splitext(business_license_file.filename)[1].lower()
+                if _bl_ext not in {'.png', '.jpg', '.jpeg'}:
+                    return jsonify({'success': False, 'error': f'被代理人营业执照仅支持 .png/.jpg/.jpeg 格式，不支持 {_bl_ext or "无后缀"} 文件'}), 400
             else:
                 business_license_file = None
 
