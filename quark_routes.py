@@ -375,11 +375,12 @@ def quark_upload_template():
             if f.startswith('其他证明_') and not f.startswith('._'):
                 other_paths.append(os.path.join(drama_dir, f))
 
-        # 授权委托书
+        # 授权委托书：被代理人 + 代理机构简称双重匹配，防止同一被代理人有多代理机构时拿错文件
         auth_dir = os.path.join(static_imgs_dir, '授权委托书')
         if os.path.isdir(auth_dir):
-            for f in os.listdir(auth_dir):
-                if f.startswith('授权委托书_') and not f.startswith('._') and _company_match(pn, f):
+            for f in sorted(os.listdir(auth_dir)):
+                if f.startswith('授权委托书_') and not f.startswith('._') \
+                        and _company_match(pn, f) and _company_match(uc, f):
                     other_paths.append(os.path.join(auth_dir, f))
                     break
 
