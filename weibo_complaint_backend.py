@@ -83,9 +83,15 @@ def fetch_captcha(cookie: str):
 
     该接口 set-cookie 一个 weibo_complaint_captcha_rights_movie=<hash>，是这张图的
     服务端句柄，提交时必须带上配对使用。用 requests.Session 自动接住这个 cookie。
+
+    注意：初始化 session 时须跳过原始 cookie 里已有的 weibo_complaint_captcha_*，
+    否则旧值和服务端新值同名共存，requests 会报 "There are multiple cookies with name"。
     """
+    captcha_key = f'weibo_complaint_captcha_{PAGE_SIGN}'
     sess = requests.Session()
     for k, v in _cookie_str_to_dict(cookie).items():
+        if k == captcha_key:
+            continue  # 跳过旧验证码 cookie，让服务端的新值成为唯一值
         sess.cookies.set(k, v)
     resp = sess.get(
         f'{BASE_URL}/image/getcaptcha',
@@ -322,6 +328,9 @@ def main():
     parser.add_argument('--cookie', required=True)
     parser.add_argument('--config-file', required=True,
                         help='JSON: {"form": {...共享字段...}, "works": [...]}')
+    parser.add_argument('--per-batch-limit', type=int, default=1,
+                        help='每批侵权链接上限：普通账号100，受限账号1（由whitelist决定）。'
+                             '缺省保守取1（宁可慢也不因超限被拒）')
     args = parser.parse_args()
 
     with open(args.config_file, encoding='utf-8') as f:
@@ -329,6 +338,9 @@ def main():
     cookie = args.cookie
     config_form = config.get('form', {})
     works_config = config.get('works', [])
+    # 每批上限：普通账号100、受限账号(whitelist=1)传1，超出自动拆多单。
+    # 缺失/非法时保守取1——宁可慢也不因超限被拒还白耗验证码。
+    per_batch_limit = args.per_batch_limit if args.per_batch_limit and args.per_batch_limit > 0 else 1
 
     result = {
         'task_id': args.task_id,
@@ -401,9 +413,9 @@ def main():
 
                 work_matched = []
                 submitted_urls_all = []
-                for chunk_start in range(0, len(links), MAX_LINKS_PER_SUBMISSION):
+                for chunk_start in range(0, len(links), per_batch_limit):
                     batch_no += 1
-                    chunk = links[chunk_start:chunk_start + MAX_LINKS_PER_SUBMISSION]
+                    chunk = links[chunk_start:chunk_start + per_batch_limit]
                     submitted_urls_all.extend(chunk)
                     work['_chunk_links'] = chunk
                     log(f"  提交批次 {batch_no}: {len(chunk)}条链接 (行{chunk_start+1}-{chunk_start+len(chunk)})")
@@ -445,7 +457,7 @@ def main():
                 log(f"  ❌ 作品「{work_name}」处理异常，跳过: {e}")
                 failed_works.add(work_name)
                 # 该作品的批次全记失败
-                for chunk_start in range(0, max(len(links), 1), MAX_LINKS_PER_SUBMISSION):
+                for chunk_start in range(0, max(len(links), 1), per_batch_limit):
                     batch_no += 1
                     result['failed_batches'] += 1
                     result['batch_results'].append({

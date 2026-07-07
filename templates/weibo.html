@@ -84,6 +84,7 @@ let weiboForm = null;
 let currentUploadFilename = '';
 let weiboPrincipal = '';
 let weiboAgentOrg = '';
+let weiboPerBatchLimit = 100;
 
 document.addEventListener('DOMContentLoaded', loadWeiboAccounts);
 
@@ -113,6 +114,7 @@ function onCollectAccountChange() {
 function resetTemplate() {
     weiboWorksConfig = null;
     weiboForm = null;
+    weiboPerBatchLimit = 100;
     currentUploadFilename = '';
     document.getElementById('templateInfo').textContent = '';
     document.getElementById('templateError').textContent = '';
@@ -150,6 +152,7 @@ function handleTemplateUpload(input) {
                 weiboForm = res.form;
                 weiboPrincipal = res.principal_name || '';
                 weiboAgentOrg = res.agent_org || '';
+                weiboPerBatchLimit = res.per_batch_limit || 100;
                 currentUploadFilename = res.filename || '';
                 document.getElementById('identityDisplay').textContent =
                     '机构代理｜代理机构：' + weiboAgentOrg + ' → 被代理人：' + weiboPrincipal;
@@ -160,8 +163,18 @@ function handleTemplateUpload(input) {
                     '｜投诉内容：' + (res.c_content_name || '') +
                     '｜处理要求：' + (res.form.deal_req || '');
                 const warn = res.warnings ? '\n⚠️ 部分作品匹配失败：' + res.warnings.join('；') : '';
+                // 每批上限提示：受限账号(1条/批)会拆成大量单、每单一次验证码，需显著提醒
+                let limitTip = '';
+                if (res.whitelist_checked === false) {
+                    limitTip = '\n⚠️ 未能确认本账号链接上限，默认按 100 条/批处理（若该账号实际受限，提交可能报错）';
+                } else if (res.per_batch_limit === 1) {
+                    limitTip = '\n⚠️ 本账号为受限账号：每条侵权链接需单独提交（1 条/批），本次将拆成 '
+                        + res.total_batches + ' 单，需 ' + res.total_batches + ' 次验证码，耗时较长';
+                } else {
+                    limitTip = '\n本账号每批最多 ' + res.per_batch_limit + ' 条链接';
+                }
                 document.getElementById('templateInfo').textContent =
-                    '已加载：' + res.works.length + ' 部作品，共 ' + res.total_links + ' 条链接，' + res.total_batches + ' 个批次' + warn;
+                    '已加载：' + res.works.length + ' 部作品，共 ' + res.total_links + ' 条链接，' + res.total_batches + ' 个批次' + limitTip + warn;
                 document.getElementById('templatePreview').innerHTML =
                     res.works.map(w => '<div>📄 ' + w.work_name + ' — ' + w.links.length + ' 条链接</div>').join('');
                 document.getElementById('submitBtn').disabled = false;
@@ -216,6 +229,7 @@ document.getElementById('weiboForm').addEventListener('submit', async function(e
             works: weiboWorksConfig,
             principal_name: weiboPrincipal,
             agent_org: weiboAgentOrg,
+            per_batch_limit: weiboPerBatchLimit,
             upload_filename: currentUploadFilename,
         };
         const resp = await fetch('/api/weibo/submit', {

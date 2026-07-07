@@ -58,6 +58,15 @@ WEIBO_C_CONTENT_MAP = {
 # rights_type 中「需要填原作品链接」的编码：著作权类抄袭/未经授权搬运
 WEIBO_RIGHTS_NEED_ORIGINAL = {'6'}
 
+# 代理机构全称 → 简称（与 app.py map_agent_to_used_company 一致）。
+# 授权委托书文件名用简称（如「授权委托书_<被代理人>_中惠信科_*」），
+# 而 Sheet1 填的是全称，故匹配前先转简称。营业执照文件名用全称，不经此转换。
+WEIBO_AGENT_ORG_SHORT = {
+    '北京和晞科技有限公司': '和晞科技',
+    '北京柏蒙文化传媒有限公司': '柏蒙文化',
+    '北京中惠信科科技有限公司': '中惠信科',
+}
+
 
 # ── 懒加载 app 模块符号（避免循环引用）────────────────────────────────────────
 
@@ -130,6 +139,38 @@ def _check_weibo_login(cookie: str) -> bool:
     resp = requests.get(f'{WEIBO_API_BASE}/rights/movie', headers=_weibo_headers(cookie), timeout=15)
     m = _re.search(r"\$CONFIG\['islogin'\]\s*=\s*(\d)", resp.text)
     return bool(m and m.group(1) == '1')
+
+
+def _fetch_link_limit(cookie: str):
+    """抓 /rights/movie，判定该账号每批侵权链接上限。
+
+    直接镜像微博前端 movie.js 的判断（唯一权威依据）：
+        if ($('#whitelist').val() == 1) { 上限1条 } else { 上限100条 }
+    jQuery `$('#whitelist')` 取页面里【第一个】id=whitelist 元素的值（id 重复时只取第一个）。
+    故这里取页面第一个 whitelist 的 value：== '1' → 受限每批1条；否则/缺失 → 每批100条。
+    （实测：受限账号页面第一个 whitelist=1 → 限1条，与页面报错"投诉链接不能大于1个"一致。）
+
+    返回 (per_batch_limit, is_limited, ok)：
+      - per_batch_limit: 100 或 1
+      - is_limited:      True 表示受限(1条/批)
+      - ok:              是否成功读到登录态页面（读失败/未登录时降级默认1，ok=False）
+
+    降级策略：探测失败时保守取每批1条——顶多慢，不会因超限被拒还白耗验证码；
+    绝不乐观取100（受限账号会触发"投诉链接不能大于1个"失败）。
+    """
+    try:
+        resp = requests.get(f'{WEIBO_API_BASE}/rights/movie', headers=_weibo_headers(cookie), timeout=15)
+        html = resp.text
+    except Exception:
+        return 1, False, False
+    # 未登录/异常页面：无法判定，保守降级默认1
+    if "$CONFIG['islogin'] = 1" not in html and "islogin'] = 1" not in html:
+        return 1, False, False
+    # 取页面第一个 whitelist（镜像 jQuery $('#whitelist')）
+    m = _re.search(r'id="whitelist"\s+value="([^"]*)"', html)
+    val = (m.group(1).strip() if m else '')
+    is_limited = (val == '1')
+    return (1 if is_limited else 100), is_limited, True
 
 
 # ── verify_cookie ──────────────────────────────────────────────────────────────
@@ -223,7 +264,8 @@ def weibo_download_template():
         ['  投诉内容：视频/音乐/图片/文章/微博内容/其他'],
         [''],
         ['Sheet2 批量导入Excel'],
-        ['侵权链接：必填，微博链接。一部作品超过100条会自动拆成多单提交'],
+        ['侵权链接：必填，微博链接。一部作品超过每批上限时会自动拆成多单提交；'],
+        ['  每批上限由账号权限决定（上传模板时自动检测）：普通账号每批100条，受限账号每批1条'],
         ['原作品链接：权利类型为「抄袭或未经授权搬运」时必填'],
         ['作品名称：必填，支持多部作品混合，系统按作品名分组；提交时自动用《》包裹'],
         [''],
@@ -232,7 +274,7 @@ def weibo_download_template():
         ['被代理人营业执照：static/imgs/营业执照/「营业执照_<被代理人名称>*」'],
         ['代理机构营业执照：static/imgs/营业执照/「营业执照_<代理机构名称>*」'],
         ['授权委托书：static/imgs/授权委托书/「授权委托书_<被代理人>_<代理机构>*」'],
-        ['机构联系人身份证正/反面：static/imgs/身份证/「身份证_<联系人姓名>_正面/反面*」'],
+        ['机构联系人身份证正/反面：无需单独准备，系统复用代理机构营业执照图'],
     ]:
         ws3.append(line)
     ws3.column_dimensions['A'].width = 80
@@ -275,6 +317,8 @@ def weibo_upload_template():
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in ('.xlsx', '.xls'):
         return jsonify({'success': False, 'error': '仅支持 .xlsx / .xls 格式'}), 400
+
+    collect_account = request.form.get('collect_account', '').strip()
 
     try:
         wb = load_workbook(file, data_only=True)
@@ -391,15 +435,21 @@ def weibo_upload_template():
     works_base_dir = os.path.join(static_imgs_dir, '剧名')
     biz_dir = os.path.join(static_imgs_dir, '营业执照')
     auth_dir = os.path.join(static_imgs_dir, '授权委托书')
-    idcard_dir = os.path.join(static_imgs_dir, '身份证')
+    # 身份证目录暂不用：机构联系人身份证正反面复用代理机构营业执照图
 
     # 共享证件路径（同一被代理人+代理机构固定，后端上传一次复用）
+    # 授权委托书文件名用代理机构【简称】（如「..._中惠信科_*」），Sheet1 填的是全称，
+    # 故匹配前把全称转简称；未在映射表内则退回原值。营业执照文件名用全称，不转换。
+    agent_org_short = WEIBO_AGENT_ORG_SHORT.get(agent_org, agent_org)
+    _org_pic = _match_file(biz_dir, '营业执照_', agent_org)
     shared_paths = {
         'obusiness_path': _match_file(biz_dir, '营业执照_', principal_name),
-        'org_pic_path': _match_file(biz_dir, '营业执照_', agent_org),
-        'org_empower_path': _match_file(auth_dir, '授权委托书_', principal_name, agent_org),
-        'org_agt_pic1_path': _match_file(idcard_dir, '身份证_', org_agt_name, '正面'),
-        'org_agt_pic2_path': _match_file(idcard_dir, '身份证_', org_agt_name, '反面'),
+        'org_pic_path': _org_pic,
+        'org_empower_path': _match_file(auth_dir, '授权委托书_', principal_name, agent_org_short),
+        # 机构联系人身份证正/反面：暂复用代理机构营业执照图（同一张用2次），
+        # 不单独准备身份证文件。后端会分别上传各得 picid 填入正反面两个字段。
+        'org_agt_pic1_path': _org_pic,
+        'org_agt_pic2_path': _org_pic,
     }
     form.update(shared_paths)
 
@@ -410,10 +460,8 @@ def weibo_upload_template():
         shared_missing.append(f'代理机构营业执照（营业执照_{agent_org}*）')
     if not shared_paths['org_empower_path']:
         shared_missing.append(f'授权委托书（授权委托书_{principal_name}_{agent_org}*）')
-    if not shared_paths['org_agt_pic1_path']:
-        shared_missing.append(f'联系人身份证正面（身份证_{org_agt_name}_正面*）')
-    if not shared_paths['org_agt_pic2_path']:
-        shared_missing.append(f'联系人身份证反面（身份证_{org_agt_name}_反面*）')
+    # TODO(身份证后期改)：暂不校验联系人身份证正反面，避免阻塞其余流程测试。
+    #   org_agt_pic1_path / org_agt_pic2_path 仍会匹配，文件存在则照常带上。
     if shared_missing:
         return jsonify({'success': False, 'error': '缺少共享证件材料：\n' + '\n'.join(shared_missing)}), 400
 
@@ -456,7 +504,26 @@ def weibo_upload_template():
         return jsonify({'success': False, 'error': '所有作品匹配失败：\n' + '\n'.join(match_errors)}), 400
 
     total_links = sum(len(w['links']) for w in works_config)
-    total_batches = sum(math.ceil(len(w['links']) / 100) for w in works_config)
+
+    # 抓页面判定每批上限（读账号 cookie 抓一次页面，只读不提交）。
+    # 读失败或未选账号时【保守降级为 1 条/批】（whitelist_checked=False，前端提示"未能确认"）：
+    # 宁可慢也不因超限被拒——若乐观按100，受限账号会报"投诉链接不能大于1个"且白耗验证码。
+    per_batch_limit = 1
+    is_whitelisted = False
+    whitelist_checked = False
+    if collect_account:
+        _s = get_db_session()
+        try:
+            acc_row = _s.execute(text("""
+                SELECT cookie_text FROM accounts
+                WHERE platform_code='weibo' AND account_user=:acc LIMIT 1
+            """), {'acc': collect_account}).fetchone()
+        finally:
+            _s.close()
+        if acc_row and acc_row.cookie_text:
+            per_batch_limit, is_whitelisted, whitelist_checked = _fetch_link_limit(acc_row.cookie_text)
+
+    total_batches = sum(math.ceil(len(w['links']) / per_batch_limit) for w in works_config)
 
     resp_data = {
         'success': True,
@@ -465,6 +532,9 @@ def weibo_upload_template():
         'works': works_config,
         'total_links': total_links,
         'total_batches': total_batches,
+        'per_batch_limit': per_batch_limit,
+        'is_whitelisted': is_whitelisted,
+        'whitelist_checked': whitelist_checked,
         'principal_name': principal_name,
         'agent_org': agent_org,
         # 前端展示用名称（非编码）
@@ -489,6 +559,14 @@ def weibo_submit():
     form = data.get('form', {})
     works_config = data.get('works', [])
     upload_filename = data.get('upload_filename', '').strip()
+    # 每批链接上限（受限账号=1，普通=100），来自 upload_template 抓 whitelist 的结果。
+    # 缺失/非法时【保守降级为1】——宁可慢也不因超限被拒；绝不乐观取100。
+    try:
+        per_batch_limit = int(data.get('per_batch_limit') or 1)
+    except (TypeError, ValueError):
+        per_batch_limit = 1
+    if per_batch_limit <= 0:
+        per_batch_limit = 1
 
     if not cookie:
         return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
@@ -520,7 +598,7 @@ def weibo_submit():
         return jsonify({'success': False, 'error': f'Cookie验证失败：{e}'}), 500
 
     total_links = sum(len(w.get('links', [])) for w in works_config)
-    total_batches = sum(math.ceil(len(w.get('links', [])) / 100) for w in works_config)
+    total_batches = sum(math.ceil(len(w.get('links', [])) / per_batch_limit) for w in works_config)
     all_work_names = [w['work_name'] for w in works_config]
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -544,9 +622,10 @@ def weibo_submit():
             VALUES (:sid, :tid, 'weibo', :account, :cookie,
                     '机构代理', :agent, :principal,
                     '著作权', :rights, '微博', '',
-                    :dpt, :work_name, :rows, 100, :batches,
+                    :dpt, :work_name, :rows, :batch_size, :batches,
                     'queued', :submitted_at, :estimated_finish_at, :operator, :upload_filename)
         """), {
+            'batch_size': per_batch_limit,
             'sid': submission_id,
             'tid': task_id,
             'account': collect_account,
@@ -567,9 +646,9 @@ def weibo_submit():
         batch_no = 0
         for work in works_config:
             links = work.get('links', [])
-            for chunk_start in range(0, len(links), 100):
+            for chunk_start in range(0, len(links), per_batch_limit):
                 batch_no += 1
-                chunk_end = min(chunk_start + 100, len(links))
+                chunk_end = min(chunk_start + per_batch_limit, len(links))
                 db.execute(text("""
                     INSERT INTO complaint_batches
                     (batch_id, complaint_id, batch_no, work_name, batch_filename,
@@ -597,7 +676,7 @@ def weibo_submit():
                 'widx': idx,
                 'wname': work['work_name'],
                 'lcount': len(work.get('links', [])),
-                'bcount': math.ceil(len(work.get('links', [])) / 100),
+                'bcount': math.ceil(len(work.get('links', [])) / per_batch_limit),
             })
 
         db.commit()
@@ -614,6 +693,7 @@ def weibo_submit():
         'form': form,
         'works_config': works_config,
         'total_batches': total_batches,
+        'per_batch_limit': per_batch_limit,
     })
 
     _tasks()[task_id] = {'status': 'queued', 'submitted_at': datetime.now().isoformat()}

@@ -94,6 +94,7 @@ def run_redis_worker():
                     task_payload['form'],
                     task_payload['works_config'],
                     task_payload['total_batches'],
+                    task_payload.get('per_batch_limit', 1),
                 )
             else:
                 print(f"[Unknown] 未知平台: {platform}, task_id={task_payload.get('task_id')}")

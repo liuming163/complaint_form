@@ -4798,7 +4798,7 @@ def run_quark_complaint_script(task_id, cookie, module, content_type, works_conf
         tasks[task_id]['status'] = 'failed'
 
 
-def run_weibo_complaint_script(task_id, cookie, form, works_config, total_batches):
+def run_weibo_complaint_script(task_id, cookie, form, works_config, total_batches, per_batch_limit=1):
     import sys, tempfile
     script_path = os.path.join(os.path.dirname(__file__), 'weibo_complaint_backend.py')
     submission_id = task_id[len('weibo_'):] if task_id.startswith('weibo_') else task_id
@@ -4826,6 +4826,7 @@ def run_weibo_complaint_script(task_id, cookie, form, works_config, total_batche
         '--task-id', task_id,
         '--cookie', cookie,
         '--config-file', cfg_file.name,
+        '--per-batch-limit', str(per_batch_limit or 1),
     ]
 
     try:
