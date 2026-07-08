@@ -2925,14 +2925,15 @@ def upload_custom_template():
                 if f.startswith('其他证明_') and not f.startswith('._'):
                     work_other_proofs.append(os.path.join(work_rel_dir, f))
 
-            # 授权委托书
+            # 授权委托书：被代理人 + 代理机构简称双重匹配，防止同一被代理人有多代理机构时拿错文件
             proxy_file = None
+            work_used_company = matched_row.get('used_company', '')  # 简称，如"和晞科技"
             if principal:
                 auth_dir = os.path.join(static_imgs_dir, '授权委托书')
                 if os.path.isdir(auth_dir):
-                    for f in os.listdir(auth_dir):
+                    for f in sorted(os.listdir(auth_dir)):
                         if f.startswith('授权委托书_') and not f.startswith('._'):
-                            if company_match(principal, f):
+                            if company_match(principal, f) and company_match(work_used_company, f):
                                 proxy_file = os.path.join('授权委托书', f)
                                 break
 
