@@ -238,19 +238,30 @@ def weibo_download_template():
     ws1.column_dimensions['B'].width = 40
     ws1.column_dimensions['C'].width = 60
 
-    # Sheet2 批量导入链接
+    # Sheet2 批量导入链接（只有侵权链接 + 作品名称，原作品链接移到 Sheet3）
     ws2 = wb.create_sheet('批量导入Excel')
-    ws2.append(['侵权链接', '原作品链接', '作品名称'])
+    ws2.append(['侵权链接', '作品名称'])
     for cell in ws2[1]:
         cell.font = Font(bold=True)
     for _ in range(3):
-        ws2.append(['', '', ''])
-    ws2.column_dimensions['A'].width = 55
-    ws2.column_dimensions['B'].width = 55
-    ws2.column_dimensions['C'].width = 30
+        ws2.append(['', ''])
+    ws2.column_dimensions['A'].width = 60
+    ws2.column_dimensions['B'].width = 30
 
-    # Sheet3 填写说明
-    ws3 = wb.create_sheet('填写说明')
+    # Sheet3 原作品链接（作品级，每部作品填一行）
+    ws3 = wb.create_sheet('原作品链接')
+    ws3.append(['作品名称', '原作品链接', '备注'])
+    for cell in ws3[1]:
+        cell.font = Font(bold=True)
+    ws3['C2'] = '仅权利类型为「著作权-抄袭或未经授权搬运」时必填，每部作品填一行'
+    for _ in range(3):
+        ws3.append(['', '', ''])
+    ws3.column_dimensions['A'].width = 30
+    ws3.column_dimensions['B'].width = 60
+    ws3.column_dimensions['C'].width = 50
+
+    # Sheet4 填写说明
+    ws4 = wb.create_sheet('填写说明')
     for line in [
         ['微博版权投诉模版（v1 仅支持机构代理场景）'],
         [''],
@@ -266,8 +277,11 @@ def weibo_download_template():
         ['Sheet2 批量导入Excel'],
         ['侵权链接：必填，微博链接。一部作品超过每批上限时会自动拆成多单提交；'],
         ['  每批上限由账号权限决定（上传模板时自动检测）：普通账号每批100条，受限账号每批1条'],
-        ['原作品链接：权利类型为「抄袭或未经授权搬运」时必填'],
         ['作品名称：必填，支持多部作品混合，系统按作品名分组；提交时自动用《》包裹'],
+        [''],
+        ['Sheet3 原作品链接'],
+        ['仅权利类型为「著作权-抄袭或未经授权搬运」时必填，其他权利类型可不填此Sheet'],
+        ['每部作品填一行，系统按作品名称匹配对应的原作品链接，用于每次投诉提交'],
         [''],
         ['证明文件说明（沿用夸克约定，放 static/imgs/ 下）'],
         ['权属证明：static/imgs/剧名/<作品目录>/ 下「证明文件_*」'],
@@ -276,8 +290,8 @@ def weibo_download_template():
         ['授权委托书：static/imgs/授权委托书/「授权委托书_<被代理人>_<代理机构>*」'],
         ['机构联系人身份证正/反面：无需单独准备，系统复用代理机构营业执照图'],
     ]:
-        ws3.append(line)
-    ws3.column_dimensions['A'].width = 80
+        ws4.append(line)
+    ws4.column_dimensions['A'].width = 80
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -403,12 +417,11 @@ def weibo_upload_template():
     }
     need_original = (rights_type in WEIBO_RIGHTS_NEED_ORIGINAL)
 
-    # 解析 Sheet2（侵权链接 | 原作品链接 | 作品名称）
+    # 解析 Sheet2（侵权链接 | 作品名称，B列原作品链接已移至 Sheet3）
     works_map, work_order, empty_rows = {}, [], 0
-    for row in wb['批量导入Excel'].iter_rows(min_row=2, max_col=3, values_only=True):
+    for row in wb['批量导入Excel'].iter_rows(min_row=2, max_col=2, values_only=True):
         link = str(row[0]).strip() if row[0] else ''
-        original = str(row[1]).strip() if row[1] else ''
-        wn = str(row[2]).strip() if row[2] else ''
+        wn   = str(row[1]).strip() if row[1] else ''
         if not link and not wn:
             empty_rows += 1
             if empty_rows >= 5:
@@ -419,16 +432,30 @@ def weibo_upload_template():
             return jsonify({'success': False, 'error': f'存在作品名但侵权链接为空（作品：{wn}）'}), 400
         if not wn:
             return jsonify({'success': False, 'error': f'存在链接但作品名为空（链接：{link[:60]}）'}), 400
-        if need_original and not original:
-            return jsonify({'success': False, 'error': f'权利类型「{rights_type_name}」需填原作品链接（作品：{wn}）'}), 400
         if wn not in works_map:
-            works_map[wn] = {'links': [], 'originals': []}
+            works_map[wn] = {'links': []}
             work_order.append(wn)
         works_map[wn]['links'].append(link)
-        works_map[wn]['originals'].append(original)
 
     if not works_map:
         return jsonify({'success': False, 'error': '"批量导入Excel"中没有有效数据'}), 400
+
+    # 解析 Sheet3（原作品链接）：作品名称 → 原链接，仅 rights_type=6 时必填
+    original_url_map = {}   # {work_name: original_url}
+    if '原作品链接' in wb.sheetnames:
+        for row in wb['原作品链接'].iter_rows(min_row=2, max_col=2, values_only=True):
+            wn_s   = str(row[0]).strip() if row[0] else ''
+            orig_s = str(row[1]).strip() if row[1] else ''
+            if wn_s and orig_s:
+                original_url_map[wn_s] = orig_s
+
+    # 如果 need_original，校验每部作品在 Sheet3 都有对应原链接
+    if need_original:
+        missing_orig = [wn for wn in work_order if not original_url_map.get(wn)]
+        if missing_orig:
+            return jsonify({'success': False,
+                            'error': f'权利类型「{rights_type_name}」需在 Sheet3「原作品链接」中为以下作品填写原链接：\n'
+                                     + '\n'.join(f'  · {w}' for w in missing_orig)}), 400
 
     # PLACEHOLDER_MATCH_FILES
     static_imgs_dir = os.path.join(current_app.root_path, 'static', 'imgs')
@@ -496,7 +523,7 @@ def weibo_upload_template():
         works_config.append({
             'work_name': wn,
             'links': works_map[wn]['links'],
-            'original_urls': works_map[wn]['originals'],
+            'original_url': original_url_map.get(wn, ''),  # 作品级单个原链接，来自 Sheet3
             'proof_path': proof_path,
         })
 

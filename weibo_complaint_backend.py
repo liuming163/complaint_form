@@ -293,11 +293,13 @@ def build_form(config_form: dict, shared_pics: dict, work: dict, proof_picid: st
     """组装一批提交的表单字段。config_form 为 Sheet1 文本字段，
     shared_pics 为共享证件 picid，work 携带作品链接/原片链接。"""
     urls = '\n'.join(work['_chunk_links'])
-    original = work.get('original_urls', [])
-    if isinstance(original, list):
-        original_urls = '\n'.join([u for u in original if u]) or ''
+    # original_url 仅在搬运类型(rights_type='6')时有意义；
+    # 非搬运类型即使 Sheet3 填了也清空，避免把多余字段发给微博。
+    rights_type_val = str(config_form.get('rights_type', ''))
+    if rights_type_val == '6':
+        original_urls = work.get('original_url', '') or ''
     else:
-        original_urls = original or ''
+        original_urls = ''
     form = dict(FORM_FIXED)
     # Sheet1 文本字段
     for k in ('complaint_type', 'agent_type', 'rights_type', 'class_id', 'c_content',
