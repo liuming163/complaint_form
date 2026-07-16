@@ -319,6 +319,18 @@ def wenxi_download_template():
 
 # ── 文件匹配工具（沿用其他平台）─────────────────────────────────────────────
 
+def _normalize_link(u: str) -> str:
+    """归一化侵权链接用于查重/匹配：去协议、去 www./m. 子域、去 query/fragment、
+    去尾斜杠、转小写。须与后端 wenxi_complaint_backend._normalize_url 规则一致，
+    保证「上传去重」与「单号匹配」用同一标准。"""
+    import re as _re
+    s = (u or '').strip().lower()
+    s = _re.sub(r'^https?://', '', s)
+    s = _re.sub(r'^(www\.|m\.)', '', s)
+    s = s.split('?')[0].split('#')[0]
+    return s.rstrip('/')
+
+
 def _paren(s):
     return (s or '').replace('（', '(').replace('）', ')')
 
@@ -463,8 +475,14 @@ def wenxi_upload_template():
     }
 
     # 解析 Sheet2（侵权链接 | 作品名称 | 首发地址）
+    # 侵权链接全表唯一：重复链接投诉无意义，且会破坏后端「链接集合相等」单号匹配。
+    # 遇重复收集所有冲突对（第X行↔首次出现的第Y行），一次性报错让用户删改后重传。
     works_map, work_order, empty_rows = {}, [], 0
-    for row in wb['批量导入Excel'].iter_rows(min_row=2, max_col=3, values_only=True):
+    seen_links = {}          # 归一化链接 → 首次出现的 Excel 行号
+    dup_conflicts = []       # [(当前行号, 首次行号, 链接原文)]
+    # Excel 行号：表头第1行，数据从第2行起，故 enumerate 起点 2
+    for excel_row, row in enumerate(
+            wb['批量导入Excel'].iter_rows(min_row=2, max_col=3, values_only=True), start=2):
         link = str(row[0]).strip() if row[0] else ''
         wn = str(row[1]).strip() if row[1] else ''
         origin = str(row[2]).strip() if len(row) > 2 and row[2] else ''
@@ -478,12 +496,24 @@ def wenxi_upload_template():
             return jsonify({'success': False, 'error': f'存在作品名但侵权链接为空（作品：{wn}）'}), 400
         if not wn:
             return jsonify({'success': False, 'error': f'存在链接但作品名为空（链接：{link[:60]}）'}), 400
+        # 侵权链接查重（归一化后比对：忽略 http/https、www./m.、尾斜杠、大小写差异）
+        norm = _normalize_link(link)
+        if norm in seen_links:
+            dup_conflicts.append((excel_row, seen_links[norm], link))
+        else:
+            seen_links[norm] = excel_row
         if wn not in works_map:
             works_map[wn] = {'links': [], 'origin_url': origin}
             work_order.append(wn)
         works_map[wn]['links'].append(link)
         if origin and not works_map[wn]['origin_url']:
             works_map[wn]['origin_url'] = origin
+
+    if dup_conflicts:
+        lines = '\n'.join(f'  · 第 {cur} 行与第 {first} 行重复：{lk[:80]}'
+                          for cur, first, lk in dup_conflicts)
+        return jsonify({'success': False,
+                        'error': f'侵权链接存在重复，请删除重复项后重新提交：\n{lines}'}), 400
 
     if not works_map:
         return jsonify({'success': False, 'error': '"批量导入Excel"中没有有效数据'}), 400
