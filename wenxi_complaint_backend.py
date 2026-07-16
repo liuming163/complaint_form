@@ -281,17 +281,13 @@ def build_payload(meta: dict, group: dict, delegate_id, delegate_code,
 
 
 def _normalize_url(u: str) -> str:
-    """归一化链接用于比对：去协议、去 www./m. 子域、去 query/fragment、去尾斜杠、转小写。
+    """链接比对用：仅去首尾空白，做精确比对（不做任何归一化）。
 
-    平台不改写链接（srcUrl 与提交原样一致），归一化只为消除 http/https、
-    尾斜杠、大小写等无语义差异，不做跨子域合并（m. 与 www. 视为等价，
-    因二者常指同一内容且提交时可能混用）。
+    平台不改写链接（srcUrl 与提交原样一致），且 http/https、www./m.、尾斜杠
+    在业务上是【不同的合法链接】（可分别投诉），故绝不能归一化合并——
+    否则会把用户有意提交的多个变体误判为同一条，破坏「集合相等」单号匹配。
     """
-    s = (u or '').strip().lower()
-    s = re.sub(r'^https?://', '', s)          # 去协议
-    s = re.sub(r'^(www\.|m\.)', '', s)        # 去常见子域前缀
-    s = s.split('?')[0].split('#')[0]          # 去 query / fragment
-    return s.rstrip('/')
+    return (u or '').strip()
 
 
 def _parse_utc(ts: str):
@@ -332,8 +328,10 @@ def match_complaint_id(auth: dict, work_name: str, submitted_urls: list,
     会出现在几乎所有历史单里，交集非空会误命中多个历史单。故用三重约束：
       ① originName 服务端过滤，缩小到同作品候选；
       ② createdAtUtc > submit_ts（留 60s 容差），排除历史同名单；
-      ③ 该单的 srcUrl 集合与本批提交链接集合【相等】，精确锁定这一批
+      ③ 该单的 srcUrl 集合与本批提交链接集合【精确相等】，锁定这一批
          （拆多单时 851400.html 与 851456.html 能干净区分）。
+    链接为精确比对（仅去首尾空白，不归一化）：http/https、www./m.、尾斜杠
+    均视为不同的合法链接，与上传去重规则一致。
     链接有索引延迟，故多次重试等待。集合相等拿不到时，退化为"提交集 ⊆ 单链接集"
     的子集匹配（末次重试才用），仍要求 ①②，避免误认历史单。
     """

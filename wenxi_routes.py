@@ -319,16 +319,11 @@ def wenxi_download_template():
 
 # ── 文件匹配工具（沿用其他平台）─────────────────────────────────────────────
 
-def _normalize_link(u: str) -> str:
-    """归一化侵权链接用于查重/匹配：去协议、去 www./m. 子域、去 query/fragment、
-    去尾斜杠、转小写。须与后端 wenxi_complaint_backend._normalize_url 规则一致，
-    保证「上传去重」与「单号匹配」用同一标准。"""
-    import re as _re
-    s = (u or '').strip().lower()
-    s = _re.sub(r'^https?://', '', s)
-    s = _re.sub(r'^(www\.|m\.)', '', s)
-    s = s.split('?')[0].split('#')[0]
-    return s.rstrip('/')
+def _link_key(u: str) -> str:
+    """侵权链接查重键：仅去首尾空白，【不做任何归一化】。
+    协议(http/https)、子域(www./m.)、尾斜杠不同均视为不同链接，各自可独立投诉，
+    只有【完全一致】才算重复。须与后端单号匹配的比对口径一致（同样精确比对）。"""
+    return (u or '').strip()
 
 
 def _paren(s):
@@ -496,12 +491,12 @@ def wenxi_upload_template():
             return jsonify({'success': False, 'error': f'存在作品名但侵权链接为空（作品：{wn}）'}), 400
         if not wn:
             return jsonify({'success': False, 'error': f'存在链接但作品名为空（链接：{link[:60]}）'}), 400
-        # 侵权链接查重（归一化后比对：忽略 http/https、www./m.、尾斜杠、大小写差异）
-        norm = _normalize_link(link)
-        if norm in seen_links:
-            dup_conflicts.append((excel_row, seen_links[norm], link))
+        # 侵权链接查重（精确比对：仅当完全一致才算重复；http/https、www./m.、
+        # 尾斜杠不同均视为不同链接，均可正常提交）
+        if link in seen_links:
+            dup_conflicts.append((excel_row, seen_links[link], link))
         else:
-            seen_links[norm] = excel_row
+            seen_links[link] = excel_row
         if wn not in works_map:
             works_map[wn] = {'links': [], 'origin_url': origin}
             work_order.append(wn)
