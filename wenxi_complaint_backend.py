@@ -23,10 +23,11 @@ import hashlib
 import json
 import os
 import random
+import re
 import string
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -279,23 +280,79 @@ def build_payload(meta: dict, group: dict, delegate_id, delegate_code,
     }
 
 
-def match_complaint_id(auth: dict, work_name: str, submitted_urls: list,
-                       already_matched: set, retries: int = 3) -> str:
-    """提交成功后从 /complaint/list 按作品名匹配 ticketNo 作为单号。
+def _normalize_url(u: str) -> str:
+    """归一化链接用于比对：去协议、去 www./m. 子域、去 query/fragment、去尾斜杠、转小写。
 
-    接口参数：limit/offset（非 pageNum/pageSize），无 keyword 过滤，列表按时间倒序。
-    单号字段：ticketNo（如 T71526001300471552）。
-    作品名字段：originName。
-    匹配策略：originName == work_name，取最新未认领的一条。
-    URL 字段在提交后短期内为空，不做 URL 匹配。
+    平台不改写链接（srcUrl 与提交原样一致），归一化只为消除 http/https、
+    尾斜杠、大小写等无语义差异，不做跨子域合并（m. 与 www. 视为等价，
+    因二者常指同一内容且提交时可能混用）。
     """
+    s = (u or '').strip().lower()
+    s = re.sub(r'^https?://', '', s)          # 去协议
+    s = re.sub(r'^(www\.|m\.)', '', s)        # 去常见子域前缀
+    s = s.split('?')[0].split('#')[0]          # 去 query / fragment
+    return s.rstrip('/')
+
+
+def _parse_utc(ts: str):
+    """解析 createdAtUtc（如 2026-07-15T17:25:31.560156+08:00）为带时区 datetime。失败返回 None。"""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts)
+    except Exception:
+        return None
+
+
+def _fetch_complaint_urls(auth: dict, request_id) -> set:
+    """拉某单的侵权链接集合（归一化）。URL 有索引延迟，可能返回空。"""
+    try:
+        resp = requests.get(f'{BASE_URL}/complaint/details/urls',
+                            headers=make_headers(auth),
+                            params={'id': request_id, 'limit': 50, 'offset': 0, 'total': 0},
+                            timeout=20)
+        data = resp.json()
+    except Exception:
+        return set()
+    results = ((data.get('data') or {}).get('results')) or []
+    urls = set()
+    for r in results:
+        u = r.get('srcUrl') or (r.get('resolution') or {}).get('url') or ''
+        if u:
+            urls.add(_normalize_url(u))
+    return urls
+
+
+def match_complaint_id(auth: dict, work_name: str, submitted_urls: list,
+                       already_matched: set, submit_ts=None, retries: int = 4) -> str:
+    """按 作品名 + 提交时间 + 链接集合 三重约束匹配 ticketNo 作为单号。
+
+    单号=ticketNo（如 T71526001301124096）；作品名=originName；详情ID=requestId。
+    为什么不能只按作品名或"链接有交集"：同一作品的基础链接（如 mkzhan.com/209673）
+    会出现在几乎所有历史单里，交集非空会误命中多个历史单。故用三重约束：
+      ① originName 服务端过滤，缩小到同作品候选；
+      ② createdAtUtc > submit_ts（留 60s 容差），排除历史同名单；
+      ③ 该单的 srcUrl 集合与本批提交链接集合【相等】，精确锁定这一批
+         （拆多单时 851400.html 与 851456.html 能干净区分）。
+    链接有索引延迟，故多次重试等待。集合相等拿不到时，退化为"提交集 ⊆ 单链接集"
+    的子集匹配（末次重试才用），仍要求 ①②，避免误认历史单。
+    """
+    want = {_normalize_url(u) for u in submitted_urls if u}
+    if not want:
+        return ''
+    # 容差：提交时刻前推 60s，避免服务端/本地时钟微差把刚提交的单排除
+    cutoff = None
+    if submit_ts is not None:
+        cutoff = submit_ts.timestamp() - 60
+
+    subset_fallback = None  # (ticket_no) 子集候选，末次重试才用
     for attempt in range(retries):
-        time.sleep(2)
+        time.sleep(3)
         try:
             resp = requests.get(f'{BASE_URL}/complaint/list',
                                 headers=make_headers(auth),
-                                params={'limit': 10, 'offset': 0,
-                                        'delegateSubjectType': '', 'originName': ''},
+                                params={'limit': 20, 'offset': 0,
+                                        'delegateSubjectType': '', 'originName': work_name},
                                 timeout=20)
             data = resp.json()
         except Exception as e:
@@ -305,15 +362,34 @@ def match_complaint_id(auth: dict, work_name: str, submitted_urls: list,
         results = ((data.get('data') or {}).get('results')) or []
         for rec in results:
             ticket_no = rec.get('ticketNo', '')
+            request_id = rec.get('requestId')
             if not ticket_no or ticket_no in already_matched:
                 continue
-            # 按作品名匹配（originName）
-            origin_name = rec.get('originName', '')
-            if origin_name != work_name:
+            # 约束①：作品名（服务端已按 originName 过滤，这里再兜底一次）
+            if rec.get('originName', '') != work_name:
                 continue
-            already_matched.add(ticket_no)
-            log(f'  匹配到单号(ticketNo): {ticket_no} (作品: {work_name})')
-            return ticket_no
+            # 约束②：时间——只认提交时刻之后的新单
+            if cutoff is not None:
+                created = _parse_utc(rec.get('createdAtUtc', ''))
+                if created is not None and created.timestamp() < cutoff:
+                    continue
+            # 约束③：链接集合相等
+            rec_urls = _fetch_complaint_urls(auth, request_id)
+            if not rec_urls:
+                continue  # URL 还没索引出来，下轮重试
+            if rec_urls == want:
+                already_matched.add(ticket_no)
+                log(f'  匹配到单号(ticketNo): {ticket_no} (作品: {work_name}, 链接集合精确相等)')
+                return ticket_no
+            # 子集兜底：提交集 ⊆ 单链接集（该单可能含更多链接），末次才用
+            if want <= rec_urls and subset_fallback is None:
+                subset_fallback = ticket_no
+
+        # 末次重试仍无精确相等，用子集兜底
+        if attempt == retries - 1 and subset_fallback:
+            already_matched.add(subset_fallback)
+            log(f'  匹配到单号(ticketNo): {subset_fallback} (作品: {work_name}, 子集兜底匹配)')
+            return subset_fallback
     return ''
 
 
@@ -422,6 +498,8 @@ def main():
                     if fc.get('code') != 0:
                         log(f"  ⚠️ URL 校验未通过: {fc.get('message', fc)}（继续尝试提交）")
 
+                    # 记录提交前时刻（用于按创建时间过滤历史同名单）
+                    submit_ts = datetime.now(timezone.utc)
                     payload = build_payload(meta, group, delegate_id, delegate_code_r,
                                             subject_group, work_name, origin_url, chunk, attach)
                     resp_data = submit_complaint(auth, payload)
@@ -433,7 +511,7 @@ def main():
                             'batch_no': batch_no, 'work_name': work_name,
                             'status': 'completed', 'link_count': len(chunk),
                         })
-                        rid = match_complaint_id(auth, work_name, chunk, already_matched)
+                        rid = match_complaint_id(auth, work_name, chunk, already_matched, submit_ts)
                         if rid:
                             work_matched.append(rid)
                     else:
