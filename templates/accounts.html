@@ -84,6 +84,51 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Cookie</label>
+                    <div id="wenxiCookieHint" class="wenxi-hint" style="display:none">
+                        <i class="fas fa-info-circle"></i>
+                        腾讯文犀的 Cookie 比较特殊（用 token 鉴权，非普通 Cookie），
+                        <a href="javascript:void(0)" onclick="toggleWenxiGuide()">请点击此处获取方法</a>
+                    </div>
+                    <div id="wenxiCookieGuide" class="wenxi-guide" style="display:none">
+                        <ol class="mb-2 ps-3">
+                            <li>浏览器打开并<b>登录</b> <a href="https://ri.qq.com/initiate-complaint" target="_blank">腾讯文犀投诉平台</a></li>
+                            <li>登录成功后按 <b>F12</b> 打开开发者工具，切到 <b>Console（控制台）</b> 面板</li>
+                            <li>把下面这段代码粘贴进去回车执行：</li>
+                        </ol>
+                        <div class="mb-2 ps-3" style="font-size:13px;color:#555;">⚠️ 代码含 <code>async/await</code>，请确保控制台允许执行（Chrome 默认允许）。执行后等待片刻，结果含 <b>subjectGroup</b> 字段说明自动获取成功。</div>
+                        <div class="wenxi-code-wrap">
+                            <pre id="wenxiSnippet">(async () => {
+  const token = localStorage.getItem('infringement_token');
+  const sid = sessionStorage.getItem('sessionId');
+  const uid = localStorage.getItem('uid');
+  const h = {Authorization: token, sessionId: sid, uid, Accept: 'application/json'};
+  let sg = null;
+  try {
+    const r = await fetch('/api/v1/account/subject/auth/0/details', {headers: h});
+    const d = await r.json();
+    if (d.code === 0 && d.data?.group?.id) {
+      const g = d.data.group;
+      sg = {isAgency:1, isTemp:0, agencyType:801,
+            name:g.name, identityType:null,
+            identityNum:g.orgCode, contactNo:g.contactNumber,
+            email:g.email, contactName:g.contactName||g.name,
+            subjectType:g.subjectType, id:g.id, orgType:g.orgType};
+    }
+  } catch(e) {}
+  return JSON.stringify({
+    token,
+    tokenExpired: localStorage.getItem('infringement_token_expired'),
+    loginType: localStorage.getItem('infringement_login_type'),
+    uid, sessionId: sid,
+    ...(sg ? {subjectGroup: sg} : {_note: 'subjectGroup 未能自动获取'})
+  }, null, 2);
+})()</pre>
+                            <button type="button" class="btn btn-sm btn-outline-secondary wenxi-copy-btn" onclick="copyWenxiSnippet(this)">
+                                <i class="fas fa-copy"></i> 复制代码
+                            </button>
+                        </div>
+                        <div class="mt-2">将控制台返回的整段结果（含大括号）<b>复制粘贴到下方 Cookie 栏</b>即可。</div>
+                    </div>
                     <textarea class="form-control" id="inputCookie" rows="3" placeholder="请输入Cookie信息" onblur="this.value = this.value.trim()"></textarea>
                 </div>
                 <div class="mb-3">
@@ -122,6 +167,49 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Cookie</label>
+                    <div id="wenxiUpdateHint" class="wenxi-hint" style="display:none">
+                        <i class="fas fa-info-circle"></i>
+                        token 约 2.5 小时过期，需重新获取。
+                        <a href="javascript:void(0)" onclick="toggleWenxiUpdateGuide()">点击查看获取方法</a>
+                    </div>
+                    <div id="wenxiUpdateGuide" class="wenxi-guide" style="display:none">
+                        <ol class="mb-2 ps-3">
+                            <li>浏览器打开并<b>登录</b> <a href="https://ri.qq.com/initiate-complaint" target="_blank">腾讯文犀投诉平台</a></li>
+                            <li>登录成功后按 <b>F12</b>，切到 <b>Console</b> 面板，执行以下代码：</li>
+                        </ol>
+                        <div class="wenxi-code-wrap">
+                            <pre id="wenxiUpdateSnippet">(async () => {
+  const token = localStorage.getItem('infringement_token');
+  const sid = sessionStorage.getItem('sessionId');
+  const uid = localStorage.getItem('uid');
+  const h = {Authorization: token, sessionId: sid, uid, Accept: 'application/json'};
+  let sg = null;
+  try {
+    const r = await fetch('/api/v1/account/subject/auth/0/details', {headers: h});
+    const d = await r.json();
+    if (d.code === 0 && d.data?.group?.id) {
+      const g = d.data.group;
+      sg = {isAgency:1, isTemp:0, agencyType:801,
+            name:g.name, identityType:null,
+            identityNum:g.orgCode, contactNo:g.contactNumber,
+            email:g.email, contactName:g.contactName||g.name,
+            subjectType:g.subjectType, id:g.id, orgType:g.orgType};
+    }
+  } catch(e) {}
+  return JSON.stringify({
+    token,
+    tokenExpired: localStorage.getItem('infringement_token_expired'),
+    loginType: localStorage.getItem('infringement_login_type'),
+    uid, sessionId: sid,
+    ...(sg ? {subjectGroup: sg} : {_note: 'subjectGroup 未能自动获取'})
+  }, null, 2);
+})()</pre>
+                            <button type="button" class="btn btn-sm btn-outline-secondary wenxi-copy-btn" onclick="copyWenxiSnippet(this, 'wenxiUpdateSnippet')">
+                                <i class="fas fa-copy"></i> 复制代码
+                            </button>
+                        </div>
+                        <div class="mt-2"><i class="fas fa-check-circle text-success"></i> 新代码已包含 subjectGroup 自动获取，无需手动补充。粘贴整段结果即可。</div>
+                    </div>
                     <textarea class="form-control" id="updateCookie" rows="3" placeholder="请输入Cookie信息" onblur="this.value = this.value.trim()"></textarea>
                 </div>
             </div>
@@ -134,6 +222,62 @@
 </div>
 
 <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+<style>
+.wenxi-hint {
+    font-size: 12.5px;
+    color: #856404;
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 6px;
+    padding: 6px 10px;
+    margin-bottom: 6px;
+}
+.wenxi-hint a {
+    color: #0d6efd;
+    font-weight: 500;
+}
+.wenxi-guide {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    color: #333;
+}
+.wenxi-guide ol li {
+    margin-bottom: 4px;
+}
+.wenxi-code-wrap {
+    position: relative;
+    background: #1e1e1e;
+    border-radius: 5px;
+    padding: 10px 12px;
+    margin-top: 4px;
+}
+.wenxi-code-wrap pre {
+    color: #d4d4d4;
+    font-size: 12px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    padding-right: 80px;
+}
+.wenxi-copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 11px;
+    background: #2d2d2d;
+    color: #ccc;
+    border-color: #555;
+}
+.wenxi-copy-btn:hover {
+    background: #3a3a3a;
+    color: #fff;
+    border-color: #888;
+}
+</style>
 <script>
 let allAccounts = [];
 let debounceTimer = null;
@@ -141,12 +285,94 @@ let addModal = null;
 let updateModal = null;
 let currentUpdateId = null;
 
+const WENXI_SNIPPET = `(async () => {
+  const token = localStorage.getItem('infringement_token');
+  const sid = sessionStorage.getItem('sessionId');
+  const uid = localStorage.getItem('uid');
+  const h = {Authorization: token, sessionId: sid, uid, Accept: 'application/json'};
+  let sg = null;
+  try {
+    const r = await fetch('/api/v1/account/subject/auth/0/details', {headers: h});
+    const d = await r.json();
+    if (d.code === 0 && d.data?.group?.id) {
+      const g = d.data.group;
+      sg = {
+        isAgency: 1, isTemp: 0, agencyType: 801,
+        name: g.name, identityType: null,
+        identityNum: g.orgCode,
+        contactNo: g.contactNumber,
+        email: g.email,
+        contactName: g.contactName || g.name,
+        subjectType: g.subjectType,
+        id: g.id, orgType: g.orgType
+      };
+    }
+  } catch(e) {}
+  return JSON.stringify({
+    token,
+    tokenExpired: localStorage.getItem('infringement_token_expired'),
+    loginType: localStorage.getItem('infringement_login_type'),
+    uid,
+    sessionId: sid,
+    ...(sg ? {subjectGroup: sg} : {_note: 'subjectGroup 未能自动获取，请手动补充'})
+  }, null, 2);
+})()`;
+
 document.addEventListener('DOMContentLoaded', () => {
-    addModal = new bootstrap.Modal(document.getElementById('addModal'));
+    addModal  = new bootstrap.Modal(document.getElementById('addModal'));
     updateModal = new bootstrap.Modal(document.getElementById('updateModal'));
     loadPlatformOptions();
     loadAccounts();
+    // 平台选择变化时切换文犀提示
+    document.getElementById('inputPlatform').addEventListener('change', onAddPlatformChange);
 });
+
+// ── 文犀提示：添加弹窗 ─────────────────────────────────────────────────────
+
+function onAddPlatformChange() {
+    const isWenxi = document.getElementById('inputPlatform').value === 'wenxi';
+    document.getElementById('wenxiCookieHint').style.display = isWenxi ? '' : 'none';
+    if (!isWenxi) document.getElementById('wenxiCookieGuide').style.display = 'none';
+    document.getElementById('inputCookie').placeholder = isWenxi
+        ? '粘贴从控制台获取的 JSON（含 token/sessionId/uid）'
+        : '请输入Cookie信息';
+}
+
+function toggleWenxiGuide() {
+    const el = document.getElementById('wenxiCookieGuide');
+    el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+// ── 文犀提示：更新弹窗 ─────────────────────────────────────────────────────
+
+function toggleWenxiUpdateGuide() {
+    const el = document.getElementById('wenxiUpdateGuide');
+    el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+// ── 复制代码片段 ───────────────────────────────────────────────────────────
+
+function copyWenxiSnippet(btn, snippetId) {
+    const code = snippetId
+        ? document.getElementById(snippetId).textContent
+        : WENXI_SNIPPET;
+    navigator.clipboard.writeText(code).then(() => {
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check"></i> 已复制';
+        btn.disabled = true;
+        setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
+    }).catch(() => {
+        // 降级：选中文本
+        const pre = btn.previousElementSibling;
+        if (pre) {
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(pre);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+    });
+}
 
 async function loadPlatformOptions() {
     try {
@@ -232,6 +458,10 @@ function openAddModal() {
     document.getElementById('inputAccount').value = '';
     document.getElementById('inputCookie').value = '';
     document.getElementById('inputPurpose').value = '';
+    // 重置文犀提示
+    document.getElementById('wenxiCookieHint').style.display = 'none';
+    document.getElementById('wenxiCookieGuide').style.display = 'none';
+    document.getElementById('inputCookie').placeholder = '请输入Cookie信息';
     addModal.show();
 }
 
@@ -272,15 +502,42 @@ function openUpdateModal(id) {
     document.getElementById('updatePlatform').value = acc.platform_name;
     document.getElementById('updateAccount').value = acc.user;
     document.getElementById('updateCookie').value = acc.cookie;
+
+    // 文犀账号：显示 token 更新说明
+    const isWenxi = acc.platform_code === 'wenxi';
+    document.getElementById('wenxiUpdateHint').style.display = isWenxi ? '' : 'none';
+    document.getElementById('wenxiUpdateGuide').style.display = 'none';
+    document.getElementById('updateCookie').placeholder = isWenxi
+        ? '粘贴新的 JSON（含 token/sessionId/uid），系统自动保留 subjectGroup）'
+        : '请输入Cookie信息';
+
     updateModal.show();
 }
 
 async function submitUpdateCookie() {
-    const cookie = document.getElementById('updateCookie').value.trim();
+    let cookie = document.getElementById('updateCookie').value.trim();
     if (!cookie) {
         alert('Cookie不能为空');
         return;
     }
+
+    // 文犀账号：若用户粘贴的 JSON 缺少 subjectGroup，自动从旧值里合并保留
+    const acc = allAccounts.find(a => a.id === currentUpdateId);
+    if (acc && acc.platform_code === 'wenxi') {
+        try {
+            const newBlob = JSON.parse(cookie);
+            if (typeof newBlob === 'object' && newBlob !== null && !newBlob.subjectGroup) {
+                // 尝试从旧 cookie_text 里取 subjectGroup
+                let oldSubjectGroup = null;
+                try { oldSubjectGroup = JSON.parse(acc.cookie)?.subjectGroup; } catch (_) {}
+                if (oldSubjectGroup) {
+                    newBlob.subjectGroup = oldSubjectGroup;
+                    cookie = JSON.stringify(newBlob);
+                }
+            }
+        } catch (_) { /* 非 JSON 格式，原样提交 */ }
+    }
+
     const res = await fetch('/api/accounts/update_cookie', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -292,7 +549,6 @@ async function submitUpdateCookie() {
         return;
     }
     // 更新本地数据
-    const acc = allAccounts.find(a => a.id === currentUpdateId);
     if (acc) acc.cookie = cookie;
     updateModal.hide();
     renderTable(allAccounts);

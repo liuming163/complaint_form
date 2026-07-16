@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>腾讯文犀投诉表单</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+<header class="main-header shadow-sm">
+    <div class="logo-area"><i class="fas fa-shield-alt"></i> 腾讯文犀投诉</div>
+    <div>
+        <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i> 返回首页</a>
+        <span class="user-info" style="margin-left:16px"><i class="fas fa-user"></i> {{ current_user }}</span>
+        <button class="btn btn-sm btn-outline-secondary" style="margin-left:8px" onclick="logout()"><i class="fas fa-sign-out-alt"></i> 登出</button>
+    </div>
+</header>
+
+<div class="form-page-wrap">
+
+    <!-- 账号信息 -->
+    <div class="form-card">
+        <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
+        <div class="mb-3">
+            <label class="form-label">采集账号</label>
+            <select class="form-select" id="collectAccountSelect" required onchange="onCollectAccountChange()">
+                <option value="">请选择采集账号</option>
+            </select>
+        </div>
+        <div id="tokenStatus" style="color:#666;font-size:13px;">文犀使用 token 鉴权（账号管理中维护），选择账号后校验有效性</div>
+    </div>
+
+    <!-- 投诉模版 -->
+    <div class="form-card mb-4">
+        <div class="section-title"><i class="fas fa-clone"></i> 投诉模版</div>
+        <div class="d-flex gap-3">
+            <button type="button" class="btn btn-outline-primary" onclick="downloadTemplate()">
+                <i class="fas fa-download"></i> 下载模版
+            </button>
+            <input type="file" id="templateFile" accept=".xlsx,.xls" style="display:none" onchange="handleTemplateUpload(this)">
+            <button type="button" class="btn btn-outline-success" onclick="document.getElementById('templateFile').click()">
+                <i class="fas fa-upload"></i> 上传模版
+            </button>
+        </div>
+        <div id="templateInfo" class="file-info mt-2"></div>
+        <div id="templateError" class="file-error mt-1"></div>
+    </div>
+
+    <!-- 身份信息 -->
+    <div class="form-card locked-section">
+        <div class="section-title"><i class="fas fa-user"></i> 身份信息</div>
+        <div id="identityDisplay" style="color:#666;font-size:13px;">上传模版后自动填充</div>
+    </div>
+
+    <form id="wenxiForm">
+
+        <!-- 投诉场景 -->
+        <div class="form-card locked-section">
+            <div class="section-title"><i class="fas fa-tag"></i> 投诉场景</div>
+            <div id="scenarioDisplay" style="color:#666;font-size:13px;">上传模版后自动填充</div>
+        </div>
+
+        <!-- 投诉内容 -->
+        <div class="form-card locked-section">
+            <div class="section-title"><i class="fas fa-file-import"></i> 投诉内容</div>
+            <div id="templatePreview" style="color:#666;font-size:13px;">请先上传模版文件</div>
+        </div>
+
+        <div class="text-center mt-3">
+            <button type="submit" id="submitBtn" class="btn btn-brown px-5" disabled>提交投诉</button>
+            <a href="/" id="goHomeBtn" class="btn btn-outline-primary px-4 ms-3" style="display:none">回到首页查看投诉状态</a>
+        </div>
+
+    </form>
+</div>
+<script>
+let wenxiAccountsMap = {};
+let wenxiWorksConfig = null;
+let wenxiMeta = null;
+let wenxiDelegateCode = '';
+let currentUploadFilename = '';
+let wenxiDelegateName = '';
+let wenxiAgentOrg = '';
+let wenxiScenario = {};
+
+document.addEventListener('DOMContentLoaded', loadWenxiAccounts);
+
+function loadWenxiAccounts() {
+    fetch('/api/accounts/list?platform_code=wenxi')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const select = document.getElementById('collectAccountSelect');
+            data.data.forEach(acc => {
+                const opt = document.createElement('option');
+                opt.value = acc.user;
+                opt.textContent = acc.user + (acc.account_purpose ? ' - ' + acc.account_purpose : '');
+                select.appendChild(opt);
+                wenxiAccountsMap[acc.user] = acc;
+            });
+        });
+}
+
+function onCollectAccountChange() {
+    resetTemplate();
+    const user = document.getElementById('collectAccountSelect').value;
+    const statusEl = document.getElementById('tokenStatus');
+    if (!user) {
+        statusEl.textContent = '文犀使用 token 鉴权（账号管理中维护），选择账号后校验有效性';
+        return;
+    }
+    statusEl.textContent = '校验 token 有效性...';
+    fetch('/api/wenxi/verify_cookie', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({collect_account: user})
+    }).then(r => r.json()).then(res => {
+        statusEl.textContent = res.success
+            ? '✅ token 有效，可上传模版'
+            : '⚠️ ' + (res.error || 'token 无效');
+        statusEl.style.color = res.success ? '#2e7d32' : '#c62828';
+    }).catch(() => {
+        statusEl.textContent = '⚠️ token 校验请求失败';
+        statusEl.style.color = '#c62828';
+    });
+}
+
+function resetTemplate() {
+    wenxiWorksConfig = null;
+    wenxiMeta = null;
+    wenxiDelegateCode = '';
+    currentUploadFilename = '';
+    document.getElementById('templateInfo').textContent = '';
+    document.getElementById('templateError').textContent = '';
+    document.getElementById('templatePreview').textContent = '请先上传模版文件';
+    document.getElementById('identityDisplay').textContent = '上传模版后自动填充';
+    document.getElementById('scenarioDisplay').textContent = '上传模版后自动填充';
+    document.getElementById('submitBtn').disabled = true;
+}
+
+function downloadTemplate() {
+    window.location.href = '/api/wenxi/download_template';
+}
+
+function handleTemplateUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const collectAccount = document.getElementById('collectAccountSelect').value;
+    if (!collectAccount) {
+        alert('请先选择采集账号，再上传模版');
+        input.value = '';
+        return;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('collect_account', collectAccount);
+
+    document.getElementById('templateInfo').textContent = '解析中...';
+    document.getElementById('templateError').textContent = '';
+
+    fetch('/api/wenxi/upload_template', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(res => {
+            if (res.success) {
+                wenxiWorksConfig = res.works;
+                wenxiMeta = res.meta;
+                wenxiDelegateCode = res.delegate_code || '';
+                wenxiDelegateName = res.delegate_name || '';
+                wenxiAgentOrg = res.agent_org || '';
+                currentUploadFilename = res.filename || '';
+                wenxiScenario = res;
+                document.getElementById('identityDisplay').textContent =
+                    '机构代理｜代理机构：' + wenxiAgentOrg + ' → 委托方：' + wenxiDelegateName;
+                document.getElementById('scenarioDisplay').textContent =
+                    '投诉产品：' + (res.product_name || '') +
+                    '｜内容类型：' + (res.content_type_name || '') +
+                    '｜权利类型：' + (res.right_type_name || '') +
+                    '｜作品类型：' + (res.work_type_name || '（未填）') +
+                    '｜投诉描述：' + (res.description || '');
+                const warn = res.warnings ? '\n⚠️ 部分作品匹配失败：' + res.warnings.join('；') : '';
+                document.getElementById('templateInfo').textContent =
+                    '已加载：' + res.works.length + ' 部作品，共 ' + res.total_links + ' 条链接，'
+                    + res.total_batches + ' 个批次（每单最多 20 条链接，超出自动拆单）' + warn;
+                document.getElementById('templatePreview').innerHTML =
+                    res.works.map(w => '<div>📄 ' + w.work_name + ' — ' + w.links.length + ' 条链接</div>').join('');
+                document.getElementById('submitBtn').disabled = false;
+            } else {
+                alert('加载失败：' + res.error);
+                document.getElementById('templateError').textContent = res.error;
+                document.getElementById('templateInfo').textContent = '';
+                resetTemplate();
+                input.value = '';
+            }
+        })
+        .catch(function(err) {
+            document.getElementById('templateError').textContent = '上传失败：' + err.message;
+            input.value = '';
+        });
+}
+
+document.getElementById('wenxiForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    if (!wenxiWorksConfig || wenxiWorksConfig.length === 0) {
+        alert('请先上传模版文件');
+        return;
+    }
+    const collectAccount = document.getElementById('collectAccountSelect').value;
+    if (!collectAccount) {
+        alert('请选择采集账号');
+        return;
+    }
+
+    const submitBtn = document.getElementById('submitBtn');
+    submitBtn.disabled = true;
+    submitBtn.textContent = '校验 token...';
+
+    try {
+        const verifyResp = await fetch('/api/wenxi/verify_cookie', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({collect_account: collectAccount})
+        });
+        const verifyResult = await verifyResp.json();
+        if (!verifyResult.success) {
+            alert('token 校验失败：' + verifyResult.error);
+            return;
+        }
+
+        submitBtn.textContent = '提交中...';
+        const payload = {
+            collect_account: collectAccount,
+            meta: wenxiMeta,
+            delegate_code: wenxiDelegateCode,
+            works: wenxiWorksConfig,
+            delegate_name: wenxiDelegateName,
+            agent_org: wenxiAgentOrg,
+            product_name: wenxiScenario.product_name || '',
+            content_type_name: wenxiScenario.content_type_name || '',
+            right_type_name: wenxiScenario.right_type_name || '',
+            upload_filename: currentUploadFilename,
+        };
+        const resp = await fetch('/api/wenxi/submit', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const result = await resp.json();
+        if (!resp.ok || !result.success) throw new Error(result.error || '提交失败');
+
+        alert('提交成功\n任务编号：' + result.task_id + '\n共 ' + wenxiWorksConfig.length + ' 部作品');
+        document.getElementById('goHomeBtn').style.display = '';
+        resetTemplate();
+    } catch(err) {
+        alert(err.message || '提交失败');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '提交投诉';
+    }
+});
+</script>
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+</body>
+</html>

@@ -3626,6 +3626,12 @@ def weibo_page():
     return render_template('weibo.html')
 
 
+@app.route('/wenxi')
+@login_required
+def wenxi_page():
+    return render_template('wenxi.html')
+
+
 @app.route('/api/baidu/verify_cookie', methods=['POST'])
 @login_required
 def baidu_verify_cookie():
@@ -4936,12 +4942,152 @@ def run_weibo_complaint_script(task_id, cookie, form, works_config, total_batche
         tasks[task_id]['status'] = 'failed'
 
 
+def run_wenxi_complaint_script(task_id, auth, meta, subject_group, delegate_code,
+                               works_config, total_batches):
+    import sys, tempfile
+    script_path = os.path.join(os.path.dirname(__file__), 'wenxi_complaint_backend.py')
+    submission_id = task_id[len('wenxi_'):] if task_id.startswith('wenxi_') else task_id
+
+    db = get_db_session()
+    try:
+        db.execute(text("UPDATE complaints SET status='running', started_at=NOW() WHERE task_id=:tid"), {'tid': task_id})
+        db.commit()
+    except:
+        db.rollback()
+    finally:
+        db.close()
+
+    tasks[task_id] = tasks.get(task_id, {})
+    tasks[task_id]['status'] = 'running'
+    tasks[task_id]['started_at'] = datetime.now().isoformat()
+
+    # 文犀后端吃单一 config 文件：{"auth":{...}, "meta":{...}, "subject_group":{...},
+    #   "delegate_code":"...", "works":[...]}
+    cfg_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8')
+    cfg_file.write(json.dumps({
+        'auth': auth, 'meta': meta, 'subject_group': subject_group,
+        'delegate_code': delegate_code, 'works': works_config,
+    }, ensure_ascii=False))
+    cfg_file.close()
+
+    cmd = [
+        sys.executable, script_path,
+        '--task-id', task_id,
+        '--config-file', cfg_file.name,
+    ]
+
+    try:
+        # 每单含 COS 上传 + 提交，放宽单批预估到 45 秒
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=max(180, total_batches * 45),
+                              cwd=os.path.dirname(__file__))
+        try:
+            os.unlink(cfg_file.name)
+        except Exception:
+            pass
+
+        stdout = proc.stdout or ''
+        stderr = proc.stderr or ''
+
+        log_dir = app.config['TASK_RESULT_FOLDER']
+        os.makedirs(log_dir, exist_ok=True)
+        with open(os.path.join(log_dir, f'{task_id}.log'), 'w', encoding='utf-8') as f:
+            f.write(f"=== STDOUT ===\n{stdout}\n\n=== STDERR ===\n{stderr}\n")
+
+        result_data = None
+        if 'JSON_RESULT_START' in stdout and 'JSON_RESULT_END' in stdout:
+            try:
+                result_data = json.loads(stdout.split('JSON_RESULT_START')[1].split('JSON_RESULT_END')[0].strip())
+            except Exception:
+                pass
+
+        db = get_db_session()
+        try:
+            if result_data:
+                db.execute(text("""
+                    UPDATE complaints
+                    SET status=:st, completed_at=NOW(),
+                        complaint_numbers_json=:nums,
+                        completed_batches=:cb, failed_batches=:fb,
+                        error_message=:err
+                    WHERE task_id=:tid
+                """), {
+                    'st': result_data.get('status', 'completed'),
+                    'nums': json.dumps(result_data.get('feedback_numbers', []), ensure_ascii=False),
+                    'cb': result_data.get('completed_batches', 0),
+                    'fb': result_data.get('failed_batches', 0),
+                    'err': result_data.get('error_message') or None,
+                    'tid': task_id,
+                })
+                for br in result_data.get('batch_results', []):
+                    db.execute(text("""
+                        UPDATE complaint_batches
+                        SET status=:st, complaint_number=:cn, error_message=:err
+                        WHERE complaint_id=:sid AND batch_no=:bno
+                    """), {
+                        'st': br.get('status', 'completed'),
+                        'cn': br.get('feedback_number'),
+                        'err': br.get('error'),
+                        'sid': submission_id,
+                        'bno': br.get('batch_no'),
+                    })
+                for grp in result_data.get('feedback_numbers_by_work', []):
+                    db.execute(text("""
+                        UPDATE submission_works
+                        SET feedback_numbers=:nums, status=:st
+                        WHERE complaint_id=:sid AND work_name=:wname
+                    """), {
+                        'nums': json.dumps(grp.get('numbers', []), ensure_ascii=False),
+                        'st': grp.get('status', 'completed'),
+                        'sid': submission_id,
+                        'wname': grp.get('work_name', ''),
+                    })
+                tasks[task_id]['status'] = result_data.get('status', 'completed')
+            else:
+                db.execute(text("UPDATE complaints SET status='failed', completed_at=NOW(), error_message=:err WHERE task_id=:tid"),
+                           {'err': stderr[:500] or '脚本未返回结果', 'tid': task_id})
+                tasks[task_id]['status'] = 'failed'
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+
+    except subprocess.TimeoutExpired:
+        try:
+            os.unlink(cfg_file.name)
+        except Exception:
+            pass
+        db = get_db_session()
+        try:
+            db.execute(text("UPDATE complaints SET status='failed', completed_at=NOW(), error_message='脚本执行超时' WHERE task_id=:tid"), {'tid': task_id})
+            db.commit()
+        except:
+            db.rollback()
+        finally:
+            db.close()
+        tasks[task_id]['status'] = 'failed'
+    except Exception as e:
+        db = get_db_session()
+        try:
+            db.execute(text("UPDATE complaints SET status='failed', completed_at=NOW(), error_message=:err WHERE task_id=:tid"), {'err': str(e), 'tid': task_id})
+            db.commit()
+        except:
+            db.rollback()
+        finally:
+            db.close()
+        tasks[task_id]['status'] = 'failed'
+
+
 # Blueprint 注册（必须在所有函数定义之后，避免循环引用）
 from quark_routes import quark_bp
 app.register_blueprint(quark_bp)
 
 from weibo_routes import weibo_bp
 app.register_blueprint(weibo_bp)
+
+from wenxi_routes import wenxi_bp
+app.register_blueprint(wenxi_bp)
 
 
 if __name__ == '__main__':
