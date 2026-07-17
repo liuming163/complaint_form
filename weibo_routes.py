@@ -310,12 +310,15 @@ def _paren(s):
     return (s or '').replace('（', '(').replace('）', ')')
 
 
-def _match_file(dir_path, prefix, *must_contain):
+def _match_file(dir_path, prefix, *must_contain, exclude_exts=None):
     """在目录里找 prefix 开头、且包含所有 must_contain 片段的文件，返回绝对路径或空。"""
     if not os.path.isdir(dir_path):
         return ''
+    excluded = {ext.lower() for ext in (exclude_exts or [])}
     for f in sorted(os.listdir(dir_path)):
         if f.startswith('._') or not f.startswith(prefix):
+            continue
+        if os.path.splitext(f)[1].lower() in excluded:
             continue
         if all(_paren(seg) in _paren(f) for seg in must_contain if seg):
             return os.path.join(dir_path, f)
@@ -470,7 +473,8 @@ def weibo_upload_template():
     agent_org_short = WEIBO_AGENT_ORG_SHORT.get(agent_org, agent_org)
     _org_pic = _match_file(biz_dir, '营业执照_', agent_org)
     shared_paths = {
-        'obusiness_path': _match_file(biz_dir, '营业执照_', principal_name),
+        # 微博被代理人营业执照不支持 PDF；历史数据可能同时存在 pdf/png，需避开 pdf。
+        'obusiness_path': _match_file(biz_dir, '营业执照_', principal_name, exclude_exts={'.pdf'}),
         'org_pic_path': _org_pic,
         'org_empower_path': _match_file(auth_dir, '授权委托书_', principal_name, agent_org_short),
         # 机构联系人身份证正/反面：暂复用代理机构营业执照图（同一张用2次），
