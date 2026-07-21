@@ -7,8 +7,10 @@ import json
 import sys
 import time
 import os
+import tempfile
 import requests
 from datetime import datetime
+from openpyxl import load_workbook, Workbook
 
 BASE_URL = 'https://ipp.quark.cn'
 MAX_LINKS_PER_BATCH = 200
@@ -83,7 +85,7 @@ def get_identities(cookie: str, uid: str) -> dict:
 
 
 def upload_image(cookie: str, file_path: str) -> str:
-    """上传图片，返回永久URL。若文件不存在则返回空字符串。"""
+    """上传文件，返回永久URL。若文件不存在则返回空字符串。"""
     if not file_path or not os.path.exists(file_path):
         return ''
     headers = make_headers(cookie)
@@ -101,9 +103,54 @@ def upload_image(cookie: str, file_path: str) -> str:
     resp_data = data.get('data') or {}
     permanent = resp_data.get('o_url', '') or resp_data.get('filePath', '')
     if not permanent:
-        raise RuntimeError(f"图片上传失败: raw={str(data)[:200]}")
-    log(f"图片上传成功: {os.path.basename(file_path)} → {permanent[:60]}...")
+        raise RuntimeError(f"文件上传失败: raw={str(data)[:200]}")
+    log(f"文件上传成功: {os.path.basename(file_path)} → {permanent[:60]}...")
     return permanent
+
+
+def _link_key(value) -> str:
+    return str(value).strip() if value is not None else ''
+
+
+def build_batch_excel_attachment(source_path: str, links: list, work_name: str, batch_no: int) -> str:
+    """从原始附件表按本批次链接筛选行，生成新的 xlsx；无匹配则返回空字符串。"""
+    if not source_path or not os.path.exists(source_path):
+        return ''
+
+    link_set = {_link_key(link) for link in links if _link_key(link)}
+    if not link_set:
+        return ''
+
+    src_wb = load_workbook(source_path, data_only=False)
+    src_ws = src_wb.active
+    matched_rows = []
+    for row in src_ws.iter_rows(min_row=2):
+        share_link = _link_key(row[6].value) if len(row) >= 7 else ''
+        if share_link in link_set:
+            matched_rows.append([cell.value for cell in row])
+
+    if not matched_rows:
+        return ''
+
+    out_wb = Workbook()
+    out_ws = out_wb.active
+    out_ws.title = src_ws.title
+    max_col = src_ws.max_column
+    header = [src_ws.cell(row=1, column=col).value for col in range(1, max_col + 1)]
+    out_ws.append(header)
+    for values in matched_rows:
+        row_values = list(values[:max_col])
+        if len(row_values) < max_col:
+            row_values += [''] * (max_col - len(row_values))
+        out_ws.append(row_values)
+
+    out_dir = os.path.join(tempfile.gettempdir(), 'quark_batch_excel_attachments')
+    os.makedirs(out_dir, exist_ok=True)
+    safe_work = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in work_name)[:80] or 'work'
+    out_path = os.path.join(out_dir, f'{safe_work}_batch_{batch_no}.xlsx')
+    out_wb.save(out_path)
+    log(f"批次附件表生成成功: 第{batch_no}批，匹配{len(matched_rows)}行")
+    return out_path
 
 
 def submit_batch(cookie: str, links: list, originals: list, work_name: str,
@@ -293,6 +340,9 @@ def main():
             except Exception as e:
                 log(f"其他证明上传失败（跳过）: {p} — {e}")
 
+        source_excel_attachment_path = work.get('source_excel_attachment_path', '')
+        excel_insert_index = work.get('excel_insert_index')
+
         if not copyright_url:
             reason = '版权证明文件上传失败，无法提交'
             for chunk_start in range(0, max(len(links), 1), MAX_LINKS_PER_BATCH):
@@ -314,6 +364,27 @@ def main():
         for chunk_start in range(0, len(links), MAX_LINKS_PER_BATCH):
             batch_no += 1
             chunk = links[chunk_start:chunk_start + MAX_LINKS_PER_BATCH]
+            batch_other_urls = list(other_urls)
+            batch_excel_path = ''
+            if source_excel_attachment_path:
+                try:
+                    batch_excel_path = build_batch_excel_attachment(source_excel_attachment_path, chunk, work_name, batch_no)
+                    if batch_excel_path:
+                        batch_excel_url = upload_image(args.cookie, batch_excel_path)
+                        if batch_excel_url:
+                            insert_at = excel_insert_index if isinstance(excel_insert_index, int) else len(batch_other_urls)
+                            insert_at = max(0, min(insert_at, len(batch_other_urls)))
+                            batch_other_urls.insert(insert_at, batch_excel_url)
+                    else:
+                        log(f"[{work_name}] 第{batch_no}批附件表无匹配行，跳过上传")
+                except Exception as e:
+                    log(f"[{work_name}] 第{batch_no}批附件表生成/上传失败（跳过）: {e}")
+                finally:
+                    if batch_excel_path:
+                        try:
+                            os.unlink(batch_excel_path)
+                        except Exception:
+                            pass
             log(f"[{work_name}/{proxy_name}] 第{batch_no}批 ({len(chunk)}条链接)")
             try:
                 submit_ts = time.time()
@@ -322,7 +393,7 @@ def main():
                     obligee_id, proxy_id, proxy_delegation_file,
                     args.module, args.content_type,
                     complaint_type, complaint_sub_type,
-                    description, copyright_url, other_urls,
+                    description, copyright_url, batch_other_urls,
                 )
                 complaint_no = fetch_complaint_number(args.cookie, work_name, submit_ts, chunk)
                 result['completed_batches'] += 1

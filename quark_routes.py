@@ -195,6 +195,40 @@ QUARK_SUB_TYPE_MAP = {
     '著作权(含视频、图文、图集等)': 11, '商标': 12, '专利': 13, '其他知识产权': 14,
     '名誉/商誉权': 15, '姓名/名称权': 16, '肖像权': 17, '隐私权': 18, '其他人身权益': 19,
 }
+QUARK_EXCEL_ATTACHMENT_EXTS = ('.xlsx',)
+
+
+def _first_present(paths):
+    return [p for p in paths if p]
+
+
+def build_quark_other_paths(work: dict, excel_attachment_path: str = '', reserve_excel_slot: bool = False) -> list:
+    """按夸克其他证明规则组装最终上传列表。"""
+    other_proof_paths = work.get('other_proof_paths') or []
+    auth_path = work.get('auth_path') or ''
+    business_license_paths = work.get('business_license_paths') or []
+
+    if not (other_proof_paths or auth_path or business_license_paths):
+        paths = work.get('other_paths') or []
+        if excel_attachment_path:
+            paths = paths[:4] + [excel_attachment_path]
+        return _first_present(paths)[:5]
+
+    if excel_attachment_path or reserve_excel_slot:
+        paths = business_license_paths[:2] + _first_present([auth_path])
+        if excel_attachment_path:
+            paths.append(excel_attachment_path)
+        paths += other_proof_paths[:1]
+    else:
+        paths = other_proof_paths[:2] + _first_present([auth_path]) + business_license_paths[:2]
+    return _first_present(paths)[:5]
+
+
+def get_quark_excel_insert_index(work: dict) -> int:
+    """返回批次 Excel 应插入到其他证明 URL 列表的位置。"""
+    business_license_paths = work.get('business_license_paths') or []
+    auth_path = work.get('auth_path') or ''
+    return len(_first_present(business_license_paths[:2] + [auth_path]))
 
 
 @quark_bp.route('/upload_template', methods=['POST'])
@@ -366,14 +400,16 @@ def quark_upload_template():
 
         # 证明文件（必须）
         proof_path = ''
-        other_paths = []
+        other_proof_paths = []
+        auth_path = ''
+        business_license_paths = []
         for f in os.listdir(drama_dir):
             if f.startswith('证明文件_') and not f.startswith('._'):
                 proof_path = os.path.join(drama_dir, f)
                 break
         for f in sorted(os.listdir(drama_dir)):
             if f.startswith('其他证明_') and not f.startswith('._'):
-                other_paths.append(os.path.join(drama_dir, f))
+                other_proof_paths.append(os.path.join(drama_dir, f))
 
         # 授权委托书：被代理人 + 代理机构简称双重匹配，防止同一被代理人有多代理机构时拿错文件
         auth_dir = os.path.join(static_imgs_dir, '授权委托书')
@@ -381,23 +417,29 @@ def quark_upload_template():
             for f in sorted(os.listdir(auth_dir)):
                 if f.startswith('授权委托书_') and not f.startswith('._') \
                         and _company_match(pn, f) and _company_match(uc, f):
-                    other_paths.append(os.path.join(auth_dir, f))
+                    auth_path = os.path.join(auth_dir, f)
                     break
 
         # 营业执照(被代理人)
         biz_dir = os.path.join(static_imgs_dir, '营业执照')
         if os.path.isdir(biz_dir):
-            for f in os.listdir(biz_dir):
+            for f in sorted(os.listdir(biz_dir)):
                 if f.startswith('营业执照_') and not f.startswith('._') and _company_match(pn, f):
-                    other_paths.append(os.path.join(biz_dir, f))
+                    business_license_paths.append(os.path.join(biz_dir, f))
                     break
 
         # 营业执照(代理人)
         if uc and os.path.isdir(biz_dir):
-            for f in os.listdir(biz_dir):
+            for f in sorted(os.listdir(biz_dir)):
                 if f.startswith('营业执照_') and not f.startswith('._') and _company_match(uc, f):
-                    other_paths.append(os.path.join(biz_dir, f))
+                    business_license_paths.append(os.path.join(biz_dir, f))
                     break
+
+        other_paths = build_quark_other_paths({
+            'other_proof_paths': other_proof_paths,
+            'auth_path': auth_path,
+            'business_license_paths': business_license_paths,
+        })
 
         if not proof_path:
             match_errors.append(f'「{wn}」缺少证明文件')
@@ -411,6 +453,9 @@ def quark_upload_template():
             'originals':          originals,
             'proof_path':         proof_path,
             'other_paths':        other_paths,
+            'other_proof_paths':  other_proof_paths,
+            'auth_path':          auth_path,
+            'business_license_paths': business_license_paths,
             'complaint_type':     complaint_type,
             'complaint_sub_type': complaint_sub_type,
         })
@@ -447,13 +492,30 @@ def quark_upload_template():
 @quark_bp.route('/submit', methods=['POST'])
 @login_required
 def quark_submit():
-    data = request.get_json() or {}
+    excel_attachment = None
+    if request.mimetype == 'multipart/form-data':
+        payload_raw = request.form.get('payload', '')
+        if not payload_raw:
+            return jsonify({'success': False, 'error': '缺少提交数据'}), 400
+        try:
+            data = json.loads(payload_raw)
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'提交数据解析失败：{e}'}), 400
+        excel_attachment = request.files.get('excel_attachment')
+    else:
+        data = request.get_json(silent=True) or {}
+
     cookie = data.get('cookie', '').strip()
     collect_account = data.get('collect_account', '').strip()
     module = data.get('module', 3)
     content_type = data.get('content_type', 6)
     works_config = data.get('works', [])
     upload_filename = data.get('upload_filename', '').strip()
+
+    if excel_attachment and excel_attachment.filename:
+        ext = os.path.splitext(excel_attachment.filename)[1].lower()
+        if ext not in QUARK_EXCEL_ATTACHMENT_EXTS:
+            return jsonify({'success': False, 'error': 'Excel附件表仅支持 .xlsx 格式'}), 400
 
     if not cookie:
         return jsonify({'success': False, 'error': 'Cookie不能为空'}), 400
@@ -496,6 +558,22 @@ def quark_submit():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     submission_id = f"{timestamp}_{uuid4().hex[:8]}"
     task_id = f'quark_{submission_id}'
+
+    excel_attachment_path = ''
+    if excel_attachment and excel_attachment.filename:
+        ext = os.path.splitext(excel_attachment.filename)[1].lower()
+        attachment_dir = os.path.join(current_app.root_path, 'uploads', 'quark_submissions', submission_id)
+        try:
+            os.makedirs(attachment_dir, exist_ok=True)
+            excel_attachment_path = os.path.join(attachment_dir, f'excel_attachment_source{ext}')
+            excel_attachment.save(excel_attachment_path)
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Excel附件表保存失败：{e}'}), 500
+
+    for work in works_config:
+        work['source_excel_attachment_path'] = excel_attachment_path
+        work['excel_insert_index'] = get_quark_excel_insert_index(work) if excel_attachment_path else None
+        work['other_paths'] = build_quark_other_paths(work, reserve_excel_slot=bool(excel_attachment_path))
 
     # 写入数据库
     db = get_db_session()
@@ -569,6 +647,11 @@ def quark_submit():
         db.commit()
     except Exception as e:
         db.rollback()
+        if excel_attachment_path:
+            try:
+                os.unlink(excel_attachment_path)
+            except Exception:
+                pass
         return jsonify({'success': False, 'error': f'数据库写入失败：{e}'}), 500
     finally:
         db.close()

@@ -42,12 +42,14 @@
                 <i class="fas fa-download"></i> 下载模版
             </button>
             <input type="file" id="templateFile" accept=".xlsx,.xls" style="display:none" onchange="handleTemplateUpload(this)">
+            <input type="file" id="quarkExcelAttachment" accept=".xlsx" style="display:none" onchange="handleQuarkExcelAttachment(this)">
             <button type="button" class="btn btn-outline-success" onclick="document.getElementById('templateFile').click()">
                 <i class="fas fa-upload"></i> 上传模版
             </button>
         </div>
         <div id="templateInfo" class="file-info mt-2"></div>
         <div id="templateError" class="file-error mt-1"></div>
+        <div id="excelAttachmentInfo" class="file-info mt-2" style="display:none"></div>
     </div>
 
     <!-- 身份信息 -->
@@ -96,6 +98,8 @@ let quarkWorksConfig = null;
 let currentUploadFilename = '';
 let quarkModule = 3;
 let quarkContentType = 6;
+let quarkNeedsExcelAttachment = false;
+let quarkExcelAttachmentFile = null;
 
 document.addEventListener('DOMContentLoaded', loadQuarkAccounts);
 
@@ -125,6 +129,11 @@ function onCollectAccountChange() {
 function resetTemplate() {
     quarkWorksConfig = null;
     currentUploadFilename = '';
+    quarkNeedsExcelAttachment = false;
+    quarkExcelAttachmentFile = null;
+    document.getElementById('quarkExcelAttachment').value = '';
+    document.getElementById('excelAttachmentInfo').style.display = 'none';
+    document.getElementById('excelAttachmentInfo').innerHTML = '';
     document.getElementById('templateInfo').textContent = '';
     document.getElementById('templateError').textContent = '';
     document.getElementById('templatePreview').textContent = '请先上传模版文件';
@@ -172,7 +181,19 @@ function handleTemplateUpload(input) {
                     '已加载：' + res.works.length + ' 部作品，共 ' + res.total_links + ' 条链接，' + res.total_batches + ' 个批次' + warn;
                 document.getElementById('templatePreview').innerHTML =
                     res.works.map(w => '<div>📄 ' + w.work_name + '（' + w.proxy_name + '）— ' + w.links.length + ' 条链接</div>').join('');
-                document.getElementById('submitBtn').disabled = false;
+                const needsExcel = confirm('本次投诉是否需要在夸克“其他证明”中上传 Excel 附件表？\n\n确定：本次需要\n取消：本次不需要');
+                quarkNeedsExcelAttachment = needsExcel;
+                quarkExcelAttachmentFile = null;
+                const excelInfo = document.getElementById('excelAttachmentInfo');
+                if (needsExcel) {
+                    excelInfo.style.display = '';
+                    excelInfo.innerHTML = '请上传 .xlsx 格式的附件表：<button type="button" class="btn btn-sm btn-outline-success ms-2" onclick="document.getElementById(\'quarkExcelAttachment\').click()"><i class="fas fa-upload"></i> 上传附件表</button>';
+                } else {
+                    document.getElementById('quarkExcelAttachment').value = '';
+                    excelInfo.style.display = '';
+                    excelInfo.textContent = '本次不上传 Excel 附件表，可直接提交投诉';
+                }
+                document.getElementById('submitBtn').disabled = needsExcel;
             } else {
                 alert('加载失败：' + res.error);
                 document.getElementById('templateError').textContent = res.error;
@@ -185,6 +206,29 @@ function handleTemplateUpload(input) {
             document.getElementById('templateError').textContent = '上传失败：' + err.message;
             input.value = '';
         });
+}
+
+function handleQuarkExcelAttachment(input) {
+    const file = input.files && input.files[0] ? input.files[0] : null;
+    const excelInfo = document.getElementById('excelAttachmentInfo');
+    quarkExcelAttachmentFile = null;
+    document.getElementById('submitBtn').disabled = true;
+    if (!file) {
+        excelInfo.style.display = '';
+        excelInfo.innerHTML = '请上传 .xlsx 格式的附件表：<button type="button" class="btn btn-sm btn-outline-success ms-2" onclick="document.getElementById(\'quarkExcelAttachment\').click()"><i class="fas fa-upload"></i> 上传附件表</button>';
+        return;
+    }
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+        alert('附件表仅支持 .xlsx 格式');
+        input.value = '';
+        excelInfo.style.display = '';
+        excelInfo.innerHTML = '请上传 .xlsx 格式的附件表：<button type="button" class="btn btn-sm btn-outline-success ms-2" onclick="document.getElementById(\'quarkExcelAttachment\').click()"><i class="fas fa-upload"></i> 上传附件表</button>';
+        return;
+    }
+    quarkExcelAttachmentFile = file;
+    excelInfo.style.display = '';
+    excelInfo.innerHTML = '已选择附件表：' + file.name + ' <button type="button" class="btn btn-sm btn-outline-secondary ms-2" onclick="document.getElementById(\'quarkExcelAttachment\').click()">重新上传</button>';
+    document.getElementById('submitBtn').disabled = false;
 }
 
 document.getElementById('quarkForm').addEventListener('submit', async function(e) {
@@ -216,6 +260,11 @@ document.getElementById('quarkForm').addEventListener('submit', async function(e
             return;
         }
 
+        if (quarkNeedsExcelAttachment && !quarkExcelAttachmentFile) {
+            alert('请先上传 .xlsx 格式的附件表');
+            return;
+        }
+
         submitBtn.textContent = '提交中...';
         const payload = {
             collect_account: collectAccount,
@@ -225,10 +274,14 @@ document.getElementById('quarkForm').addEventListener('submit', async function(e
             works: quarkWorksConfig,
             upload_filename: currentUploadFilename,
         };
+        const formData = new FormData();
+        formData.append('payload', JSON.stringify(payload));
+        if (quarkExcelAttachmentFile) {
+            formData.append('excel_attachment', quarkExcelAttachmentFile);
+        }
         const resp = await fetch('/api/quark/submit', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(payload)
+            body: formData
         });
         const result = await resp.json();
         if (!resp.ok || !result.success) throw new Error(result.error || '提交失败');
@@ -239,7 +292,7 @@ document.getElementById('quarkForm').addEventListener('submit', async function(e
     } catch(err) {
         alert(err.message || '提交失败');
     } finally {
-        submitBtn.disabled = false;
+        submitBtn.disabled = !quarkWorksConfig || quarkWorksConfig.length === 0;
         submitBtn.textContent = '提交投诉';
     }
 });
