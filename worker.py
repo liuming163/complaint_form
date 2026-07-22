@@ -16,6 +16,7 @@ from app import (
     run_quark_complaint_script,
     run_weibo_complaint_script,
     run_wenxi_complaint_script,
+    run_xiaohongshu_complaint_script,
 )
 
 
@@ -105,6 +106,15 @@ def run_redis_worker():
                     task_payload['meta'],
                     task_payload['subject_group'],
                     task_payload['delegate_code'],
+                    task_payload['works_config'],
+                    task_payload['total_batches'],
+                )
+            elif platform == 'xiaohongshu':
+                print(f"[Xiaohongshu] 执行任务: {task_payload.get('task_id')}")
+                run_xiaohongshu_complaint_script(
+                    task_payload['task_id'],
+                    task_payload['cookie'],
+                    task_payload['principal_name'],
                     task_payload['works_config'],
                     task_payload['total_batches'],
                 )

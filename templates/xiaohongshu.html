@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>小红书投诉表单</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="{{ url_for('static', filename='css/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="https://cdn.bootcdn.net/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+<header class="main-header shadow-sm">
+    <div class="logo-area">📕 小红书投诉</div>
+    <div>
+        <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i> 返回首页</a>
+        <span class="user-info" style="margin-left:16px"><i class="fas fa-user"></i> {{ current_user }}</span>
+        <button class="btn btn-sm btn-outline-secondary" style="margin-left:8px" onclick="logout()"><i class="fas fa-sign-out-alt"></i> 登出</button>
+    </div>
+</header>
+
+<div class="form-page-wrap">
+
+    <!-- 账号信息 -->
+    <div class="form-card">
+        <div class="section-title"><i class="fas fa-user-circle"></i> 账号信息</div>
+        <div class="mb-3">
+            <label class="form-label">采集账号</label>
+            <select class="form-select" id="collectAccountSelect" required onchange="onCollectAccountChange()">
+                <option value="">请选择采集账号</option>
+            </select>
+        </div>
+        <div class="mb-3">
+            <label class="form-label">Cookie</label>
+            <textarea class="form-control" id="cookieTextarea" rows="3"
+                placeholder="请从上方选择采集账号，自动填充Cookie" required disabled></textarea>
+        </div>
+    </div>
+
+    <!-- 被代理人 -->
+    <div class="form-card">
+        <div class="section-title"><i class="fas fa-building"></i> 被代理人</div>
+        <div class="mb-3">
+            <label class="form-label">被代理人名称</label>
+            <select class="form-select" id="principalSelect" required onchange="onPrincipalChange()">
+                <option value="">请选择被代理人</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- 投诉模版 -->
+    <div class="form-card mb-4">
+        <div class="section-title"><i class="fas fa-clone"></i> 投诉模版</div>
+        <div class="d-flex gap-3">
+            <button type="button" class="btn btn-outline-primary" onclick="downloadTemplate()">
+                <i class="fas fa-download"></i> 下载模版
+            </button>
+            <input type="file" id="templateFile" accept=".xlsx,.xls" style="display:none"
+                onchange="handleTemplateUpload(this)">
+            <button type="button" class="btn btn-outline-success"
+                onclick="document.getElementById('templateFile').click()">
+                <i class="fas fa-upload"></i> 上传模版
+            </button>
+        </div>
+        <div id="templateInfo" class="file-info mt-2"></div>
+        <div id="templateError" class="file-error mt-1"></div>
+    </div>
+
+    <!-- 投诉信息（锁定只读展示） -->
+    <div class="form-card locked-section">
+        <div class="section-title"><i class="fas fa-tag"></i> 投诉信息（固定）</div>
+        <div style="color:#666;font-size:13px;line-height:2">
+            <div>📌 投诉内容：笔记</div>
+            <div>📌 侵权类型：知识产权 → 著作权（包含抄袭、搬运等）→ 其他著作权侵权（如广播剧、动漫、软件等）</div>
+            <div>📌 投诉标题：投诉</div>
+            <div>📌 允许转发权属证明：是</div>
+            <div>📌 侵权详情描述：链接涉及上传分享传播快看漫画作品 存在侵权行为 请尽快处理</div>
+            <div>📌 投诉请求：立即停止侵权，删除侵权内容，包括但不限于所列链接。</div>
+        </div>
+    </div>
+
+    <!-- 投诉内容（模版解析后填充） -->
+    <div class="form-card locked-section">
+        <div class="section-title"><i class="fas fa-file-import"></i> 投诉内容</div>
+        <div id="templatePreview" style="color:#666;font-size:13px;">请先上传模版文件</div>
+    </div>
+
+    <form id="xhsForm">
+        <div class="text-center mt-3">
+            <button type="submit" id="submitBtn" class="btn btn-brown px-5" disabled>提交投诉</button>
+            <a href="/" id="goHomeBtn" class="btn btn-outline-primary px-4 ms-3"
+                style="display:none">回到首页查看投诉状态</a>
+        </div>
+    </form>
+
+</div>
+
+<script>
+let xhsAccountsMap = {};
+let xhsWorksConfig = null;
+let xhsPrincipal = '';
+let currentUploadFilename = '';
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadXhsAccounts();
+    loadPrincipals();
+});
+
+function loadXhsAccounts() {
+    fetch('/api/accounts/list?platform_code=xiaohongshu')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const select = document.getElementById('collectAccountSelect');
+            data.data.forEach(acc => {
+                const opt = document.createElement('option');
+                opt.value = acc.user;
+                opt.textContent = acc.user + (acc.account_purpose ? ' - ' + acc.account_purpose : '');
+                select.appendChild(opt);
+                xhsAccountsMap[acc.user] = acc;
+            });
+        });
+}
+
+function loadPrincipals() {
+    fetch('/api/principals/list?platform_code=xiaohongshu')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const select = document.getElementById('principalSelect');
+            (data.data || []).forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.principal_name || p.name;
+                opt.textContent = p.principal_name || p.name;
+                select.appendChild(opt);
+            });
+        });
+}
+
+function onCollectAccountChange() {
+    const user = document.getElementById('collectAccountSelect').value;
+    const cookieEl = document.getElementById('cookieTextarea');
+    cookieEl.value = (user && xhsAccountsMap[user]) ? (xhsAccountsMap[user].cookie || '') : '';
+    resetTemplate();
+}
+
+function onPrincipalChange() {
+    resetTemplate();
+}
+
+function resetTemplate() {
+    xhsWorksConfig = null;
+    xhsPrincipal = '';
+    currentUploadFilename = '';
+    document.getElementById('templateInfo').textContent = '';
+    document.getElementById('templateError').textContent = '';
+    document.getElementById('templatePreview').textContent = '请先上传模版文件';
+    document.getElementById('submitBtn').disabled = true;
+    document.getElementById('templateFile').value = '';
+}
+
+function downloadTemplate() {
+    window.location.href = '/api/xiaohongshu/download_template';
+}
+
+function handleTemplateUpload(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    const collectAccount = document.getElementById('collectAccountSelect').value;
+    if (!collectAccount) {
+        alert('请先选择采集账号，再上传模版');
+        input.value = '';
+        return;
+    }
+    const principalName = document.getElementById('principalSelect').value;
+    if (!principalName) {
+        alert('请先选择被代理人，再上传模版');
+        input.value = '';
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('collect_account', collectAccount);
+    formData.append('principal_name', principalName);
+
+    document.getElementById('templateInfo').textContent = '解析中...';
+    document.getElementById('templateError').textContent = '';
+
+    fetch('/api/xiaohongshu/upload_template', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(res => {
+            if (res.success) {
+                xhsWorksConfig = res.works;
+                xhsPrincipal = res.principal_name || principalName;
+                currentUploadFilename = res.filename || '';
+
+                const warn = res.warnings
+                    ? '\n⚠️ 部分作品匹配失败：' + res.warnings.join('；')
+                    : '';
+                document.getElementById('templateInfo').textContent =
+                    '已加载：' + res.works.length + ' 部作品，共 ' + res.total_links +
+                    ' 条链接，' + res.total_batches + ' 个批次（每批≤100条）' + warn;
+                document.getElementById('templatePreview').innerHTML =
+                    res.works.map(w =>
+                        '<div>📄 ' + w.work_name + ' — ' + w.links.length + ' 条链接</div>'
+                    ).join('');
+                document.getElementById('submitBtn').disabled = false;
+            } else {
+                alert('加载失败：' + res.error);
+                document.getElementById('templateError').textContent = res.error;
+                document.getElementById('templateInfo').textContent = '';
+                resetTemplate();
+                input.value = '';
+            }
+        })
+        .catch(err => {
+            document.getElementById('templateError').textContent = '上传失败：' + err.message;
+            input.value = '';
+        });
+}
+
+document.getElementById('xhsForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    if (!xhsWorksConfig || xhsWorksConfig.length === 0) {
+        alert('请先上传模版文件');
+        return;
+    }
+    const collectAccount = document.getElementById('collectAccountSelect').value;
+    const cookie = document.getElementById('cookieTextarea').value.trim();
+    const principalName = document.getElementById('principalSelect').value;
+    if (!collectAccount || !cookie) {
+        alert('请选择采集账号');
+        return;
+    }
+    if (!principalName) {
+        alert('请选择被代理人');
+        return;
+    }
+
+    const submitBtn = document.getElementById('submitBtn');
+    submitBtn.disabled = true;
+    submitBtn.textContent = '验证Cookie...';
+
+    try {
+        const verifyResp = await fetch('/api/xiaohongshu/verify_cookie', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({cookie})
+        });
+        const verifyResult = await verifyResp.json();
+        if (!verifyResult.success) {
+            alert('Cookie验证失败：' + verifyResult.error);
+            return;
+        }
+
+        submitBtn.textContent = '提交中...';
+        const payload = {
+            collect_account: collectAccount,
+            cookie,
+            principal_name: principalName,
+            works: xhsWorksConfig,
+            upload_filename: currentUploadFilename,
+        };
+        const resp = await fetch('/api/xiaohongshu/submit', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+        });
+        const result = await resp.json();
+        if (!resp.ok || !result.success) throw new Error(result.error || '提交失败');
+
+        alert('提交成功\n任务编号：' + result.task_id + '\n共 ' + xhsWorksConfig.length + ' 部作品');
+        document.getElementById('goHomeBtn').style.display = '';
+        resetTemplate();
+    } catch(err) {
+        alert(err.message || '提交失败');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '提交投诉';
+    }
+});
+</script>
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+</body>
+</html>

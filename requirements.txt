@@ -1,6 +1,7 @@
 # 运行时依赖
 # 安装：pip install -r requirements.txt
-# Playwright 还需要安装浏览器：playwright install chromium
+# Playwright 运行浏览器：生产环境当前通过 PLAYWRIGHT_CHROMIUM_PATH 使用系统 Google Chrome；
+# 只有没有可用系统 Chrome 时才需要额外执行：playwright install chromium
 
 flask>=2.3
 sqlalchemy>=2.0
