@@ -48,16 +48,16 @@
                     <div class="name">微博投诉</div>
                     <div class="desc">微博版权投诉表单</div>
                 </a>
-                <a href="/wenxi" class="platform-card shadow-sm">
-                    <div class="icon"><i class="fas fa-shield-alt"></i></div>
-                    <div class="name">腾讯文犀投诉</div>
-                    <div class="desc">腾讯文犀（ri.qq.com）版权投诉</div>
-                </a>
-                <a href="/xiaohongshu" class="platform-card shadow-sm">
-                    <div class="icon">📕</div>
-                    <div class="name">小红书投诉</div>
-                    <div class="desc">小红书笔记版权投诉</div>
-                </a>
+<!--                <a href="/wenxi" class="platform-card shadow-sm">-->
+<!--                    <div class="icon"><i class="fas fa-shield-alt"></i></div>-->
+<!--                    <div class="name">腾讯文犀投诉</div>-->
+<!--                    <div class="desc">腾讯文犀（ri.qq.com）版权投诉</div>-->
+<!--                </a>-->
+<!--                <a href="/xiaohongshu" class="platform-card shadow-sm">-->
+<!--                    <div class="icon">📕</div>-->
+<!--                    <div class="name">小红书投诉</div>-->
+<!--                    <div class="desc">小红书笔记版权投诉</div>-->
+<!--                </a>-->
             </div>
         </div>
 
@@ -144,40 +144,40 @@
                 </div>
 
                 <!-- 腾讯文犀状态查询 -->
-                <div class="status-card shadow-sm">
-                    <div class="status-card-header">
-                        <div class="icon"><i class="fas fa-shield-alt"></i></div>
-                        <div class="name">腾讯文犀状态查询</div>
-                        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="refreshWenxiStatus()">
-                            <i class="fas fa-sync-alt"></i> 刷新
-                        </button>
-                    </div>
-                    <div class="status-card-body">
-                        <div id="wenxiStatusTable" class="status-table-wrap">
-                            <div class="status-loading">
-                                <i class="fas fa-spinner fa-spin"></i> 加载中...
-                            </div>
-                        </div>
-                    </div>
-                </div>
+<!--                <div class="status-card shadow-sm">-->
+<!--                    <div class="status-card-header">-->
+<!--                        <div class="icon"><i class="fas fa-shield-alt"></i></div>-->
+<!--                        <div class="name">腾讯文犀状态查询</div>-->
+<!--                        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="refreshWenxiStatus()">-->
+<!--                            <i class="fas fa-sync-alt"></i> 刷新-->
+<!--                        </button>-->
+<!--                    </div>-->
+<!--                    <div class="status-card-body">-->
+<!--                        <div id="wenxiStatusTable" class="status-table-wrap">-->
+<!--                            <div class="status-loading">-->
+<!--                                <i class="fas fa-spinner fa-spin"></i> 加载中...-->
+<!--                            </div>-->
+<!--                        </div>-->
+<!--                    </div>-->
+<!--                </div>-->
 
                 <!-- 小红书状态查询 -->
-                <div class="status-card shadow-sm">
-                    <div class="status-card-header">
-                        <div class="icon">📕</div>
-                        <div class="name">小红书状态查询</div>
-                        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="refreshXiaohongshuStatus()">
-                            <i class="fas fa-sync-alt"></i> 刷新
-                        </button>
-                    </div>
-                    <div class="status-card-body">
-                        <div id="xiaohongshuStatusTable" class="status-table-wrap">
-                            <div class="status-loading">
-                                <i class="fas fa-spinner fa-spin"></i> 加载中...
-                            </div>
-                        </div>
-                    </div>
-                </div>
+<!--                <div class="status-card shadow-sm">-->
+<!--                    <div class="status-card-header">-->
+<!--                        <div class="icon">📕</div>-->
+<!--                        <div class="name">小红书状态查询</div>-->
+<!--                        <button class="btn btn-sm btn-outline-primary ms-auto" onclick="refreshXiaohongshuStatus()">-->
+<!--                            <i class="fas fa-sync-alt"></i> 刷新-->
+<!--                        </button>-->
+<!--                    </div>-->
+<!--                    <div class="status-card-body">-->
+<!--                        <div id="xiaohongshuStatusTable" class="status-table-wrap">-->
+<!--                            <div class="status-loading">-->
+<!--                                <i class="fas fa-spinner fa-spin"></i> 加载中...-->
+<!--                            </div>-->
+<!--                        </div>-->
+<!--                    </div>-->
+<!--                </div>-->
 
             </div>
         </div>
@@ -747,8 +747,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     refreshBaiduStatus();
     refreshQuarkStatus();
     refreshWeiboStatus();
-    refreshWenxiStatus();
-    refreshXiaohongshuStatus();
+    // refreshWenxiStatus();
+    // refreshXiaohongshuStatus();
     setTimeout(() => {
         checkAuthorizationExpiryAlertsOnce();
     }, 1000);
