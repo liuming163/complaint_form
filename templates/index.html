@@ -218,11 +218,11 @@ function getEstimatedTime(taskId) {
     let cumulativeSeconds = 0;
     for (let i = 0; i <= idx; i++) {
         const q = globalQueue[i];
-        // 每批次预估耗时：百度/夸克 20 秒；微博每批含验证码识别+重试，约 60 秒；
+        // 每批次预估耗时：百度/夸克 20 秒；微博每批含验证码识别+重试+随机等待时长，约 180 秒；
         // UC 每批要 reload+重填+重传证明文件，实测约 5 分钟（300 秒）
         let secPerBatch = 300;
         if (q.platform_code === 'baidu' || q.platform_code === 'quark') secPerBatch = 20;
-        else if (q.platform_code === 'weibo') secPerBatch = 60;
+        else if (q.platform_code === 'weibo') secPerBatch = 180;
         else if (q.platform_code === 'wenxi') secPerBatch = 45;
         else if (q.platform_code === 'xiaohongshu') secPerBatch = 60;
         cumulativeSeconds += (q.batch_count || 1) * secPerBatch;

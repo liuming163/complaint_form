@@ -13,6 +13,7 @@
 
 import argparse
 import json
+import random
 import re
 import sys
 import time
@@ -23,6 +24,8 @@ from datetime import datetime
 BASE_URL = 'https://service.account.weibo.com'
 MAX_LINKS_PER_SUBMISSION = 100
 CAPTCHA_MAX_RETRY = 8          # 单批提交时验证码最多重试次数
+INTER_BATCH_DELAY_MIN_SECONDS = 60
+INTER_BATCH_DELAY_MAX_SECONDS = 140
 PAGE_SIGN = 'rights_movie'
 
 # 各类材料上传时的 ftype（缺失会报"请上传正确格式的材料"）
@@ -443,7 +446,14 @@ def main():
                             'batch_no': batch_no, 'work_name': work_name,
                             'status': 'failed', 'error': outcome['msg'],
                         })
-                    time.sleep(2)
+
+                    next_chunk_start = chunk_start + per_batch_limit
+                    has_more_chunks_in_work = next_chunk_start < len(links)
+                    has_more_works = any(w.get('links', []) for w in works_config[work_idx + 1:])
+                    if has_more_chunks_in_work or has_more_works:
+                        delay = random.randint(INTER_BATCH_DELAY_MIN_SECONDS, INTER_BATCH_DELAY_MAX_SECONDS)
+                        log(f"  批次间随机等待 {delay} 秒")
+                        time.sleep(delay)
 
                 if work_matched:
                     matched_by_work[work_name] = work_matched

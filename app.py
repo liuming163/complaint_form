@@ -1260,8 +1260,8 @@ def map_task_status_label(status):
     return status or '未知'
 
 
-# 每批预估耗时（秒）：百度/夸克 20；微博含验证码识别+重试约 60；UC 每批 reload+重填+重传约 300
-PLATFORM_SEC_PER_BATCH = {'uc': 300, 'weibo': 60, 'baidu': 20, 'quark': 20}
+# 每批预估耗时（秒）：百度/夸克 20；微博原 60 + 每批额外 120，共 180；UC 每批 reload+重填+重传约 300
+PLATFORM_SEC_PER_BATCH = {'uc': 300, 'weibo': 180, 'baidu': 20, 'quark': 20}
 
 
 def compute_estimated_finish(session, new_batch_count, new_platform_code, new_submitted_at):
