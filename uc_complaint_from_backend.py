@@ -607,7 +607,7 @@ def fill_initial_form(page, identity, agent, rights_holder, complaint_type, copy
 
     print("🎬 选择内容类型...")
     try:
-        content_radio = page.get_by_role("radio", name=content_type)
+        content_radio = page.get_by_role("radio", name=content_type, exact=True)
         if content_radio.count() == 0:
             raise RuntimeError(f"未找到内容类型选项: {content_type}")
         human_click(page, content_radio.first)
