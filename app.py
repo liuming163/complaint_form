@@ -4846,9 +4846,9 @@ def run_weibo_complaint_script(task_id, cookie, form, works_config, total_batche
     ]
 
     try:
-        # 每批含验证码识别+重试，比夸克慢，放宽单批预估到 60 秒
+        # 每批含验证码识别+重试+批次间等待(60-140s)，预估单批 200 秒
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=max(180, total_batches * 60),
+                              timeout=max(300, total_batches * 200),
                               cwd=os.path.dirname(__file__))
         try:
             os.unlink(cfg_file.name)
