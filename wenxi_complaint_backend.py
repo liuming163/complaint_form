@@ -34,6 +34,8 @@ import requests
 BASE_URL = 'https://ri.qq.com/api/v1'
 MAX_LINKS_PER_SUBMISSION = 20      # 单次提交 rightUrls 上限，超出自动拆多单
 COS_SIGN_SALT = 'cl_law_complaint'  # pre-token 签名固定盐（前端硬编码）
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+WENXI_COS_CA_BUNDLE = os.path.join(PROJECT_ROOT, 'certs', 'wenxi_cos_ca_bundle.pem')
 
 _UA = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
        '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')
@@ -84,6 +86,14 @@ def _cos_nonce() -> str:
     def _seg():
         return ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(13))
     return _seg() + _seg()
+
+
+def _cos_verify_path() -> str:
+    """COS 代理服务漏发 DigiCert 中间证书，使用项目内补链后的 CA bundle。"""
+    if os.path.exists(WENXI_COS_CA_BUNDLE):
+        return WENXI_COS_CA_BUNDLE
+    log(f'  ⚠️ 文犀 COS CA bundle 不存在，改用 requests 默认 CA: {WENXI_COS_CA_BUNDLE}')
+    return True
 
 
 def upload_cos(auth: dict, file_path: str) -> dict:
@@ -146,7 +156,7 @@ def upload_cos(auth: dict, file_path: str) -> dict:
         'Content-Type': 'application/octet-stream',
     }
     resp2 = requests.post(f'{service_url}/api/v1/push-file/stream', headers=push_headers,
-                          data=file_bytes, timeout=120)
+                          data=file_bytes, timeout=120, verify=_cos_verify_path())
     data2 = resp2.json()
     if data2.get('code') != 0:
         raise RuntimeError(f"COS 上传失败({file_name}): {data2.get('message', data2)}")
@@ -394,7 +404,7 @@ def match_complaint_id(auth: dict, work_name: str, submitted_urls: list,
 def save_partial_result(task_id, result):
     """增量落盘进度（与其它平台一致），供 app.py 超时回收。"""
     try:
-        result_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'task_results')
+        result_dir = os.path.join(PROJECT_ROOT, 'task_results')
         os.makedirs(result_dir, exist_ok=True)
         with open(os.path.join(result_dir, f'{task_id}.json'), 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
@@ -555,6 +565,7 @@ def main():
         else:
             result['status'] = 'failed'
         result['completed_at'] = datetime.now().isoformat()
+        save_partial_result(task_id, result)
         log(f"任务完成: 状态={result['status']}, 成功={result['completed_batches']}, "
             f"失败={result['failed_batches']}, 单号={result['feedback_numbers']}")
 
