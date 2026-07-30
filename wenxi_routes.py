@@ -595,7 +595,7 @@ def wenxi_upload_template():
         return jsonify({'success': False, 'error': '所有作品匹配失败：\n' + '\n'.join(match_errors)}), 400
 
     total_links = sum(len(w['links']) for w in works_config)
-    total_batches = sum(math.ceil(len(w['links']) / 20) for w in works_config)
+    total_batches = sum(max(1, math.ceil(len(w['links']) / 10000)) for w in works_config)
 
     resp_data = {
         'success': True,
@@ -684,7 +684,7 @@ def wenxi_submit():
             return jsonify({'success': False, 'error': f'文件「{upload_filename}」已投诉过（任务 {dup[0]}），请勿重复提交'}), 400
 
     total_links = sum(len(w.get('links', [])) for w in works_config)
-    total_batches = sum(math.ceil(len(w.get('links', [])) / 20) for w in works_config)
+    total_batches = sum(max(1, math.ceil(len(w.get('links', [])) / 10000)) for w in works_config)
     all_work_names = [w['work_name'] for w in works_config]
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -708,7 +708,7 @@ def wenxi_submit():
             VALUES (:sid, :tid, 'wenxi', :account, :cookie,
                     '机构代理', :agent, :principal,
                     :rtype, :rtype, :product, :ctype,
-                    :desc, :work_name, :rows, 20, :batches,
+                    :desc, :work_name, :rows, 10000, :batches,
                     'queued', :submitted_at, :estimated_finish_at, :operator, :upload_filename)
         """), {
             'sid': submission_id,
@@ -763,7 +763,7 @@ def wenxi_submit():
                 'widx': idx,
                 'wname': work['work_name'],
                 'lcount': len(work.get('links', [])),
-                'bcount': math.ceil(len(work.get('links', [])) / 20),
+                'bcount': max(1, math.ceil(len(work.get('links', [])) / 10000)),
             })
 
         db.commit()
