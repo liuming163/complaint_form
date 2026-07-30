@@ -246,7 +246,7 @@ WENXI_SHEET1_FIELDS = [
     ('投诉产品', '', '必填，须与文犀投诉产品名一致，如：搜狗搜索/腾讯视频/腾讯新闻/企鹅号/微视/qq浏览器/腾讯体育/应用宝'),
     ('内容类型', '', '必填。可选：视频/音频/图文/其他（须为该产品支持的类型）'),
     ('权利类型', '', '必填。可选：著作权/名誉权/肖像权/隐私权/商誉权/商标权/其他'),
-    ('作品类型', '', '可选。可选：电影/电视剧/微短剧/综艺/动漫/纪录片/个创类短视频/体育/新闻/漫剧/其他'),
+    ('作品类型', '', '非必填。可选：电影/电视剧/微短剧/综艺/动漫/纪录片/个创类短视频/体育/新闻/漫剧/其他，仅内容类型为视频，且权利类型为著作权时必填'),
     ('投诉描述', '', '必填，投诉理由描述'),
 ]
 
@@ -271,19 +271,32 @@ def wenxi_download_template():
     ws1.column_dimensions['B'].width = 40
     ws1.column_dimensions['C'].width = 70
 
-    # Sheet2 批量导入链接（侵权链接 | 作品名称 | 首发地址）
+    # Sheet2 批量导入链接（侵权链接 | 作品名称 | 说明）
     ws2 = wb.create_sheet('批量导入Excel')
-    ws2.append(['侵权链接', '作品名称', '首发地址'])
+    ws2.append(['侵权链接', '作品名称', '说明'])
     for cell in ws2[1]:
         cell.font = Font(bold=True)
+    ws2.append(['', '', '侵权链接必填，作品名称必填（权利类型为著作权时会提交接口，非著作权时用于区分投诉批次和匹配权属证明）'])
     for _ in range(3):
         ws2.append(['', '', ''])
     ws2.column_dimensions['A'].width = 60
     ws2.column_dimensions['B'].width = 30
-    ws2.column_dimensions['C'].width = 60
+    ws2.column_dimensions['C'].width = 50
 
-    # Sheet3 填写说明
-    ws3 = wb.create_sheet('填写说明')
+    # Sheet3 作品首发地址（新增）
+    ws3 = wb.create_sheet('作品首发地址')
+    ws3.append(['作品名称', '首发地址链接', '说明'])
+    for cell in ws3[1]:
+        cell.font = Font(bold=True)
+    ws3.append(['', '', '仅著作权投诉须填写；每部作品填一行，同一作品多条链接只需填一次'])
+    for _ in range(3):
+        ws3.append(['', '', ''])
+    ws3.column_dimensions['A'].width = 30
+    ws3.column_dimensions['B'].width = 60
+    ws3.column_dimensions['C'].width = 50
+
+    # Sheet4 填写说明
+    ws4 = wb.create_sheet('填写说明')
     for line in [
         ['腾讯文犀版权投诉模版（仅支持机构代理场景）'],
         [''],
@@ -292,19 +305,25 @@ def wenxi_download_template():
         ['  投诉产品：须与文犀投诉产品名一致（搜狗搜索/腾讯视频/腾讯新闻/企鹅号/微视/qq浏览器/腾讯体育/应用宝等）'],
         ['  内容类型：视频/音频/图文/其他（须为该产品支持的类型）'],
         ['  权利类型：著作权/名誉权/肖像权/隐私权/商誉权/商标权/其他'],
-        ['  作品类型：可选，电影/电视剧/微短剧/综艺/动漫/纪录片/个创类短视频/体育/新闻/漫剧/其他'],
+        ['  作品类型：非必填。仅内容类型为视频且权利类型为著作权时必填；其他情况即使填写也不会提交给接口'],
         [''],
         ['Sheet2 批量导入Excel'],
         ['  侵权链接：必填。同一作品链接超过 20 条时自动拆成多单提交'],
-        ['  作品名称：必填，支持多部作品混合，系统按作品名分组'],
-        ['  首发地址：必填，作品的原始/首发链接（每行填，同作品可相同）'],
+        ['  作品名称：必填。权利类型为著作权时会提交到接口；非著作权时不提交接口，但用于区分投诉批次和匹配权属证明'],
+        ['  说明列（C列）：仅供参考，不参与数据解析'],
+        [''],
+        ['Sheet3 作品首发地址（著作权投诉专用）'],
+        ['  作品名称：须与 Sheet2 中的作品名称完全一致'],
+        ['  首发地址：著作权投诉时必填，填作品的原始/首发链接；每部作品填一行'],
+        ['  说明列（C列）：仅供参考，不参与数据解析'],
+        ['  ⚠ 权利类型非著作权时（名誉权/肖像权等），此 Sheet 可留空'],
         [''],
         ['证明文件说明（沿用其他平台约定，放 static/imgs/ 下）'],
         ['  权属证明：static/imgs/剧名/<作品目录>/ 下「证明文件_*」'],
         ['  授权委托书由文犀「委托管理」维护，本系统提交时自动带上，无需本地准备'],
     ]:
-        ws3.append(line)
-    ws3.column_dimensions['A'].width = 90
+        ws4.append(line)
+    ws4.column_dimensions['A'].width = 90
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -432,12 +451,19 @@ def wenxi_upload_template():
     if right_type is None:
         return jsonify({'success': False, 'error': f'权利类型「{right_type_name}」无效，可选：'
                         + '、'.join(WENXI_RIGHT_TYPE_MAP.keys())}), 400
+    # 作品类型仅在内容类型=视频 且 权利类型=著作权时有效，否则强制 None
+    is_copyright_video = (right_type == WENXI_RIGHT_TYPE_MAP['著作权']
+                          and content_type == WENXI_CONTENT_TYPE_MAP['视频'])
     work_type = None
-    if work_type_name:
+    if is_copyright_video:
+        if not work_type_name:
+            return jsonify({'success': False,
+                            'error': 'Sheet1 缺少必填项：作品类型（内容类型为视频且权利类型为著作权时必填）'}), 400
         work_type = WENXI_WORK_TYPE_MAP.get(work_type_name)
         if work_type is None:
             return jsonify({'success': False, 'error': f'作品类型「{work_type_name}」无效，可选：'
                             + '、'.join(WENXI_WORK_TYPE_MAP.keys())}), 400
+    # 非「视频+著作权」时即使用户填写了作品类型也不提交接口，work_type 保持 None
 
     # 实时拉委托方下拉 + 产品列表，解析名称
     try:
@@ -477,10 +503,9 @@ def wenxi_upload_template():
     dup_conflicts = []       # [(当前行号, 首次行号, 链接原文)]
     # Excel 行号：表头第1行，数据从第2行起，故 enumerate 起点 2
     for excel_row, row in enumerate(
-            wb['批量导入Excel'].iter_rows(min_row=2, max_col=3, values_only=True), start=2):
+            wb['批量导入Excel'].iter_rows(min_row=2, max_col=2, values_only=True), start=2):
         link = str(row[0]).strip() if row[0] else ''
         wn = str(row[1]).strip() if row[1] else ''
-        origin = str(row[2]).strip() if len(row) > 2 and row[2] else ''
         if not link and not wn:
             empty_rows += 1
             if empty_rows >= 5:
@@ -498,11 +523,9 @@ def wenxi_upload_template():
         else:
             seen_links[link] = excel_row
         if wn not in works_map:
-            works_map[wn] = {'links': [], 'origin_url': origin}
+            works_map[wn] = {'links': []}
             work_order.append(wn)
         works_map[wn]['links'].append(link)
-        if origin and not works_map[wn]['origin_url']:
-            works_map[wn]['origin_url'] = origin
 
     if dup_conflicts:
         lines = '\n'.join(f'  · 第 {cur} 行与第 {first} 行重复：{lk[:80]}'
@@ -512,10 +535,23 @@ def wenxi_upload_template():
 
     if not works_map:
         return jsonify({'success': False, 'error': '"批量导入Excel"中没有有效数据'}), 400
-    missing_origin = [wn for wn in work_order if not works_map[wn]['origin_url']]
-    if missing_origin:
-        return jsonify({'success': False, 'error': '以下作品缺少首发地址：\n'
-                        + '\n'.join(f'  · {w}' for w in missing_origin)}), 400
+
+    # 解析 Sheet3（作品首发地址）→ {作品名 → 首发地址}
+    origin_map = {}
+    if '作品首发地址' in wb.sheetnames:
+        for row in wb['作品首发地址'].iter_rows(min_row=2, max_col=2, values_only=True):
+            wn_o = str(row[0]).strip() if row[0] else ''
+            origin_o = str(row[1]).strip() if len(row) > 1 and row[1] else ''
+            if wn_o and not wn_o.startswith(('（', '【', '(')):
+                origin_map[wn_o] = origin_o
+
+    # 著作权投诉才要求首发地址
+    if right_type == WENXI_RIGHT_TYPE_MAP['著作权']:
+        missing_origin = [wn for wn in work_order if not origin_map.get(wn)]
+        if missing_origin:
+            return jsonify({'success': False,
+                            'error': '著作权投诉须在「作品首发地址」Sheet 填写首发地址，以下作品缺失：\n'
+                            + '\n'.join(f'  · {w}' for w in missing_origin)}), 400
 
     # 逐作品匹配权属证明（沿用其他平台：works 表拿 used_company/content_type/complaint_type 拼目录）
     static_imgs_dir = os.path.join(current_app.root_path, 'static', 'imgs')
@@ -551,7 +587,7 @@ def wenxi_upload_template():
         works_config.append({
             'work_name': wn,
             'links': works_map[wn]['links'],
-            'origin_url': works_map[wn]['origin_url'],
+            'origin_url': origin_map.get(wn, ''),
             'proof_path': proof_path,
         })
 
@@ -737,6 +773,11 @@ def wenxi_submit():
     finally:
         db.close()
 
+    # 非著作权场景：work_name 不传给接口 right.name，入队前清空
+    is_copyright = meta.get('rightType') == WENXI_RIGHT_TYPE_MAP['著作权']
+    api_works = (works_config if is_copyright
+                 else [dict(w, work_name='') for w in works_config])
+
     enqueue_wenxi_task({
         'task_id': task_id,
         'submission_id': submission_id,
@@ -744,7 +785,7 @@ def wenxi_submit():
         'meta': meta,
         'subject_group': subject_group,
         'delegate_code': delegate_code,
-        'works_config': works_config,
+        'works_config': api_works,
         'total_batches': total_batches,
     })
 
