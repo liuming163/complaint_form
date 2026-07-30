@@ -576,7 +576,7 @@ def main():
                             'batch_no': batch_no, 'work_name': work_name,
                             'status': 'failed', 'error': err,
                         })
-                    time.sleep(2)
+                    time.sleep(random.randint(30, 90))
 
                 if work_matched:
                     matched_by_work[work_name] = work_matched
