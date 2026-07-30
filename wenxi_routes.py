@@ -407,7 +407,7 @@ def wenxi_upload_template():
     if auth_err:
         return jsonify({'success': False, 'error': auth_err}), 400
     if not _check_wenxi_login(auth):
-        return jsonify({'success': False, 'error': 'token 已失效，请在账号管理中更新文犀登录信息'}), 401
+        return jsonify({'success': False, 'error': 'token 已失效，请在投诉账号管理页面更新文犀登录信息'}), 400
 
     try:
         wb = load_workbook(file, data_only=True)
@@ -633,7 +633,7 @@ def wenxi_verify_cookie():
     try:
         if _check_wenxi_login(auth):
             return jsonify({'success': True})
-        return jsonify({'success': False, 'error': 'token 已失效，请在账号管理中更新文犀登录信息'}), 401
+        return jsonify({'success': False, 'error': 'token 已失效，请在投诉账号管理页面更新文犀登录信息'}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -666,7 +666,7 @@ def wenxi_submit():
         return jsonify({'success': False, 'error': '该账号未固化 subjectGroup（账号自身主体），'
                         '请在账号管理中补充一次真实提交的 subjectGroup'}), 400
     if not _check_wenxi_login(auth):
-        return jsonify({'success': False, 'error': 'token 已失效，请在账号管理中更新文犀登录信息'}), 401
+        return jsonify({'success': False, 'error': 'token 已失效，请在投诉账号管理页面更新文犀登录信息'}), 400
 
     # 防重复：同账号同文件未失败的记录已存在则拒绝
     if upload_filename:
