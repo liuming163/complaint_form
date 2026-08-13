@@ -181,7 +181,7 @@ function handleTemplateUpload(input) {
                 const warn = res.warnings ? '\n⚠️ 部分作品匹配失败：' + res.warnings.join('；') : '';
                 document.getElementById('templateInfo').textContent =
                     '已加载：' + res.works.length + ' 部作品，共 ' + res.total_links + ' 条链接，'
-                    + res.total_batches + ' 个批次（每单最多 20 条链接，超出自动拆单）' + warn;
+                    + res.total_batches + ' 个批次（每单最多 1000 条链接，超出自动拆单）' + warn;
                 document.getElementById('templatePreview').innerHTML =
                     res.works.map(w => '<div>📄 ' + w.work_name + ' — ' + w.links.length + ' 条链接</div>').join('');
                 document.getElementById('submitBtn').disabled = false;

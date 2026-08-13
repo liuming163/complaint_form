@@ -245,7 +245,7 @@ WENXI_SHEET1_FIELDS = [
     ('代理机构名称', '', '必填，用于匹配授权委托书/营业执照目录（如 北京和晞科技有限公司）'),
     ('投诉产品', '搜狗搜索', '必填，搜狗搜索'),
     ('内容类型', '', '必填。可选：视频/音频/图文/其他（须为该产品支持的类型）'),
-    ('权利类型', '', '必填。可选：著作权/名誉权/肖像权/隐私权/商誉权/商标权/其他'),
+    ('权利类型', '', '必填。可选：著作权/名誉权/肖像权/隐私权/商誉权/其他'),
     ('作品类型', '', '非必填。可选：电影/电视剧/微短剧/综艺/动漫/纪录片/个创类短视频/体育/新闻/漫剧/其他，仅内容类型为视频，且权利类型为著作权时必填'),
     ('投诉描述', '', '必填，投诉理由描述'),
 ]
@@ -595,7 +595,7 @@ def wenxi_upload_template():
         return jsonify({'success': False, 'error': '所有作品匹配失败：\n' + '\n'.join(match_errors)}), 400
 
     total_links = sum(len(w['links']) for w in works_config)
-    total_batches = sum(max(1, math.ceil(len(w['links']) / 10000)) for w in works_config)
+    total_batches = sum(max(1, math.ceil(len(w['links']) / 1000)) for w in works_config)
 
     resp_data = {
         'success': True,
@@ -684,7 +684,7 @@ def wenxi_submit():
             return jsonify({'success': False, 'error': f'文件「{upload_filename}」已投诉过（任务 {dup[0]}），请勿重复提交'}), 400
 
     total_links = sum(len(w.get('links', [])) for w in works_config)
-    total_batches = sum(max(1, math.ceil(len(w.get('links', [])) / 10000)) for w in works_config)
+    total_batches = sum(max(1, math.ceil(len(w.get('links', [])) / 1000)) for w in works_config)
     all_work_names = [w['work_name'] for w in works_config]
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -708,7 +708,7 @@ def wenxi_submit():
             VALUES (:sid, :tid, 'wenxi', :account, :cookie,
                     '机构代理', :agent, :principal,
                     :rtype, :rtype, :product, :ctype,
-                    :desc, :work_name, :rows, 10000, :batches,
+                    :desc, :work_name, :rows, 1000, :batches,
                     'queued', :submitted_at, :estimated_finish_at, :operator, :upload_filename)
         """), {
             'sid': submission_id,
@@ -763,7 +763,7 @@ def wenxi_submit():
                 'widx': idx,
                 'wname': work['work_name'],
                 'lcount': len(work.get('links', [])),
-                'bcount': max(1, math.ceil(len(work.get('links', [])) / 10000)),
+                'bcount': max(1, math.ceil(len(work.get('links', [])) / 1000)),
             })
 
         db.commit()

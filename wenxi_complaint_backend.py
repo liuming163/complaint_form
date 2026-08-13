@@ -6,7 +6,8 @@
   Authorization: <token>（裸 JWT，无 Bearer 前缀）、sessionId、uid
 token 约 2.5h 过期，失效时 API 返回 {code:20002}。
 
-一单=1部作品；侵权链接先上传为 xlsx 文件，得 urlBatchId 后再提交；单文件上限 10 MB（约1万条）。
+一单=1部作品；侵权链接直接放进 payload.right.rightUrls 数组提交；
+每批最多1000条链接（平台无硬限制，实测22条正常），超出自动拆单。
 提交无验证码。附件(权属证明)走腾讯云 COS 直传：
   cosKey=<32位随机>.<ext> → /cos-proxy/pre-token(带签名) → <serviceUrl>/api/v1/push-file/stream
   payload.right.attach[].cosId = 上传返回 key 去扩展名。
@@ -30,12 +31,10 @@ import sys
 import time
 from datetime import datetime, timezone
 
-import openpyxl
-
 import requests
 
 BASE_URL = 'https://ri.qq.com/api/v1'
-MAX_BATCH_FILE_BYTES = 10 * 1024 * 1024   # 单次链接文件上限 10 MB（约 1 万条）
+MAX_LINKS_PER_BATCH = 1000  # 每批最多链接数（平台无硬限制，实测22条正常，保守取1000）
 COS_SIGN_SALT = 'cl_law_complaint'  # pre-token 签名固定盐（前端硬编码）
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 WENXI_COS_CA_BUNDLE = os.path.join(PROJECT_ROOT, 'certs', 'wenxi_cos_ca_bundle.pem')
@@ -43,10 +42,6 @@ WENXI_COS_CA_BUNDLE = os.path.join(PROJECT_ROOT, 'certs', 'wenxi_cos_ca_bundle.p
 _UA = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
        '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')
 
-
-def _chunk_links_by_size(links: list, max_bytes: int, bytes_per_link: int = 1000) -> list:
-    size = max(1, max_bytes // bytes_per_link)
-    return [links[i:i + size] for i in range(0, max(len(links), 1), size)]
 
 
 def log(msg):
@@ -184,37 +179,6 @@ def upload_cos(auth: dict, file_path: str) -> dict:
     }
 
 
-def upload_url_batch(auth: dict, links: list) -> dict:
-    """将侵权链接写入 xlsx，POST /complaint/import，返回 {batchId, successCount, failedCount}。"""
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.append(['侵权链接地址'])
-    for link in links:
-        ws.append([link])
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    resp = requests.post(
-        f'{BASE_URL}/complaint/import',
-        headers=make_headers(auth),
-        files={'file': ('links.xlsx', buf.read(),
-                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')},
-        timeout=120,
-    )
-    try:
-        data = resp.json()
-    except Exception:
-        raise RuntimeError(f'链接批量上传失败: HTTP {resp.status_code}, {resp.text[:200]}')
-    if data.get('code') != 0:
-        raise RuntimeError(f"链接批量上传失败: {data.get('message', data)}")
-    d = data.get('data') or {}
-    return {
-        'batchId': d.get('batchId'),
-        'successCount': d.get('successCount', len(links)),
-        'failedCount': d.get('failedCount', 0),
-    }
-
-
 def fetch_delegate_details(auth: dict, delegate_code: str) -> dict:
     """按 code 拉委托方完整详情，构建 payload.group 对象。"""
     resp = requests.get(f'{BASE_URL}/delegate/{delegate_code}/details',
@@ -275,7 +239,7 @@ def submit_complaint(auth: dict, payload: dict) -> dict:
 
 def build_payload(meta: dict, group: dict, delegate_id, delegate_code,
                   subject_group: dict, work_name: str, origin_url: str,
-                  url_batch_id: str, success_count: int, attach: list) -> dict:
+                  right_urls: list, attach: list) -> dict:
     """组装 /complaint/request 提交体。
 
     meta: {appId,appName,appKey,contentType,rightType,workType,description}
@@ -306,15 +270,15 @@ def build_payload(meta: dict, group: dict, delegate_id, delegate_code,
             'name': work_name,
             'fromCinemas': 0,
             'originUrl': origin_url,
-            'rightUrls': [],
+            'rightUrls': right_urls,
             'attach': attach,
             'tmType': None,
             'tmName': None,
             'tmTime': [],
             'tmStartDt': '',
             'tmEndDt': '',
-            'urlBatchId': url_batch_id,
-            'successCount': success_count,
+            'urlBatchId': None,
+            'successCount': len(right_urls),
             'isHot': None,
             'isLong': None,
         },
@@ -522,7 +486,8 @@ def main():
             origin_url = work.get('origin_url', '')
             links = work.get('links', [])
             proof_path = work.get('proof_path', '')
-            chunks = _chunk_links_by_size(links, MAX_BATCH_FILE_BYTES)
+            chunks = [links[i:i + MAX_LINKS_PER_BATCH]
+                      for i in range(0, max(len(links), 1), MAX_LINKS_PER_BATCH)]
             log(f"[{work_idx+1}/{len(works_config)}] 处理作品: {work_name} "
                 f"({len(links)}条链接, {len(chunks)}批)")
 
@@ -538,23 +503,16 @@ def main():
                 work_matched = []
                 for chunk in chunks:
                     batch_no += 1
-                    log(f'  上传批次 {batch_no}: {len(chunk)}条链接')
-
-                    upload_res = upload_url_batch(auth, chunk)
-                    batch_id = upload_res['batchId']
-                    success_count = upload_res['successCount']
-                    log(f'  批次 {batch_no} 文件上传成功: batchId={batch_id}, '
-                        f'成功={success_count}, 失败={upload_res["failedCount"]}')
+                    log(f'  批次 {batch_no}: {len(chunk)}条链接')
 
                     # 提交前 URL 校验（失败不阻断，仅告警）
                     fc = format_check(auth, meta['appKey'], origin_url, chunk)
                     if fc.get('code') != 0:
                         log(f"  ⚠️ URL 校验未通过: {fc.get('message', fc)}（继续尝试提交）")
 
-                    # 记录提交前时刻（用于按创建时间过滤历史同名单）
                     submit_ts = datetime.now(timezone.utc)
                     payload = build_payload(meta, group, delegate_id, delegate_code_r,
-                                            subject_group, work_name, origin_url, batch_id, success_count, attach)
+                                            subject_group, work_name, origin_url, chunk, attach)
                     resp_data = submit_complaint(auth, payload)
 
                     if resp_data.get('code') == 0:
