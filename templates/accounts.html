@@ -123,7 +123,7 @@
     ...(sg ? {subjectGroup: sg} : {_note: 'subjectGroup 未能自动获取'})
   }, null, 2);
 })()</pre>
-                            <button type="button" class="btn btn-sm btn-outline-secondary wenxi-copy-btn" onclick="copyWenxiSnippet(this)">
+                            <button type="button" class="btn btn-sm btn-outline-secondary wenxi-copy-btn" data-clipboard-action="copy" data-clipboard-target="#wenxiSnippet">
                                 <i class="fas fa-copy"></i> 复制代码
                             </button>
                         </div>
@@ -204,7 +204,7 @@
     ...(sg ? {subjectGroup: sg} : {_note: 'subjectGroup 未能自动获取'})
   }, null, 2);
 })()</pre>
-                            <button type="button" class="btn btn-sm btn-outline-secondary wenxi-copy-btn" onclick="copyWenxiSnippet(this, 'wenxiUpdateSnippet')">
+                            <button type="button" class="btn btn-sm btn-outline-secondary wenxi-copy-btn" data-clipboard-action="copy" data-clipboard-target="#wenxiUpdateSnippet">
                                 <i class="fas fa-copy"></i> 复制代码
                             </button>
                         </div>
@@ -352,69 +352,27 @@ function toggleWenxiUpdateGuide() {
 
 // ── 复制代码片段 ───────────────────────────────────────────────────────────
 
-function copyWenxiSnippet(btn, snippetId) {
-    const code = snippetId
-        ? document.getElementById(snippetId).textContent
-        : WENXI_SNIPPET;
+// 初始化 ClipboardJS
+document.addEventListener('DOMContentLoaded', function() {
+    const clipboard = new ClipboardJS('.wenxi-copy-btn');
 
-    // 检查是否支持 Clipboard API（仅在 HTTPS 或 localhost 下可用）
-    if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(code).then(() => {
-            const orig = btn.innerHTML;
-            btn.innerHTML = '<i class="fas fa-check"></i> 已复制';
-            btn.disabled = true;
-            setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
-        }).catch(err => {
-            console.error('Clipboard API 失败:', err);
-            fallbackCopy(code, btn);
-        });
-    } else {
-        // HTTP 环境降级方案
-        fallbackCopy(code, btn);
-    }
-}
+    clipboard.on('success', function(e) {
+        const btn = e.trigger;
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check"></i> 已复制';
+        btn.disabled = true;
+        setTimeout(() => {
+            btn.innerHTML = orig;
+            btn.disabled = false;
+        }, 2000);
+        e.clearSelection();
+    });
 
-function fallbackCopy(text, btn) {
-    // HTTP 环境下创建可见的 textarea 让用户手动复制
-    const existingModal = document.getElementById('manualCopyModal');
-    if (existingModal) existingModal.remove();
-
-    const modal = document.createElement('div');
-    modal.id = 'manualCopyModal';
-    modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
-
-    const box = document.createElement('div');
-    box.style.cssText = 'background:white;padding:20px;border-radius:8px;max-width:600px;width:90%;';
-
-    const title = document.createElement('div');
-    title.style.cssText = 'font-weight:bold;margin-bottom:10px;color:#333;';
-    title.textContent = '请手动复制以下代码：';
-
-    const textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.style.cssText = 'width:100%;height:200px;font-family:monospace;font-size:12px;padding:10px;border:1px solid #ddd;border-radius:4px;resize:vertical;';
-    textarea.setAttribute('readonly', '');
-
-    const hint = document.createElement('div');
-    hint.style.cssText = 'margin-top:10px;color:#666;font-size:14px;';
-    hint.innerHTML = '<i class="fas fa-info-circle"></i> 请按 <kbd>Ctrl+A</kbd> 全选，然后按 <kbd>Ctrl+C</kbd> 复制';
-
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = '关闭';
-    closeBtn.className = 'btn btn-secondary mt-3';
-    closeBtn.onclick = () => modal.remove();
-
-    box.appendChild(title);
-    box.appendChild(textarea);
-    box.appendChild(hint);
-    box.appendChild(closeBtn);
-    modal.appendChild(box);
-    document.body.appendChild(modal);
-
-    // 自动选中文本
-    textarea.focus();
-    textarea.select();
-}
+    clipboard.on('error', function(e) {
+        console.error('ClipboardJS 复制失败:', e);
+        alert('复制失败，请手动复制代码');
+    });
+});
 
 async function loadPlatformOptions() {
     try {
@@ -620,6 +578,7 @@ document.getElementById('searchInput').addEventListener('input', function(e) {
     vertical-align: middle;
 }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/clipboard@2.0.11/dist/clipboard.min.js"></script>
 <script src="{{ url_for('static', filename='js/auth.js') }}"></script>
 </body>
 </html>
