@@ -377,38 +377,44 @@ function copyWenxiSnippet(btn, snippetId) {
 function fallbackCopy(text, btn) {
     const textarea = document.createElement('textarea');
     textarea.value = text;
-    textarea.style.position = 'fixed';
-    textarea.style.top = '0';
-    textarea.style.left = '0';
-    textarea.style.width = '2em';
-    textarea.style.height = '2em';
-    textarea.style.padding = '0';
-    textarea.style.border = 'none';
-    textarea.style.outline = 'none';
-    textarea.style.boxShadow = 'none';
-    textarea.style.background = 'transparent';
+    // 关键改动：使用绝对定位 + 可见但在视口外
+    textarea.style.position = 'absolute';
+    textarea.style.left = '-9999px';
+    textarea.style.top = (window.pageYOffset || document.documentElement.scrollTop) + 'px';
     textarea.setAttribute('readonly', '');
+    textarea.style.fontSize = '12pt'; // 防止 iOS 缩放
     document.body.appendChild(textarea);
 
-    // iOS 兼容：需要设置范围而不是直接 select()
-    textarea.focus();
-    textarea.setSelectionRange(0, text.length);
+    // 选中文本
+    if (navigator.userAgent.match(/ipad|ipod|iphone/i)) {
+        // iOS 特殊处理
+        const range = document.createRange();
+        range.selectNodeContents(textarea);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        textarea.setSelectionRange(0, text.length);
+    } else {
+        textarea.select();
+        textarea.setSelectionRange(0, text.length);
+    }
 
+    let success = false;
     try {
-        const success = document.execCommand('copy');
-        if (success) {
-            const orig = btn.innerHTML;
-            btn.innerHTML = '<i class="fas fa-check"></i> 已复制';
-            btn.disabled = true;
-            setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
-        } else {
-            alert('复制失败，请手动复制代码');
-        }
+        success = document.execCommand('copy');
     } catch (err) {
-        console.error('复制失败:', err);
-        alert('复制失败，请手动选择代码后按 Ctrl+C 复制');
-    } finally {
-        document.body.removeChild(textarea);
+        console.error('execCommand 异常:', err);
+    }
+
+    document.body.removeChild(textarea);
+
+    if (success) {
+        const orig = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check"></i> 已复制';
+        btn.disabled = true;
+        setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
+    } else {
+        alert('复制失败，请手动复制代码');
     }
 }
 
