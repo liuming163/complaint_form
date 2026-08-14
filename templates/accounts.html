@@ -375,47 +375,45 @@ function copyWenxiSnippet(btn, snippetId) {
 }
 
 function fallbackCopy(text, btn) {
+    // HTTP 环境下创建可见的 textarea 让用户手动复制
+    const existingModal = document.getElementById('manualCopyModal');
+    if (existingModal) existingModal.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'manualCopyModal';
+    modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+
+    const box = document.createElement('div');
+    box.style.cssText = 'background:white;padding:20px;border-radius:8px;max-width:600px;width:90%;';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight:bold;margin-bottom:10px;color:#333;';
+    title.textContent = '请手动复制以下代码：';
+
     const textarea = document.createElement('textarea');
     textarea.value = text;
-    // 关键改动：使用绝对定位 + 可见但在视口外
-    textarea.style.position = 'absolute';
-    textarea.style.left = '-9999px';
-    textarea.style.top = (window.pageYOffset || document.documentElement.scrollTop) + 'px';
+    textarea.style.cssText = 'width:100%;height:200px;font-family:monospace;font-size:12px;padding:10px;border:1px solid #ddd;border-radius:4px;resize:vertical;';
     textarea.setAttribute('readonly', '');
-    textarea.style.fontSize = '12pt'; // 防止 iOS 缩放
-    document.body.appendChild(textarea);
 
-    // 选中文本
-    if (navigator.userAgent.match(/ipad|ipod|iphone/i)) {
-        // iOS 特殊处理
-        const range = document.createRange();
-        range.selectNodeContents(textarea);
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
-        textarea.setSelectionRange(0, text.length);
-    } else {
-        textarea.select();
-        textarea.setSelectionRange(0, text.length);
-    }
+    const hint = document.createElement('div');
+    hint.style.cssText = 'margin-top:10px;color:#666;font-size:14px;';
+    hint.innerHTML = '<i class="fas fa-info-circle"></i> 请按 <kbd>Ctrl+A</kbd> 全选，然后按 <kbd>Ctrl+C</kbd> 复制';
 
-    let success = false;
-    try {
-        success = document.execCommand('copy');
-    } catch (err) {
-        console.error('execCommand 异常:', err);
-    }
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '关闭';
+    closeBtn.className = 'btn btn-secondary mt-3';
+    closeBtn.onclick = () => modal.remove();
 
-    document.body.removeChild(textarea);
+    box.appendChild(title);
+    box.appendChild(textarea);
+    box.appendChild(hint);
+    box.appendChild(closeBtn);
+    modal.appendChild(box);
+    document.body.appendChild(modal);
 
-    if (success) {
-        const orig = btn.innerHTML;
-        btn.innerHTML = '<i class="fas fa-check"></i> 已复制';
-        btn.disabled = true;
-        setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
-    } else {
-        alert('复制失败，请手动复制代码');
-    }
+    // 自动选中文本
+    textarea.focus();
+    textarea.select();
 }
 
 async function loadPlatformOptions() {
