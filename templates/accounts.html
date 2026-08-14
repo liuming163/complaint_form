@@ -356,22 +356,51 @@ function copyWenxiSnippet(btn, snippetId) {
     const code = snippetId
         ? document.getElementById(snippetId).textContent
         : WENXI_SNIPPET;
-    navigator.clipboard.writeText(code).then(() => {
-        const orig = btn.innerHTML;
-        btn.innerHTML = '<i class="fas fa-check"></i> 已复制';
-        btn.disabled = true;
-        setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
-    }).catch(() => {
-        // 降级：选中文本
-        const pre = btn.previousElementSibling;
-        if (pre) {
-            const sel = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(pre);
-            sel.removeAllRanges();
-            sel.addRange(range);
+
+    // 检查是否支持 Clipboard API（仅在 HTTPS 或 localhost 下可用）
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(code).then(() => {
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-check"></i> 已复制';
+            btn.disabled = true;
+            setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
+        }).catch(err => {
+            console.error('Clipboard API 失败:', err);
+            fallbackCopy(code, btn);
+        });
+    } else {
+        // HTTP 环境降级方案
+        fallbackCopy(code, btn);
+    }
+}
+
+function fallbackCopy(text, btn) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.top = '0';
+    textarea.style.left = '0';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    try {
+        const success = document.execCommand('copy');
+        if (success) {
+            const orig = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-check"></i> 已复制';
+            btn.disabled = true;
+            setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2000);
+        } else {
+            alert('复制失败，请手动复制代码');
         }
-    });
+    } catch (err) {
+        console.error('复制失败:', err);
+        alert('复制失败，请手动选择代码后按 Ctrl+C 复制');
+    } finally {
+        document.body.removeChild(textarea);
+    }
 }
 
 async function loadPlatformOptions() {
