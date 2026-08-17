@@ -23,9 +23,11 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 import random
 import re
+import signal
 import string
 import sys
 import time
@@ -466,7 +468,30 @@ def main():
         'works_detail': [],
         'error_message': '',
     }
+
+    # 信号处理：确保超时时也能输出最终结果
+    def handle_timeout(signum, frame):
+        log('⚠️ 收到超时信号，准备输出当前结果...')
+        result['status'] = 'partial_failed' if result['completed_batches'] > 0 else 'failed'
+        result['error_message'] = '执行超时'
+        result['completed_at'] = datetime.now().isoformat()
+        try:
+            save_partial_result(args.task_id, result)
+        except Exception:
+            pass
+        print('JSON_RESULT_START')
+        print(json.dumps(result, ensure_ascii=False))
+        print('JSON_RESULT_END')
+        sys.exit(1)
+
+    signal.signal(signal.SIGTERM, handle_timeout)
+    signal.signal(signal.SIGINT, handle_timeout)
+
     task_id = args.task_id
+    total_batches = sum(
+        max(1, math.ceil(len(w.get('links', [])) / MAX_LINKS_PER_BATCH))
+        for w in works_config
+    )
     batch_no = 0
     already_matched = set()
     matched_by_work = {}
@@ -474,6 +499,7 @@ def main():
 
     try:
         log('开始执行腾讯文犀投诉任务...')
+        log(f'总作品数: {len(works_config)}, 预计批次: {total_batches}')
         check_login(auth)
 
         # 委托方 group 对象：整个任务共用一个委托方，拉一次即可
@@ -483,6 +509,7 @@ def main():
 
         for work_idx, work in enumerate(works_config):
             work_name = work['work_name']
+            api_work_name = work.get('api_work_name', work_name)
             origin_url = work.get('origin_url', '')
             links = work.get('links', [])
             proof_path = work.get('proof_path', '')
@@ -491,6 +518,9 @@ def main():
             log(f"[{work_idx+1}/{len(works_config)}] 处理作品: {work_name} "
                 f"({len(links)}条链接, {len(chunks)}批)")
 
+            work_start_batch_no = batch_no
+            work_matched = []
+            work_has_completed_batch = False
             try:
                 # 权属证明（每作品单独上传，得 attach 项）
                 attach_item = upload_cos(auth, proof_path)
@@ -500,7 +530,6 @@ def main():
                     'work_index': work_idx, 'work_name': work_name, 'status': 'processing',
                 })
 
-                work_matched = []
                 for chunk in chunks:
                     batch_no += 1
                     log(f'  批次 {batch_no}: {len(chunk)}条链接')
@@ -512,18 +541,21 @@ def main():
 
                     submit_ts = datetime.now(timezone.utc)
                     payload = build_payload(meta, group, delegate_id, delegate_code_r,
-                                            subject_group, work_name, origin_url, chunk, attach)
+                                            subject_group, api_work_name, origin_url, chunk, attach)
                     resp_data = submit_complaint(auth, payload)
 
                     if resp_data.get('code') == 0:
                         log(f'  批次 {batch_no} 提交成功')
+                        work_has_completed_batch = True
                         result['completed_batches'] += 1
-                        result['batch_results'].append({
+                        batch_result = {
                             'batch_no': batch_no, 'work_name': work_name,
                             'status': 'completed', 'link_count': len(chunk),
-                        })
-                        rid = match_complaint_id(auth, work_name, chunk, already_matched, submit_ts)
+                        }
+                        result['batch_results'].append(batch_result)
+                        rid = match_complaint_id(auth, api_work_name, chunk, already_matched, submit_ts)
                         if rid:
+                            batch_result['feedback_number'] = rid
                             work_matched.append(rid)
                     else:
                         err = resp_data.get('message') or resp_data.get('_raw_text') or '提交失败'
@@ -534,31 +566,54 @@ def main():
                             'batch_no': batch_no, 'work_name': work_name,
                             'status': 'failed', 'error': err,
                         })
-                    time.sleep(random.randint(30, 90))
+                    if work_idx < len(works_config) - 1 or chunk != chunks[-1]:
+                        # 降低延迟：减少总执行时间，避免超时；最后一批无需等待
+                        time.sleep(random.randint(30, 90))
 
                 if work_matched:
                     matched_by_work[work_name] = work_matched
-                if not work_matched and not any(
-                        b['work_name'] == work_name and b['status'] == 'completed'
-                        for b in result['batch_results']):
+                if not work_matched and not work_has_completed_batch:
                     failed_works.add(work_name)
 
+                for wd in result['works_detail']:
+                    if wd.get('work_index') == work_idx:
+                        wd['status'] = 'completed' if work_matched else ('partial_failed' if work_has_completed_batch else 'failed')
+                        break
                 _rebuild_numbers(result, works_config, failed_works, matched_by_work)
                 save_partial_result(task_id, result)
 
             except Exception as e:
+                import traceback
                 log(f"  ❌ 作品「{work_name}」处理异常，跳过: {e}")
-                failed_works.add(work_name)
-                for _ in range(len(chunks)):
-                    batch_no += 1
+                log(f"  异常堆栈: {traceback.format_exc()}")
+                if work_matched:
+                    matched_by_work[work_name] = work_matched
+                elif not work_has_completed_batch:
+                    failed_works.add(work_name)
+                for wd in result['works_detail']:
+                    if wd.get('work_index') == work_idx:
+                        wd['status'] = 'partial_failed' if work_has_completed_batch else 'failed'
+                        wd['error'] = str(e)
+                        break
+                expected_batch_nos = set(range(work_start_batch_no + 1, work_start_batch_no + len(chunks) + 1))
+                recorded_batch_nos = {
+                    br.get('batch_no') for br in result['batch_results']
+                    if br.get('batch_no') in expected_batch_nos
+                }
+                for failed_batch_no in sorted(expected_batch_nos - recorded_batch_nos):
                     result['failed_batches'] += 1
                     result['batch_results'].append({
-                        'batch_no': batch_no, 'work_name': work_name,
+                        'batch_no': failed_batch_no, 'work_name': work_name,
                         'status': 'failed', 'error': str(e),
                     })
+                batch_no = max(batch_no, work_start_batch_no + len(chunks))
                 _rebuild_numbers(result, works_config, failed_works, matched_by_work)
                 save_partial_result(task_id, result)
                 continue
+
+            # 进度日志
+            log(f"✓ 作品「{work_name}」处理完成 ({work_idx + 1}/{len(works_config)}), "
+                f"已完成批次 {result['completed_batches']}/{total_batches}")
 
         _rebuild_numbers(result, works_config, failed_works, matched_by_work)
         if result['failed_batches'] == 0:

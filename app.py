@@ -317,20 +317,75 @@ def cleanup_old_task_logs(max_age_days=5):
             continue
 
 
+def _ensure_task_execution_log_table(session):
+    session.execute(text("""
+        CREATE TABLE IF NOT EXISTS task_execution_logs (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            task_id VARCHAR(128) NOT NULL,
+            submission_id VARCHAR(128) NULL,
+            status VARCHAR(32) NULL,
+            log_text LONGTEXT NULL,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_task_execution_logs_task_id (task_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """))
+
+
 def upsert_task_execution_log(task_id, submission_id, status, log_text):
-    pass
+    if not task_id or not log_text:
+        return
+    try:
+        with get_db_session() as session:
+            _ensure_task_execution_log_table(session)
+            session.execute(text("""
+                INSERT INTO task_execution_logs
+                    (task_id, submission_id, status, log_text, updated_at)
+                VALUES
+                    (:task_id, :submission_id, :status, :log_text, NOW())
+                ON DUPLICATE KEY UPDATE
+                    submission_id = VALUES(submission_id),
+                    status = VALUES(status),
+                    log_text = VALUES(log_text),
+                    updated_at = NOW()
+            """), {
+                'task_id': task_id,
+                'submission_id': submission_id,
+                'status': status,
+                'log_text': log_text,
+            })
+            session.commit()
+    except Exception as e:
+        print(f"[{task_id}] 同步任务日志到数据库失败: {e}")
 
 
 def sync_task_log_to_db(task_id, submission_id, status):
-    pass
+    log_text = read_task_log_file(task_id)
+    if log_text:
+        upsert_task_execution_log(task_id, submission_id, status, log_text)
 
 
 def get_task_execution_log(task_id):
-    return None
+    try:
+        with get_db_session() as session:
+            _ensure_task_execution_log_table(session)
+            row = session.execute(text("""
+                SELECT task_id, submission_id, status, log_text, updated_at
+                FROM task_execution_logs
+                WHERE task_id = :task_id
+                LIMIT 1
+            """), {'task_id': task_id}).mappings().first()
+            session.commit()
+            return dict(row) if row else None
+    except Exception as e:
+        print(f"[{task_id}] 读取数据库任务日志失败: {e}")
+        return None
 
 
 def has_available_task_log(task_id):
-    return bool(read_task_log_file(task_id))
+    if read_task_log_file(task_id):
+        return True
+    task_log = get_task_execution_log(task_id)
+    return bool(task_log and task_log.get('log_text'))
 
 
 def get_redis_client():
@@ -4562,8 +4617,8 @@ def run_baidu_complaint_script(task_id, cookie, complaint_product, complaint_typ
                 """), {
                     'st': final_status,
                     'nums': json.dumps(complaint_numbers, ensure_ascii=False) if complaint_numbers else None,
-                    'cb': completed_batches,
-                    'fb': failed_batches,
+                    'cb': result_data.get('completed_batches', 0),
+                    'fb': result_data.get('failed_batches', 0),
                     'err': error_msg or None,
                     'tid': task_id,
                 })
@@ -4948,6 +5003,116 @@ def run_weibo_complaint_script(task_id, cookie, form, works_config, total_batche
         tasks[task_id]['status'] = 'failed'
 
 
+def _is_real_feedback_number(number):
+    return bool(number) and not (
+        isinstance(number, str) and (
+            number.startswith('未获取到单号:') or number.startswith('投诉失败:')
+        )
+    )
+
+
+def _recover_wenxi_partial(task_id, submission_id, reason, stdout='', stderr='', timeout_seconds=None):
+    """文犀脚本被超时/异常杀掉时，从 task_results/<task_id>.json 回收已成功单号。
+
+    返回回收状态、真实单号数量和批次统计。即使没有真实单号，也会写入可查看日志，避免状态页无日志。
+    """
+    recovered = load_task_result(task_id) or load_task_result(f'wenxi_{submission_id}')
+    numbers = (recovered or {}).get('feedback_numbers') or []
+    by_work = (recovered or {}).get('feedback_numbers_by_work') or []
+    batch_results = (recovered or {}).get('batch_results') or []
+    completed_batches = int((recovered or {}).get('completed_batches') or 0)
+    failed_batches = int((recovered or {}).get('failed_batches') or 0)
+    real_numbers = [str(n) for n in numbers if _is_real_feedback_number(n)]
+    final_status = 'partial_failed' if (real_numbers or completed_batches > 0) else 'failed'
+    recovered_summary = (
+        f"已回收成功单号 {len(real_numbers)} 个，已完成批次 {completed_batches} 个，失败批次 {failed_batches} 个。"
+        if recovered else "未找到可回收的增量结果文件。"
+    )
+    timeout_note = f"；超时阈值 {timeout_seconds} 秒" if timeout_seconds else ''
+    error_message = f"{reason}{timeout_note}。{recovered_summary}"
+
+    log_dir = app.config['TASK_RESULT_FOLDER']
+    os.makedirs(log_dir, exist_ok=True)
+    log_text = (
+        "=== WRAPPER ===\n"
+        f"任务ID: {task_id}\n"
+        f"提交ID: {submission_id}\n"
+        f"状态: {final_status}\n"
+        f"说明: {error_message}\n"
+        f"回收单号: {json.dumps(real_numbers, ensure_ascii=False)}\n"
+        "\n=== PARTIAL_RESULT ===\n"
+        f"{json.dumps(recovered or {}, ensure_ascii=False, indent=2)}\n"
+        "\n=== STDOUT ===\n"
+        f"{stdout or ''}\n"
+        "\n=== STDERR ===\n"
+        f"{stderr or ''}\n"
+    )
+    log_path = os.path.join(log_dir, f'{task_id}.log')
+    with open(log_path, 'w', encoding='utf-8') as f:
+        f.write(log_text)
+
+    db = get_db_session()
+    try:
+        db.execute(text("""
+            UPDATE complaints
+            SET status=:st, completed_at=NOW(),
+                complaint_numbers_json=:nums,
+                completed_batches=:cb, failed_batches=:fb,
+                error_message=:err
+            WHERE task_id=:tid
+        """), {
+            'st': final_status,
+            'nums': json.dumps(numbers, ensure_ascii=False) if numbers else None,
+            'cb': completed_batches,
+            'fb': failed_batches,
+            'err': error_message,
+            'tid': task_id,
+        })
+        for br in batch_results:
+            db.execute(text("""
+                UPDATE complaint_batches
+                SET status=:st, complaint_number=:cn, error_message=:err
+                WHERE complaint_id=:sid AND batch_no=:bno
+            """), {
+                'st': br.get('status', 'completed'),
+                'cn': br.get('feedback_number') or br.get('complaint_number'),
+                'err': br.get('error'),
+                'sid': submission_id,
+                'bno': br.get('batch_no'),
+            })
+        for grp in by_work:
+            db.execute(text("""
+                UPDATE submission_works
+                SET feedback_numbers=:nums, status=:st, error_message=:err
+                WHERE complaint_id=:sid AND work_name=:wname
+            """), {
+                'nums': json.dumps(grp.get('numbers', []), ensure_ascii=False),
+                'st': grp.get('status', 'completed'),
+                'err': None if grp.get('status') == 'completed' else reason,
+                'sid': submission_id,
+                'wname': grp.get('work_name', ''),
+            })
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        append_task_log(task_id, f'文犀超时回收写库失败: {e}')
+    finally:
+        db.close()
+
+    tasks[task_id] = tasks.get(task_id, {})
+    tasks[task_id]['status'] = final_status
+    tasks[task_id]['error'] = error_message
+    tasks[task_id]['feedback_numbers'] = numbers
+    sync_task_log_to_db(task_id, submission_id, final_status)
+    return {
+        'status': final_status,
+        'real_count': len(real_numbers),
+        'completed_batches': completed_batches,
+        'failed_batches': failed_batches,
+        'error_message': error_message,
+    }
+
+
 def run_wenxi_complaint_script(task_id, auth, meta, subject_group, delegate_code,
                                works_config, total_batches):
     import sys, tempfile
@@ -4958,7 +5123,7 @@ def run_wenxi_complaint_script(task_id, auth, meta, subject_group, delegate_code
     try:
         db.execute(text("UPDATE complaints SET status='running', started_at=NOW() WHERE task_id=:tid"), {'tid': task_id})
         db.commit()
-    except:
+    except Exception:
         db.rollback()
     finally:
         db.close()
@@ -4967,8 +5132,6 @@ def run_wenxi_complaint_script(task_id, auth, meta, subject_group, delegate_code
     tasks[task_id]['status'] = 'running'
     tasks[task_id]['started_at'] = datetime.now().isoformat()
 
-    # 文犀后端吃单一 config 文件：{"auth":{...}, "meta":{...}, "subject_group":{...},
-    #   "delegate_code":"...", "works":[...]}
     cfg_file = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8')
     cfg_file.write(json.dumps({
         'auth': auth, 'meta': meta, 'subject_group': subject_group,
@@ -4981,11 +5144,13 @@ def run_wenxi_complaint_script(task_id, auth, meta, subject_group, delegate_code
         '--task-id', task_id,
         '--config-file', cfg_file.name,
     ]
+    timeout_seconds = max(900, total_batches * 120 + 600)
 
     try:
-        # 每单含 COS 上传 + 提交，放宽单批预估到 45 秒
+        # 每单含 COS 上传 + 提交 + 随机延迟(15-45s)，放宽单批预估到 120 秒
+        # 额外增加 600 秒基础时间用于初始化、上传和单号匹配
         proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=max(180, total_batches * 45),
+                              timeout=timeout_seconds,
                               cwd=os.path.dirname(__file__))
         try:
             os.unlink(cfg_file.name)
@@ -5005,11 +5170,29 @@ def run_wenxi_complaint_script(task_id, auth, meta, subject_group, delegate_code
             try:
                 result_data = json.loads(stdout.split('JSON_RESULT_START')[1].split('JSON_RESULT_END')[0].strip())
             except Exception:
-                pass
+                result_data = None
+        if not result_data:
+            result_data = load_task_result(task_id)
 
         db = get_db_session()
         try:
             if result_data:
+                final_status = result_data.get('status') or 'completed'
+                completed_batches = int(result_data.get('completed_batches') or 0)
+                failed_batches = int(result_data.get('failed_batches') or 0)
+                complaint_numbers = result_data.get('feedback_numbers', [])
+                real_numbers = [n for n in complaint_numbers if _is_real_feedback_number(n)]
+                if final_status == 'running':
+                    if proc.returncode == 0 and not failed_batches:
+                        final_status = 'completed'
+                    elif completed_batches > 0 or real_numbers:
+                        final_status = 'partial_failed'
+                    else:
+                        final_status = 'failed'
+                    result_data['error_message'] = (
+                        result_data.get('error_message')
+                        or f"脚本未返回最终状态(returncode={proc.returncode})，已按增量结果回收"
+                    )
                 db.execute(text("""
                     UPDATE complaints
                     SET status=:st, completed_at=NOW(),
@@ -5018,11 +5201,11 @@ def run_wenxi_complaint_script(task_id, auth, meta, subject_group, delegate_code
                         error_message=:err
                     WHERE task_id=:tid
                 """), {
-                    'st': result_data.get('status', 'completed'),
-                    'nums': json.dumps(result_data.get('feedback_numbers', []), ensure_ascii=False),
+                    'st': final_status,
+                    'nums': json.dumps(complaint_numbers, ensure_ascii=False) if complaint_numbers else None,
                     'cb': result_data.get('completed_batches', 0),
                     'fb': result_data.get('failed_batches', 0),
-                    'err': result_data.get('error_message') or None,
+                    'err': result_data.get('error_message') or (stderr[:500] if proc.returncode else None),
                     'tid': task_id,
                 })
                 for br in result_data.get('batch_results', []):
@@ -5032,7 +5215,7 @@ def run_wenxi_complaint_script(task_id, auth, meta, subject_group, delegate_code
                         WHERE complaint_id=:sid AND batch_no=:bno
                     """), {
                         'st': br.get('status', 'completed'),
-                        'cn': br.get('feedback_number'),
+                        'cn': br.get('feedback_number') or br.get('complaint_number'),
                         'err': br.get('error'),
                         'sid': submission_id,
                         'bno': br.get('batch_no'),
@@ -5040,50 +5223,69 @@ def run_wenxi_complaint_script(task_id, auth, meta, subject_group, delegate_code
                 for grp in result_data.get('feedback_numbers_by_work', []):
                     db.execute(text("""
                         UPDATE submission_works
-                        SET feedback_numbers=:nums, status=:st
+                        SET feedback_numbers=:nums, status=:st, error_message=:err
                         WHERE complaint_id=:sid AND work_name=:wname
                     """), {
                         'nums': json.dumps(grp.get('numbers', []), ensure_ascii=False),
                         'st': grp.get('status', 'completed'),
+                        'err': None if grp.get('status') == 'completed' else result_data.get('error_message'),
                         'sid': submission_id,
                         'wname': grp.get('work_name', ''),
                     })
-                tasks[task_id]['status'] = result_data.get('status', 'completed')
+                tasks[task_id]['status'] = final_status
+                tasks[task_id]['feedback_numbers'] = complaint_numbers
             else:
-                db.execute(text("UPDATE complaints SET status='failed', completed_at=NOW(), error_message=:err WHERE task_id=:tid"),
-                           {'err': stderr[:500] or '脚本未返回结果', 'tid': task_id})
+                db.execute(text("""
+                    UPDATE complaints
+                    SET status='failed', completed_at=NOW(), error_message=:err
+                    WHERE task_id=:tid
+                """), {'err': stderr[:500] or '脚本未返回结果', 'tid': task_id})
                 tasks[task_id]['status'] = 'failed'
             db.commit()
-        except Exception:
+        except Exception as e:
             db.rollback()
+            append_task_log(task_id, f'文犀结果写库失败: {e}')
         finally:
             db.close()
 
-    except subprocess.TimeoutExpired:
+        sync_task_log_to_db(task_id, submission_id, tasks[task_id].get('status', 'unknown'))
+
+    except subprocess.TimeoutExpired as e:
         try:
             os.unlink(cfg_file.name)
         except Exception:
             pass
-        db = get_db_session()
-        try:
-            db.execute(text("UPDATE complaints SET status='failed', completed_at=NOW(), error_message='脚本执行超时' WHERE task_id=:tid"), {'tid': task_id})
-            db.commit()
-        except:
-            db.rollback()
-        finally:
-            db.close()
-        tasks[task_id]['status'] = 'failed'
+        stdout = e.stdout or ''
+        stderr = e.stderr or ''
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode('utf-8', errors='replace')
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode('utf-8', errors='replace')
+        recovery = _recover_wenxi_partial(
+            task_id, submission_id, '脚本执行超时', stdout, stderr, timeout_seconds
+        )
+        recovered_n = int(recovery.get('real_count') or 0)
+        completed_batches = int(recovery.get('completed_batches') or 0)
+        tasks[task_id]['status'] = recovery.get('status') or 'failed'
+        if recovered_n > 0:
+            tasks[task_id]['error'] = f'执行超时（已回收{recovered_n}个单号）'
+        elif completed_batches > 0:
+            tasks[task_id]['error'] = f'执行超时（已完成{completed_batches}个批次，但暂未匹配到单号）'
+        else:
+            tasks[task_id]['error'] = '执行超时，未回收到成功批次或单号'
     except Exception as e:
         db = get_db_session()
         try:
             db.execute(text("UPDATE complaints SET status='failed', completed_at=NOW(), error_message=:err WHERE task_id=:tid"), {'err': str(e), 'tid': task_id})
             db.commit()
-        except:
+        except Exception:
             db.rollback()
         finally:
             db.close()
+        append_task_log(task_id, f'文犀任务包装器异常: {e}')
+        sync_task_log_to_db(task_id, submission_id, 'failed')
         tasks[task_id]['status'] = 'failed'
-
+        tasks[task_id]['error'] = str(e)
 
 def run_xiaohongshu_complaint_script(task_id, cookie, principal_name, works_config, total_batches):
     import sys, tempfile

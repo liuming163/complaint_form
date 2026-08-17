@@ -6,7 +6,7 @@
 
 模板填中文名，upload_template 时用账号 token 实时拉 委托方下拉/产品列表，把中文名
 转成 delegateCode / appId+appKey；权属证明沿用 static/imgs/剧名 目录匹配。
-一作品一单，多链接合并（后端按 20 条/单自动拆多单）。
+一作品一单，多链接合并（后端按 1000 条/单自动拆多单）。
 """
 
 import io
@@ -26,6 +26,7 @@ from sqlalchemy import text
 wenxi_bp = Blueprint('wenxi', __name__, url_prefix='/api/wenxi')
 
 WENXI_API_BASE = 'https://ri.qq.com/api/v1'
+WENXI_BATCH_SIZE = 1000
 LOGIN_EXPIRE_SECONDS = 43200
 _UA = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
        '(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36')
@@ -595,7 +596,7 @@ def wenxi_upload_template():
         return jsonify({'success': False, 'error': '所有作品匹配失败：\n' + '\n'.join(match_errors)}), 400
 
     total_links = sum(len(w['links']) for w in works_config)
-    total_batches = sum(max(1, math.ceil(len(w['links']) / 1000)) for w in works_config)
+    total_batches = sum(max(1, math.ceil(len(w['links']) / WENXI_BATCH_SIZE)) for w in works_config)
 
     resp_data = {
         'success': True,
@@ -684,7 +685,7 @@ def wenxi_submit():
             return jsonify({'success': False, 'error': f'文件「{upload_filename}」已投诉过（任务 {dup[0]}），请勿重复提交'}), 400
 
     total_links = sum(len(w.get('links', [])) for w in works_config)
-    total_batches = sum(max(1, math.ceil(len(w.get('links', [])) / 1000)) for w in works_config)
+    total_batches = sum(max(1, math.ceil(len(w.get('links', [])) / WENXI_BATCH_SIZE)) for w in works_config)
     all_work_names = [w['work_name'] for w in works_config]
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -708,7 +709,7 @@ def wenxi_submit():
             VALUES (:sid, :tid, 'wenxi', :account, :cookie,
                     '机构代理', :agent, :principal,
                     :rtype, :rtype, :product, :ctype,
-                    :desc, :work_name, :rows, 1000, :batches,
+                    :desc, :work_name, :rows, :batch_size, :batches,
                     'queued', :submitted_at, :estimated_finish_at, :operator, :upload_filename)
         """), {
             'sid': submission_id,
@@ -723,6 +724,7 @@ def wenxi_submit():
             'desc': meta.get('description', ''),
             'work_name': ', '.join(all_work_names)[:5000],
             'rows': total_links,
+            'batch_size': WENXI_BATCH_SIZE,
             'batches': total_batches,
             'submitted_at': submitted_at,
             'estimated_finish_at': estimated_finish_at,
@@ -733,9 +735,9 @@ def wenxi_submit():
         batch_no = 0
         for work in works_config:
             links = work.get('links', [])
-            for chunk_start in range(0, len(links), 20):
+            for chunk_start in range(0, max(len(links), 1), WENXI_BATCH_SIZE):
                 batch_no += 1
-                chunk_end = min(chunk_start + 20, len(links))
+                chunk_end = min(chunk_start + WENXI_BATCH_SIZE, len(links))
                 db.execute(text("""
                     INSERT INTO complaint_batches
                     (batch_id, complaint_id, batch_no, work_name, batch_filename,
@@ -763,7 +765,7 @@ def wenxi_submit():
                 'widx': idx,
                 'wname': work['work_name'],
                 'lcount': len(work.get('links', [])),
-                'bcount': max(1, math.ceil(len(work.get('links', [])) / 1000)),
+                'bcount': max(1, math.ceil(len(work.get('links', [])) / WENXI_BATCH_SIZE)),
             })
 
         db.commit()
@@ -773,10 +775,10 @@ def wenxi_submit():
     finally:
         db.close()
 
-    # 非著作权场景：work_name 不传给接口 right.name，入队前清空
+    # 非著作权场景：接口 right.name 传空，但保留 work_name 用于 DB 回写/导出配对
     is_copyright = meta.get('rightType') == WENXI_RIGHT_TYPE_MAP['著作权']
     api_works = (works_config if is_copyright
-                 else [dict(w, work_name='') for w in works_config])
+                 else [dict(w, api_work_name='') for w in works_config])
 
     enqueue_wenxi_task({
         'task_id': task_id,
